@@ -1,6 +1,5 @@
 import { LogicalReplicationService, PgoutputPlugin } from 'pg-logical-replication';
 import { config } from '../config';
-import { emitEvent } from './socket';
 
 // Tracked tables for CDC - add tables here as features are added
 const TRACKED_TABLES: string[] = [];
@@ -126,9 +125,11 @@ const handleDatabaseChange = async (changeLog: any): Promise<void> => {
         return;
     }
 
-    const operation = changeLog.tag; // 'insert', 'update', 'delete'
-    const data = changeLog.new || changeLog.old;
-
-    // Emit generic event for now
-    emitEvent(`${table}-${operation}`, { table, operation, data });
+    // Add table-specific handlers here as features are added
+    // Example:
+    // if (table === 'games') {
+    //     const operation = changeLog.tag;
+    //     const data = changeLog.new || changeLog.old;
+    //     emitEvent('game-updated', { game: data });
+    // }
 };

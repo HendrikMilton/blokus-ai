@@ -18,8 +18,9 @@
     "forceConsistentCasingInFileNames": true,
     "outDir": "./dist",
     "rootDir": "./src",
+    "baseUrl": ".",
     "paths": {
-      "@blokus-ai/shared": ["../shared/src"]
+      "@blokus-ai/shared": ["../shared/dist"]
     },
     "plugins": [
       {
