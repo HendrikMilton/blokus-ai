@@ -75,11 +75,12 @@ export default defineConfig({
         }),
     ],
     server: {
-        host: '127.0.0.1',
-        port: 5174,
+        host: '0.0.0.0',
+        port: 5177,
+        allowedHosts: ['.trycloudflare.com'],
         proxy: {
-            '/api': 'http://localhost:3000',
-            '/ping': 'http://localhost:3000',
+            '/api': 'http://localhost:3009',
+            '/ping': 'http://localhost:3009',
         },
     },
     build: {

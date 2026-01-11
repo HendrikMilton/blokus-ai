@@ -4,7 +4,8 @@
   "workspaces": ["api", "frontend", "shared"],
   "scripts": {
     "start": "bun install && bun run --cwd shared build && bun run --filter '*' dev",
-    "build": "bun install && bun run --cwd shared build && bun run --cwd api build && bun run --cwd frontend build"
+    "build": "bun install && bun run --cwd shared build && bun run --cwd api build && bun run --cwd frontend build",
+    "dev:tunnel": "bun run --cwd frontend dev & sleep 3 && ./tunnel.sh"
   },
   "devDependencies": {
     "@ryoppippi/unplugin-typia": "^2.6.5",
