@@ -16,7 +16,7 @@ spec:
     spec:
       containers:
         - name: api
-          image: blokus-ai-api:latest
+          image: hendrikutt/blokus-ai-api:latest
           ports:
             - containerPort: 3000
           env:
@@ -79,7 +79,7 @@ kind: ConfigMap
 metadata:
   name: blokus-ai-config
 data:
-  FRONTEND_URL: "https://blokus-ai.example.com"
+  FRONTEND_URL: "https://blokus-ai.hycapital.io"
 
 ---
 apiVersion: v1

@@ -1,24 +1,18 @@
-import { useEffect } from 'react';
-import { BrowserRouter, Routes, Route, Link } from 'react-router-dom';
+import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { Toaster } from 'react-hot-toast';
-import { initializeSocket, connectSocket } from './api/config';
-import { Header } from './components/ui';
-import { UsersPage } from './pages/UsersPage';
+import { GameProvider } from './contexts/GameContext';
+import { ColorSelectionPage } from './pages/ColorSelectionPage';
+import { CameraCapturePage } from './pages/CameraCapturePage';
+import { BoardConfirmPage } from './pages/BoardConfirmPage';
+import { ResultsPage } from './pages/ResultsPage';
 
-function Home() {
+function Header() {
     return (
-        <div className="flex items-center justify-center py-20">
-            <div className="text-center">
-                <h1 className="text-4xl font-bold text-foreground">blokus-ai</h1>
-                <p className="mt-4 text-muted-foreground">AI-powered Blokus game assistant</p>
-                <Link
-                    to="/users"
-                    className="mt-6 inline-block px-4 py-2 bg-primary text-white rounded-md hover:bg-primary/90"
-                >
-                    Manage Users
-                </Link>
-            </div>
-        </div>
+        <header className="bg-surface border-b border-border px-4 py-4">
+            <h1 className="text-2xl font-bold text-foreground text-center">
+                Blokus AI
+            </h1>
+        </header>
     );
 }
 
@@ -26,29 +20,25 @@ function Layout({ children }: { children: React.ReactNode }) {
     return (
         <div className="min-h-screen bg-background">
             <Header />
-            <main className="max-w-5xl mx-auto px-4 sm:px-6 py-6">
-                {children}
-            </main>
+            <main>{children}</main>
         </div>
     );
 }
 
 export default function App() {
-    useEffect(() => {
-        // Initialize and connect WebSocket
-        initializeSocket();
-        connectSocket();
-    }, []);
-
     return (
-        <BrowserRouter>
-            <Toaster />
-            <Layout>
+        <GameProvider>
+            <BrowserRouter>
+                <Toaster />
                 <Routes>
-                    <Route path="/" element={<Home />} />
-                    <Route path="/users" element={<UsersPage />} />
+                    {/* Screen 1 has header via Layout */}
+                    <Route path="/" element={<Layout><ColorSelectionPage /></Layout>} />
+                    {/* Screens 2-4 are full-screen, no header */}
+                    <Route path="/capture" element={<CameraCapturePage />} />
+                    <Route path="/confirm" element={<BoardConfirmPage />} />
+                    <Route path="/results" element={<ResultsPage />} />
                 </Routes>
-            </Layout>
-        </BrowserRouter>
+            </BrowserRouter>
+        </GameProvider>
     );
 }

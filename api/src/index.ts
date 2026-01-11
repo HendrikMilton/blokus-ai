@@ -17,6 +17,10 @@ const httpServer = createServer(app);
 
 // Run migrations on startup
 const runMigrations = async () => {
+    if (!process.env.DATABASE_URL && !config.POSTGRES_HOST) {
+        console.error('ERROR: Database configuration is required. Set DATABASE_URL or POSTGRES_HOST environment variable.');
+        process.exit(1);
+    }
     try {
         console.log('Running database migrations...');
         await knex.migrate.latest();
