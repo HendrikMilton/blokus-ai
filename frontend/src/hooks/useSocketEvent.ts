@@ -34,7 +34,7 @@ export const useSocketEvent = <T extends SocketEvent>(
         apiSocket.on(eventName as string, handleEvent);
 
         return () => {
-            apiSocket.off(eventName as string, handleEvent);
+            apiSocket?.off(eventName as string, handleEvent);
         };
     }, [eventName, ...deps]);
 };

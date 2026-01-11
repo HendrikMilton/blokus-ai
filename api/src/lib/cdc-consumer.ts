@@ -1,11 +1,9 @@
 import { LogicalReplicationService, PgoutputPlugin } from 'pg-logical-replication';
 import { config } from '../config';
 import { emitEvent } from './socket';
-import { getUserById } from '../features/users/service';
 
-// Tracked tables for CDC
-const TRACKED_TABLES = ['users'] as const;
-type TrackedTable = (typeof TRACKED_TABLES)[number];
+// Tracked tables for CDC - add tables here as features are added
+const TRACKED_TABLES: string[] = [];
 
 let cdcService: LogicalReplicationService | null = null;
 let isConnecting = false;
@@ -30,7 +28,9 @@ const scheduleRetry = (): void => {
 };
 
 export const startCDCConsumer = async (isRetry = false): Promise<void> => {
-    if (config.NODE_ENV === 'test') {
+    // Skip if no tables to track or in test mode
+    if (config.NODE_ENV === 'test' || TRACKED_TABLES.length === 0) {
+        console.log('CDC: No tables to track, skipping consumer');
         return;
     }
     if (isConnecting) {
@@ -119,40 +119,16 @@ export const stopCDCConsumer = async (): Promise<void> => {
     }
 };
 
-// Handle database changes
+// Handle database changes - add handlers here as features are added
 const handleDatabaseChange = async (changeLog: any): Promise<void> => {
-    const table = changeLog.relation?.name as TrackedTable;
+    const table = changeLog.relation?.name;
     if (!table || !TRACKED_TABLES.includes(table)) {
         return;
     }
 
     const operation = changeLog.tag; // 'insert', 'update', 'delete'
+    const data = changeLog.new || changeLog.old;
 
-    switch (table) {
-        case 'users':
-            await handleUserChange(operation, changeLog);
-            break;
-    }
-};
-
-// Handle user table changes
-const handleUserChange = async (
-    operation: string,
-    changeLog: any
-): Promise<void> => {
-    const userId = changeLog.new?.id || changeLog.old?.id;
-
-    if (operation === 'insert' && userId) {
-        const user = await getUserById(userId);
-        if (user) {
-            emitEvent('user-created', { user });
-        }
-    } else if (operation === 'update' && userId) {
-        const user = await getUserById(userId);
-        if (user) {
-            emitEvent('user-updated', { user });
-        }
-    } else if (operation === 'delete' && userId) {
-        emitEvent('user-deleted', { userId });
-    }
+    // Emit generic event for now
+    emitEvent(`${table}-${operation}`, { table, operation, data });
 };

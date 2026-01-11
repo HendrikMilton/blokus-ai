@@ -6,7 +6,6 @@ import rateLimit from 'express-rate-limit';
 import { config } from './config';
 import { knex } from './knex';
 import { pingRouter } from './features/ping/router';
-import { usersRouter } from './features/users/router';
 import { cidMiddleware } from './middleware/cid';
 import { errorHandler } from './error';
 import { initializeSocket } from './lib/socket';
@@ -55,7 +54,6 @@ app.use(cidMiddleware);
 
 // Routes
 app.use('/ping', pingRouter);
-app.use('/users', usersRouter);
 
 // Error handler (must be last)
 app.use(errorHandler);
