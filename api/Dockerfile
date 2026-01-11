@@ -6,6 +6,7 @@ WORKDIR /app
 COPY package.json bun.lock ./
 COPY shared/package.json ./shared/
 COPY api/package.json ./api/
+COPY frontend/package.json ./frontend/
 
 # Install dependencies
 RUN bun install --frozen-lockfile
