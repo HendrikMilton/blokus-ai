@@ -1,6 +1,7 @@
 import Knex from 'knex';
 import { Client } from 'pg';
 import { config as appConfig } from './config';
+import { log } from './lib/log';
 
 export const knexConfig = {
     client: 'pg',
@@ -31,12 +32,12 @@ export const initDatabase = async () => {
     await client.connect();
     try {
         await client.query(`CREATE DATABASE ${appConfig.POSTGRES_DATABASE}`);
-        console.log(`Database ${appConfig.POSTGRES_DATABASE} created`);
+        log.info(`Database ${appConfig.POSTGRES_DATABASE} created`);
     } catch (err) {
         if ((err as { code: string }).code !== '42P04') {
             throw err;
         }
-        console.log(`Database ${appConfig.POSTGRES_DATABASE} already exists`);
+        log.info(`Database ${appConfig.POSTGRES_DATABASE} already exists`);
     }
     await client.end();
 };

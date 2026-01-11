@@ -10,23 +10,27 @@ import { cidMiddleware } from './middleware/cid';
 import { errorHandler } from './error';
 import { initializeSocket } from './lib/socket';
 import { startCDCConsumer } from './lib/cdc-consumer';
+import { log, expressLogger } from './lib/log';
 
 const app = express();
 const httpServer = createServer(app);
 
+// Trust proxy for rate limiting behind nginx
+app.set('trust proxy', 1);
+
 // Initialize database and run migrations on startup
 const initDatabaseAndMigrate = async () => {
     if (!config.POSTGRES_HOST) {
-        console.error('ERROR: Database configuration is required. Set POSTGRES_HOST environment variable.');
+        log.error('Database configuration is required. Set POSTGRES_HOST environment variable.');
         process.exit(1);
     }
     try {
         await initDatabase();
-        console.log('Running database migrations...');
+        log.info('Running database migrations...');
         await knex.migrate.latest();
-        console.log('Migrations complete');
+        log.info('Migrations complete');
     } catch (err) {
-        console.error('Database initialization failed:', err);
+        log.error('Database initialization failed:', err);
         process.exit(1);
     }
 };
@@ -41,16 +45,35 @@ const limiter = rateLimit({
     message: 'Too many requests, please try again after 1 minute',
 });
 
+// CORS configuration
+const corsOrigin = (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
+    // Allow requests with no origin (mobile apps, curl)
+    if (!origin) {
+        return callback(null, true);
+    }
+    // Allow configured frontend URL
+    if (origin === config.FRONTEND_URL) {
+        return callback(null, true);
+    }
+    // In dev mode, allow localhost and IP-based origins
+    if (config.NODE_ENV === 'dev') {
+        const isIPOrigin = /^https?:\/\/\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(:\d+)?$/.test(origin);
+        const isLocalhost = origin.includes('localhost') || origin.includes('127.0.0.1');
+        if (isIPOrigin || isLocalhost) {
+            return callback(null, true);
+        }
+    }
+    callback(new Error('Not allowed by CORS'));
+};
+
 // Middleware
 app.use(limiter);
+// @ts-expect-error - known typing issue
 app.use(compression());
+app.use(expressLogger);
 app.use(express.json({ limit: '10mb' }));
-app.use(
-    cors({
-        origin: config.FRONTEND_URL,
-        credentials: true,
-    })
-);
+app.use(express.urlencoded({ extended: true }));
+app.use(cors({ origin: corsOrigin, credentials: true }));
 app.use(cidMiddleware);
 
 // Routes
@@ -64,11 +87,11 @@ const start = async () => {
     await initDatabaseAndMigrate();
 
     httpServer.listen(config.PORT, () => {
-        console.log(`API running on http://localhost:${config.PORT}`);
+        log.info(`API running on http://localhost:${config.PORT}`);
 
         // Start CDC consumer after server is ready
         startCDCConsumer().catch((err) => {
-            console.error('Failed to start CDC consumer:', err);
+            log.error('Failed to start CDC consumer:', err);
         });
     });
 };
@@ -77,9 +100,9 @@ start();
 
 // Graceful shutdown
 process.on('SIGTERM', () => {
-    console.log('SIGTERM received, shutting down...');
+    log.info('SIGTERM received, shutting down...');
     httpServer.close(() => {
-        console.log('Server closed');
+        log.info('Server closed');
         process.exit(0);
     });
 });
