@@ -28,6 +28,7 @@ FROM oven/bun:1-slim
 WORKDIR /app
 
 COPY --from=builder /app/api/dist ./dist
+COPY --from=builder /app/api/src/migrations ./src/migrations
 COPY --from=builder /app/api/package.json ./
 
 ENV NODE_ENV=production

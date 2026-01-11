@@ -4,7 +4,7 @@ import cors from 'cors';
 import compression from 'compression';
 import rateLimit from 'express-rate-limit';
 import { config } from './config';
-import { knex } from './knex';
+import { knex, initDatabase } from './knex';
 import { pingRouter } from './features/ping/router';
 import { cidMiddleware } from './middleware/cid';
 import { errorHandler } from './error';
@@ -14,18 +14,19 @@ import { startCDCConsumer } from './lib/cdc-consumer';
 const app = express();
 const httpServer = createServer(app);
 
-// Run migrations on startup
-const runMigrations = async () => {
-    if (!process.env.DATABASE_URL && !config.POSTGRES_HOST) {
-        console.error('ERROR: Database configuration is required. Set DATABASE_URL or POSTGRES_HOST environment variable.');
+// Initialize database and run migrations on startup
+const initDatabaseAndMigrate = async () => {
+    if (!config.POSTGRES_HOST) {
+        console.error('ERROR: Database configuration is required. Set POSTGRES_HOST environment variable.');
         process.exit(1);
     }
     try {
+        await initDatabase();
         console.log('Running database migrations...');
         await knex.migrate.latest();
         console.log('Migrations complete');
     } catch (err) {
-        console.error('Migration failed:', err);
+        console.error('Database initialization failed:', err);
         process.exit(1);
     }
 };
@@ -60,7 +61,7 @@ app.use(errorHandler);
 
 // Start server
 const start = async () => {
-    await runMigrations();
+    await initDatabaseAndMigrate();
 
     httpServer.listen(config.PORT, () => {
         console.log(`API running on http://localhost:${config.PORT}`);
