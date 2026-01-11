@@ -1,4 +1,5 @@
 import { useRef, useState, useCallback, useEffect } from 'react';
+import { debug } from '../api/debug';
 
 interface UseCameraOptions {
     facingMode?: 'user' | 'environment';
@@ -27,8 +28,11 @@ export function useCamera(options: UseCameraOptions = {}) {
                 setIsReady(true);
             }
         } catch (err) {
+            const error = err instanceof Error
+                ? { name: err.name, message: err.message }
+                : String(err);
             setError('Camera access denied or not available');
-            console.error('Camera error:', err);
+            debug.error('Camera error', { error, facingMode });
         }
     }, [facingMode]);
 

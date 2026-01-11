@@ -12,10 +12,12 @@
       "types": "./dist/index.d.ts"
     }
   },
+  "files": ["src", "dist", "dist-cjs"],
   "scripts": {
-    "build": "bun run build:esm && bun run build:cjs",
+    "build": "bun run build:esm && bun run build:cjs && bun run build:cjs-package",
     "build:esm": "tsc -p tsconfig.json",
     "build:cjs": "tsc -p tsconfig.cjs.json",
+    "build:cjs-package": "node -e \"require('fs').writeFileSync('dist-cjs/package.json', JSON.stringify({type:'commonjs'}, null, 2))\"",
     "dev": "tsc --watch"
   },
   "devDependencies": {

@@ -20,7 +20,7 @@ if [ -n "$URL" ]; then
     echo ""
     echo "Tunnel URL: $URL"
     echo ""
-    echo "$URL" | qrencode -t ANSI
+    echo "$URL" | qrencode -t ANSIUTF8 -m 1
     echo ""
     echo "Scan QR code with your phone"
     echo ""

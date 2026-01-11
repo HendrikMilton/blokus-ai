@@ -1,5 +1,6 @@
 import { io, Socket } from 'socket.io-client';
 import { toast } from 'react-hot-toast';
+import { debug } from './debug';
 
 // API base URL
 export const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
@@ -34,12 +35,12 @@ export const initializeSocket = () => {
     });
 
     apiSocket.on('connect', () => {
-        console.log('Socket connected');
+        debug.info('Socket connected');
         joinUserRoom();
     });
 
     apiSocket.on('disconnect', () => {
-        console.log('Socket disconnected');
+        debug.info('Socket disconnected');
     });
 
     return apiSocket;

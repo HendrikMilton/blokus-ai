@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 import { apiSocket } from '../api/config';
+import { debug } from '../api/debug';
 import type { SocketEvent, EventPayloads } from '@blokus-ai/shared';
 
 /**
@@ -27,7 +28,7 @@ export const useSocketEvent = <T extends SocketEvent>(
                 const data = JSON.parse(serializedData) as EventPayloads[T];
                 callback(data);
             } catch (error) {
-                console.error('Failed to parse socket event data:', error);
+                debug.error('Failed to parse socket event data', { error, eventName });
             }
         };
 

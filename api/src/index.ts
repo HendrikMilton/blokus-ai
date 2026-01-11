@@ -6,6 +6,8 @@ import rateLimit from 'express-rate-limit';
 import { config } from './config';
 import { knex, initDatabase } from './knex';
 import { pingRouter } from './features/ping/router';
+import { debugRouter } from './features/debug/router';
+import { debugPath } from '@blokus-ai/shared';
 import { cidMiddleware } from './middleware/cid';
 import { errorHandler } from './error';
 import { initializeSocket } from './lib/socket';
@@ -55,11 +57,12 @@ const corsOrigin = (origin: string | undefined, callback: (err: Error | null, al
     if (origin === config.FRONTEND_URL) {
         return callback(null, true);
     }
-    // In dev mode, allow localhost and IP-based origins
+    // In dev mode, allow localhost, IP-based origins, and cloudflare tunnels
     if (config.NODE_ENV === 'dev') {
         const isIPOrigin = /^https?:\/\/\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(:\d+)?$/.test(origin);
         const isLocalhost = origin.includes('localhost') || origin.includes('127.0.0.1');
-        if (isIPOrigin || isLocalhost) {
+        const isCloudflare = origin.includes('trycloudflare.com');
+        if (isIPOrigin || isLocalhost || isCloudflare) {
             return callback(null, true);
         }
     }
@@ -77,6 +80,7 @@ app.use(cidMiddleware);
 
 // Routes
 app.use('/ping', pingRouter);
+app.use(debugPath, debugRouter);
 
 // Error handler (must be last)
 app.use(errorHandler);
