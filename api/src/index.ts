@@ -68,7 +68,6 @@ const corsOrigin = (origin: string | undefined, callback: (err: Error | null, al
 
 // Middleware
 app.use(limiter);
-// @ts-expect-error - known typing issue
 app.use(compression());
 app.use(expressLogger);
 app.use(express.json({ limit: '10mb' }));
