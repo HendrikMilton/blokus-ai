@@ -1,0 +1,14 @@
+{
+  "name": "blokus-ai",
+  "private": true,
+  "workspaces": ["api", "frontend", "shared"],
+  "scripts": {
+    "start": "bun install && bun run --cwd shared build && bun run --filter '*' dev",
+    "build": "bun install && bun run --cwd shared build && bun run --cwd api build && bun run --cwd frontend build"
+  },
+  "devDependencies": {
+    "@ryoppippi/unplugin-typia": "^2.6.5",
+    "@types/pg": "^8.16.0",
+    "ts-patch": "^3.3.0"
+  }
+}
