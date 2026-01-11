@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { toast } from 'react-hot-toast';
 import { useGame } from '../contexts/GameContext';
 import { useCamera } from '../hooks/useCamera';
 import { PLAYER_COLORS } from '../types/game';
@@ -17,11 +18,16 @@ export function CameraCapturePage() {
         startCamera();
     }, [state.selectedColor, navigate, startCamera]);
 
-    const handleCapture = () => {
+    const handleCapture = async () => {
         const imageData = capture();
         if (imageData) {
-            captureBoard(imageData);
             navigate('/confirm');
+            try {
+                await captureBoard(imageData);
+                toast.success('Board detected!');
+            } catch (error) {
+                toast.error(`Detection failed: ${error}`);
+            }
         }
     };
 

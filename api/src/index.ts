@@ -7,6 +7,7 @@ import { config } from './config';
 import { knex, initDatabase } from './knex';
 import { pingRouter } from './features/ping/router';
 import { debugRouter } from './features/debug/router';
+import { mlRouter } from './features/ml/router';
 import { debugPath } from '@blokus-ai/shared';
 import { cidMiddleware } from './middleware/cid';
 import { errorHandler } from './error';
@@ -81,6 +82,7 @@ app.use(cidMiddleware);
 // Routes
 app.use('/ping', pingRouter);
 app.use(debugPath, debugRouter);
+app.use('/api/ml', mlRouter);
 
 // Error handler (must be last)
 app.use(errorHandler);

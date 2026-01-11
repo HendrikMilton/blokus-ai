@@ -1,12 +1,12 @@
 import { createContext, useContext, useState, ReactNode } from 'react';
-import { GameState, PlayerColor } from '../types/game';
-import { generateMockBoardState, generateMockAnalysis } from '../utils/mockData';
+import { GameState, PlayerColor, AnalysisResult } from '../types/game';
+import { ML_API } from '../api/ml';
 
 interface GameContextType {
     state: GameState;
     selectColor: (color: PlayerColor) => void;
-    captureBoard: (imageData: string) => void;
-    analyze: () => void;
+    captureBoard: (imageData: string) => Promise<void>;
+    analyze: () => Promise<void>;
     reset: () => void;
 }
 
@@ -15,6 +15,8 @@ const initialState: GameState = {
     capturedImage: null,
     boardState: null,
     analysis: null,
+    isDetecting: false,
+    isAnalyzing: false,
 };
 
 const GameContext = createContext<GameContextType | null>(null);
@@ -26,20 +28,54 @@ export function GameProvider({ children }: { children: ReactNode }) {
         setState(prev => ({ ...prev, selectedColor: color }));
     };
 
-    const captureBoard = (imageData: string) => {
+    const captureBoard = async (imageData: string) => {
         setState(prev => ({
             ...prev,
             capturedImage: imageData,
-            boardState: generateMockBoardState(),
+            isDetecting: true,
         }));
-    };
 
-    const analyze = () => {
-        if (state.selectedColor) {
+        try {
+            const response = await ML_API.detectBoard(imageData);
             setState(prev => ({
                 ...prev,
-                analysis: generateMockAnalysis(state.selectedColor!),
+                boardState: response.boardState,
+                isDetecting: false,
             }));
+        } catch (error) {
+            setState(prev => ({
+                ...prev,
+                isDetecting: false,
+            }));
+            throw error;
+        }
+    };
+
+    const analyze = async () => {
+        if (!state.selectedColor || !state.boardState) {
+            return;
+        }
+
+        setState(prev => ({ ...prev, isAnalyzing: true }));
+
+        try {
+            const response = await ML_API.analyze(state.boardState, state.selectedColor);
+            const analysis: AnalysisResult = {
+                recommendedPiece: response.recommendedPiece,
+                placement: response.placement,
+                stats: response.stats,
+            };
+            setState(prev => ({
+                ...prev,
+                analysis,
+                isAnalyzing: false,
+            }));
+        } catch (error) {
+            setState(prev => ({
+                ...prev,
+                isAnalyzing: false,
+            }));
+            throw error;
         }
     };
 

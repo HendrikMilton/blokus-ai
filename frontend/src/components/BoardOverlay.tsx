@@ -1,12 +1,14 @@
-import { BoardCell, BOARD_SIZE, PLAYER_COLORS, AnalysisResult } from '../types/game';
+import { BoardCell, BOARD_SIZE, PLAYER_COLORS, PlayerColor, AnalysisResult } from '../types/game';
 
 interface BoardOverlayProps {
     boardState: BoardCell[][];
     analysis?: AnalysisResult | null;
+    playerColor?: PlayerColor | null;
     showRecommendation?: boolean;
 }
 
-export function BoardOverlay({ boardState, analysis, showRecommendation = false }: BoardOverlayProps) {
+export function BoardOverlay({ boardState, analysis, playerColor, showRecommendation = false }: BoardOverlayProps) {
+    const recommendationColor = playerColor ? PLAYER_COLORS[playerColor] : '#3b82f6';
     const cellSize = 100 / BOARD_SIZE;
 
     return (
@@ -55,13 +57,13 @@ export function BoardOverlay({ boardState, analysis, showRecommendation = false 
                     })
                 )}
 
-                {/* Recommended move with pulsing effect */}
-                {showRecommendation && analysis && (
+                {/* Recommended move with pulsing glow effect */}
+                {showRecommendation && analysis?.recommendedPiece && analysis?.placement && (
                     <g className="animate-pulse">
                         {analysis.recommendedPiece.cells.map(([r, c], i) => {
-                            const row = analysis.placement.row + r;
-                            const col = analysis.placement.col + c;
-                            if (row >= BOARD_SIZE || col >= BOARD_SIZE) {
+                            const row = analysis.placement!.row + r;
+                            const col = analysis.placement!.col + c;
+                            if (row < 0 || row >= BOARD_SIZE || col < 0 || col >= BOARD_SIZE) {
                                 return null;
                             }
                             return (
@@ -71,12 +73,11 @@ export function BoardOverlay({ boardState, analysis, showRecommendation = false 
                                     y={row * cellSize + 0.1}
                                     width={cellSize - 0.2}
                                     height={cellSize - 0.2}
-                                    fill="currentColor"
-                                    className="text-primary"
+                                    fill={recommendationColor}
                                     opacity={0.9}
                                     rx={0.2}
                                     style={{
-                                        filter: 'drop-shadow(0 0 2px currentColor)',
+                                        filter: `drop-shadow(0 0 3px ${recommendationColor})`,
                                     }}
                                 />
                             );

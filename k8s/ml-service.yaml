@@ -1,0 +1,57 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: blokus-ai-ml
+  labels:
+    app: blokus-ai-ml
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: blokus-ai-ml
+  template:
+    metadata:
+      labels:
+        app: blokus-ai-ml
+    spec:
+      containers:
+        - name: blokus-ai-ml
+          image: hendrikutt/blokus-ai-ml:latest
+          ports:
+            - containerPort: 8000
+          env:
+            - name: PORT
+              value: "8000"
+            - name: LOG_LEVEL
+              value: "info"
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "1Gi"
+              cpu: "1000m"
+          livenessProbe:
+            httpGet:
+              path: /ping/liveness
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /ping/readiness
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: blokus-ai-ml
+spec:
+  type: ClusterIP
+  selector:
+    app: blokus-ai-ml
+  ports:
+    - port: 8000
+      targetPort: 8000

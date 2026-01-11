@@ -1,23 +1,13 @@
-export type PlayerColor = 'blue' | 'yellow' | 'red' | 'green';
+// Re-export from shared
+export type { PlayerColor, BoardCell, PieceShape, AnalysisStats } from '@blokus-ai/shared';
+export { PLAYER_COLORS, BOARD_SIZE } from '@blokus-ai/shared';
 
-export interface BoardCell {
-    color: PlayerColor | null;
-}
-
-export interface PieceShape {
-    name: string;
-    cells: [number, number][];
-    rotation: 0 | 90 | 180 | 270;
-}
+import type { PlayerColor, BoardCell, PieceShape, AnalysisStats } from '@blokus-ai/shared';
 
 export interface AnalysisResult {
-    recommendedPiece: PieceShape;
-    placement: { row: number; col: number };
-    stats: {
-        piecesUsed: number;
-        piecesRemaining: number;
-        winProbability: number;
-    };
+    recommendedPiece: PieceShape | null;
+    placement: { row: number; col: number } | null;
+    stats: AnalysisStats;
 }
 
 export interface GameState {
@@ -25,13 +15,6 @@ export interface GameState {
     capturedImage: string | null;
     boardState: BoardCell[][] | null;
     analysis: AnalysisResult | null;
+    isDetecting: boolean;
+    isAnalyzing: boolean;
 }
-
-export const PLAYER_COLORS: Record<PlayerColor, string> = {
-    blue: '#0066CC',
-    yellow: '#FFD700',
-    red: '#DC143C',
-    green: '#228B22',
-};
-
-export const BOARD_SIZE = 21;

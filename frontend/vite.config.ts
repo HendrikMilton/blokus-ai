@@ -77,10 +77,19 @@ export default defineConfig({
     server: {
         host: '0.0.0.0',
         port: 5177,
+        hmr: true,
+        watch: {
+            usePolling: true,
+            interval: 100,
+        },
         allowedHosts: ['.trycloudflare.com'],
         proxy: {
             '/api': 'http://localhost:3009',
             '/ping': 'http://localhost:3009',
+            '/socket.io': {
+                target: 'http://localhost:3009',
+                ws: true,
+            },
         },
     },
     build: {

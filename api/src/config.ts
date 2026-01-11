@@ -14,6 +14,9 @@ interface Config {
     // Frontend
     FRONTEND_URL: string;
 
+    // ML Service
+    ML_SERVICE_URL: string;
+
     // Telegram (optional - for error notifications)
     TELEGRAM_BOT_TOKEN: string;
     TELEGRAM_CHAT_ID: string;
@@ -30,6 +33,8 @@ const defaults: Config = {
     POSTGRES_DATABASE: 'blokus-ai',
 
     FRONTEND_URL: 'http://localhost:5174',
+
+    ML_SERVICE_URL: 'http://localhost:8001',
 
     TELEGRAM_BOT_TOKEN: '',
     TELEGRAM_CHAT_ID: '',
