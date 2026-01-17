@@ -7,7 +7,7 @@
     "start": "bun dist/index.js",
     "test": "cross-env NODE_ENV=test mocha 'src/**/*.test.ts' --require ts-node/register --exit --timeout 30000",
     "migrate": "knex migrate:latest",
-    "migrate:make": "knex migrate:make",
+    "migrate:make": "node scripts/create-migration.js",
     "migrate:rollback": "knex migrate:rollback",
     "lint": "eslint src --ext .ts"
   },

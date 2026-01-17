@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.features.admin import router as admin_router
 from app.features.analysis import router as analysis_router
 from app.features.detection import router as detection_router
 from app.features.ping import router as ping_router
@@ -26,6 +27,7 @@ app.add_middleware(CorrelationIdMiddleware)
 app.include_router(ping_router, prefix="/ping", tags=["health"])
 app.include_router(detection_router, prefix="/detect-board", tags=["detection"])
 app.include_router(analysis_router, prefix="/analyze", tags=["analysis"])
+app.include_router(admin_router, prefix="/admin", tags=["admin"])
 
 
 @app.get("/")

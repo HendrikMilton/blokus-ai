@@ -28,13 +28,13 @@ const defaults: Config = {
 
     POSTGRES_HOST: 'localhost',
     POSTGRES_PORT: 5432,
-    POSTGRES_USER: 'dev',
-    POSTGRES_PASSWORD: 'dev',
-    POSTGRES_DATABASE: 'blokus-ai',
+    POSTGRES_USER: 'c_connect_user',
+    POSTGRES_PASSWORD: 'postgres',
+    POSTGRES_DATABASE: 'blokus_ai',
 
     FRONTEND_URL: 'http://localhost:5174',
 
-    ML_SERVICE_URL: 'http://localhost:8001',
+    ML_SERVICE_URL: 'http://localhost:8017',
 
     TELEGRAM_BOT_TOKEN: '',
     TELEGRAM_CHAT_ID: '',
