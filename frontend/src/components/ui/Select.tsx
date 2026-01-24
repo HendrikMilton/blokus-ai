@@ -68,14 +68,14 @@ export const Select = ({
                     onClick={() => !disabled && setIsOpen(!isOpen)}
                     disabled={disabled}
                     className={`
-                        w-full flex items-center justify-between rounded-md border bg-background
+                        w-full flex items-center justify-between rounded-md border bg-surface
                         px-3 py-2 text-sm text-left
-                        focus:outline-none focus:ring-2 focus:ring-ring
+                        focus:outline-none focus:ring-2 focus:ring-primary/30
                         disabled:cursor-not-allowed disabled:opacity-50
-                        ${showError ? 'border-destructive' : 'border-input'}
+                        ${showError ? 'border-error' : 'border-border'}
                     `}
                 >
-                    <span className={selectedOption ? 'text-foreground' : 'text-muted-foreground'}>
+                    <span className={selectedOption ? 'text-foreground' : 'text-muted'}>
                         {selectedOption?.label || placeholder}
                     </span>
                     <svg
@@ -89,21 +89,21 @@ export const Select = ({
                 </button>
 
                 {isOpen && (
-                    <div className="absolute z-50 w-full mt-1 bg-background border border-input rounded-md shadow-lg max-h-60 overflow-auto">
+                    <div className="absolute z-50 w-full mt-1 bg-surface border border-border rounded-md shadow-gcp-lg max-h-60 overflow-auto">
                         {searchable && (
-                            <div className="p-2 border-b border-input">
+                            <div className="p-2 border-b border-border">
                                 <input
                                     type="text"
                                     value={search}
                                     onChange={(e) => setSearch(e.target.value)}
                                     placeholder="Search..."
-                                    className="w-full px-2 py-1 text-sm border border-input rounded focus:outline-none focus:ring-1 focus:ring-ring"
+                                    className="w-full px-2 py-1 text-sm border border-border rounded focus:outline-none focus:ring-1 focus:ring-primary/30"
                                     autoFocus
                                 />
                             </div>
                         )}
                         {filteredOptions.length === 0 ? (
-                            <div className="px-3 py-2 text-sm text-muted-foreground">
+                            <div className="px-3 py-2 text-sm text-muted">
                                 No options found
                             </div>
                         ) : (
@@ -117,8 +117,8 @@ export const Select = ({
                                         setSearch('');
                                     }}
                                     className={`
-                                        w-full px-3 py-2 text-sm text-left hover:bg-muted
-                                        ${option.value === value ? 'bg-muted' : ''}
+                                        w-full px-3 py-2 text-sm text-left hover:bg-surface-dim
+                                        ${option.value === value ? 'bg-surface-dim' : ''}
                                     `}
                                 >
                                     {option.label}
@@ -129,7 +129,7 @@ export const Select = ({
                 )}
             </div>
             {showError && (
-                <p className="mt-1 text-xs text-destructive">{error}</p>
+                <p className="mt-1 text-xs text-error">{error}</p>
             )}
         </div>
     );

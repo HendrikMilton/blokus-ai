@@ -39,9 +39,9 @@ export function Table<T>({
     };
 
     return (
-        <div className="w-full overflow-x-auto rounded-md border border-input">
+        <div className="w-full overflow-x-auto rounded-md border border-border">
             <table className="w-full text-sm">
-                <thead className="bg-muted">
+                <thead className="bg-surface-dim">
                     <tr>
                         {columns.map((column) => (
                             <th
@@ -53,7 +53,7 @@ export function Table<T>({
                         ))}
                     </tr>
                 </thead>
-                <tbody className="divide-y divide-input">
+                <tbody className="divide-y divide-border">
                     {loading ? (
                         <tr>
                             <td colSpan={columns.length} className="px-4 py-8 text-center">
@@ -84,7 +84,7 @@ export function Table<T>({
                         </tr>
                     ) : data.length === 0 ? (
                         <tr>
-                            <td colSpan={columns.length} className="px-4 py-8 text-center text-muted-foreground">
+                            <td colSpan={columns.length} className="px-4 py-8 text-center text-muted">
                                 {emptyMessage}
                             </td>
                         </tr>
@@ -94,7 +94,7 @@ export function Table<T>({
                                 key={String(row[keyField])}
                                 onClick={() => onRowClick?.(row)}
                                 className={`
-                                    bg-background hover:bg-muted/50 transition-colors
+                                    bg-surface hover:bg-surface-dim transition-colors
                                     ${onRowClick ? 'cursor-pointer' : ''}
                                 `}
                             >

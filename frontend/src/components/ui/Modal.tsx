@@ -55,20 +55,20 @@ export const Modal = ({
             {/* Modal */}
             <div
                 className={`
-                    relative w-full ${sizes[size]} mx-4 bg-background rounded-lg shadow-xl
+                    relative w-full ${sizes[size]} mx-4 bg-surface rounded-lg shadow-gcp-lg
                     animate-in fade-in zoom-in-95 duration-200
                 `}
             >
                 {/* Header */}
                 {title && (
-                    <div className="flex items-center justify-between px-6 py-4 border-b border-input">
+                    <div className="flex items-center justify-between px-6 py-4 border-b border-border">
                         <h2 className="text-lg font-semibold text-foreground">{title}</h2>
                         <button
                             onClick={onClose}
-                            className="p-1 rounded-md hover:bg-muted transition-colors"
+                            className="p-1 rounded-md hover:bg-surface-dim transition-colors"
                         >
                             <svg
-                                className="h-5 w-5 text-muted-foreground"
+                                className="h-5 w-5 text-muted"
                                 fill="none"
                                 stroke="currentColor"
                                 viewBox="0 0 24 24"

@@ -1,6 +1,6 @@
 import type { Knex } from 'knex';
 
-export async function up(knex: Knex): Promise<void> {
+export const up = async (knex: Knex): Promise<void> => {
     // Users table
     await knex.schema.createTable('users', (table) => {
         table.increments('id').primary();
@@ -52,9 +52,9 @@ export async function up(knex: Knex): Promise<void> {
             ELSE NULL
         END;
     `);
-}
+};
 
-export async function down(knex: Knex): Promise<void> {
+export const down = async (knex: Knex): Promise<void> => {
     // Drop replication slot
     await knex.raw(`
         SELECT pg_drop_replication_slot('blokus_ai_cdc_slot')
@@ -68,7 +68,7 @@ export async function down(knex: Knex): Promise<void> {
 
     await knex.schema.dropTableIfExists('application_errors');
     await knex.schema.dropTableIfExists('users');
-}
+};
 
 // Slot creation is not transactional
 export const config = { transaction: false };

@@ -11,10 +11,10 @@ interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 }
 
 const variants = {
-    primary: 'bg-primary text-white hover:bg-primary/90 disabled:bg-gray-400 disabled:text-gray-200 disabled:opacity-60',
-    secondary: 'bg-secondary text-secondary-foreground hover:bg-secondary/80 disabled:bg-gray-300 disabled:text-gray-400 disabled:opacity-60',
-    ghost: 'hover:bg-muted text-foreground disabled:text-gray-400 disabled:opacity-50',
-    destructive: 'bg-destructive text-white hover:bg-destructive/90 disabled:bg-gray-400 disabled:text-gray-200 disabled:opacity-60',
+    primary: 'bg-primary text-white hover:bg-primary/90 disabled:bg-muted disabled:text-white/60 disabled:opacity-60',
+    secondary: 'bg-surface-dim text-foreground hover:bg-border/50 disabled:bg-surface-dim disabled:text-muted disabled:opacity-60',
+    ghost: 'hover:bg-surface-dim text-foreground disabled:text-muted disabled:opacity-50',
+    destructive: 'bg-error text-white hover:bg-error/90 disabled:bg-muted disabled:text-white/60 disabled:opacity-60',
 };
 
 const sizes = {
@@ -41,7 +41,7 @@ export const Button = ({
             className={`
                 inline-flex items-center justify-center gap-2 rounded-md font-medium
                 transition-colors focus-visible:outline-none focus-visible:ring-2
-                focus-visible:ring-ring disabled:pointer-events-none
+                focus-visible:ring-primary/30 disabled:pointer-events-none
                 ${variants[variant]}
                 ${sizes[size]}
                 ${fullWidth ? 'w-full' : ''}

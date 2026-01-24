@@ -1,6 +1,6 @@
 import { Knex } from 'knex';
 
-export async function up(knex: Knex): Promise<void> {
+export const up = async (knex: Knex): Promise<void> => {
     await knex.schema.createTable('training_samples', (table) => {
         table.uuid('id').primary().defaultTo(knex.fn.uuid());
         table.string('image_path', 500).notNullable();
@@ -19,8 +19,8 @@ export async function up(knex: Knex): Promise<void> {
         table.index('status');
         table.index('created_at');
     });
-}
+};
 
-export async function down(knex: Knex): Promise<void> {
+export const down = async (knex: Knex): Promise<void> => {
     await knex.schema.dropTableIfExists('training_samples');
-}
+};

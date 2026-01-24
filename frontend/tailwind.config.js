@@ -4,78 +4,78 @@ export default {
     theme: {
         extend: {
             fontFamily: {
-                sans: ['Plus Jakarta Sans', 'sans-serif'],
+                sans: ['Google Sans', 'Roboto', 'system-ui', 'sans-serif'],
+                mono: ['Roboto Mono', 'monospace'],
             },
             colors: {
                 background: 'rgb(var(--background) / <alpha-value>)',
                 foreground: 'rgb(var(--foreground) / <alpha-value>)',
                 surface: 'rgb(var(--surface) / <alpha-value>)',
+                'surface-dim': 'rgb(var(--surface-dim) / <alpha-value>)',
                 border: 'rgb(var(--border) / <alpha-value>)',
-                input: 'rgb(var(--input) / <alpha-value>)',
-                ring: 'rgb(var(--ring) / <alpha-value>)',
-                primary: {
-                    DEFAULT: 'rgb(var(--primary) / <alpha-value>)',
-                    foreground: 'rgb(var(--primary-foreground) / <alpha-value>)',
-                },
-                secondary: {
-                    DEFAULT: 'rgb(var(--secondary) / <alpha-value>)',
-                    foreground: 'rgb(var(--secondary-foreground) / <alpha-value>)',
-                },
-                muted: {
-                    DEFAULT: 'rgb(var(--muted) / <alpha-value>)',
-                    foreground: 'rgb(var(--muted-foreground) / <alpha-value>)',
-                },
-                destructive: {
-                    DEFAULT: 'rgb(var(--destructive) / <alpha-value>)',
-                    foreground: 'rgb(var(--destructive-foreground) / <alpha-value>)',
-                },
+                primary: 'rgb(var(--primary) / <alpha-value>)',
+                secondary: 'rgb(var(--secondary) / <alpha-value>)',
+                muted: 'rgb(var(--muted) / <alpha-value>)',
+                error: 'rgb(var(--error) / <alpha-value>)',
+                success: 'rgb(var(--success) / <alpha-value>)',
+                warning: 'rgb(var(--warning) / <alpha-value>)',
+            },
+            boxShadow: {
+                'gcp': '0 1px 2px 0 rgba(60,64,67,0.3), 0 1px 3px 1px rgba(60,64,67,0.15)',
+                'gcp-lg': '0 1px 2px 0 rgba(60,64,67,0.3), 0 2px 6px 2px rgba(60,64,67,0.15)',
+                'gcp-hover': '0 1px 3px 0 rgba(60,64,67,0.3), 0 4px 8px 3px rgba(60,64,67,0.15)',
             },
             keyframes: {
+                'fade-slide-in': {
+                    '0%': { opacity: '0', transform: 'translateY(-8px)', backgroundColor: 'rgba(26, 115, 232, 0.08)' },
+                    '100%': { opacity: '1', transform: 'translateY(0)', backgroundColor: 'transparent' },
+                },
+                'pulse-subtle': {
+                    '0%, 100%': { opacity: '1' },
+                    '50%': { opacity: '0.7' },
+                },
                 shimmer: {
                     '0%': { transform: 'translateX(-100%)' },
                     '100%': { transform: 'translateX(100%)' },
                 },
             },
             animation: {
+                'fade-slide-in': 'fade-slide-in 0.4s ease-out forwards',
+                'pulse-subtle': 'pulse-subtle 2s ease-in-out infinite',
                 shimmer: 'shimmer 1.8s ease-in-out infinite',
             },
         },
     },
     darkMode: 'class',
     plugins: [
-        function ({ addBase }) {
+        function({ addBase }) {
             addBase({
                 ':root': {
-                    '--background': '255 255 255',
-                    '--foreground': '15 23 42',
-                    '--surface': '248 250 252',
-                    '--border': '226 232 240',
-                    '--input': '226 232 240',
-                    '--ring': '59 130 246',
-                    '--primary': '59 130 246',
-                    '--primary-foreground': '255 255 255',
-                    '--secondary': '241 245 249',
-                    '--secondary-foreground': '15 23 42',
-                    '--muted': '241 245 249',
-                    '--muted-foreground': '100 116 139',
-                    '--destructive': '239 68 68',
-                    '--destructive-foreground': '255 255 255',
+                    // GCP Light Theme - Clean whites with blue accents
+                    '--background': '248 249 250',      // #f8f9fa - GCP background gray
+                    '--foreground': '32 33 36',         // #202124 - GCP text
+                    '--surface': '255 255 255',         // #ffffff
+                    '--surface-dim': '241 243 244',     // #f1f3f4 - Subtle gray
+                    '--border': '218 220 224',          // #dadce0 - GCP border
+                    '--primary': '26 115 232',          // #1a73e8 - Google Blue
+                    '--secondary': '117 117 117',       // #757575 - Lighter secondary text
+                    '--muted': '158 158 158',           // #9e9e9e - Lighter muted
+                    '--error': '217 48 37',             // #d93025 - Google Red
+                    '--success': '24 128 56',           // #188038 - Google Green
+                    '--warning': '249 171 0',           // #f9ab00 - Google Yellow
                 },
                 '.dark': {
-                    '--background': '15 23 42',
-                    '--foreground': '241 245 249',
-                    '--surface': '30 41 59',
-                    '--border': '51 65 85',
-                    '--input': '51 65 85',
-                    '--ring': '59 130 246',
-                    '--primary': '59 130 246',
-                    '--primary-foreground': '255 255 255',
-                    '--secondary': '30 41 59',
-                    '--secondary-foreground': '241 245 249',
-                    '--muted': '30 41 59',
-                    '--muted-foreground': '148 163 184',
-                    '--destructive': '239 68 68',
-                    '--destructive-foreground': '255 255 255',
+                    '--background': '32 33 36',         // #202124
+                    '--foreground': '232 234 237',      // #e8eaed
+                    '--surface': '41 42 45',            // #292a2d
+                    '--surface-dim': '53 54 58',        // #35363a
+                    '--border': '95 99 104',            // #5f6368
+                    '--primary': '138 180 248',         // #8ab4f8
+                    '--secondary': '154 160 166',       // #9aa0a6
+                    '--muted': '154 160 166',           // #9aa0a6
+                    '--error': '242 139 130',           // #f28b82
+                    '--success': '129 201 149',         // #81c995
+                    '--warning': '253 214 99',          // #fdd663
                 },
             });
         },

@@ -9,7 +9,7 @@ module.exports = {
         ecmaVersion: 'latest',
         sourceType: 'module',
     },
-    plugins: ['@typescript-eslint', 'unused-imports'],
+    plugins: ['@typescript-eslint', 'unused-imports', 'prefer-arrow-functions'],
     rules: {
         indent: ['error', 4, { SwitchCase: 1 }],
         'linebreak-style': ['error', 'unix'],
@@ -25,6 +25,16 @@ module.exports = {
             { argsIgnorePattern: '^_', varsIgnorePattern: '^_' },
         ],
         '@typescript-eslint/no-explicit-any': 'off',
+        'prefer-arrow-functions/prefer-arrow-functions': [
+            'error',
+            {
+                allowNamedFunctions: false,
+                classPropertiesAllowed: false,
+                disallowPrototype: false,
+                returnStyle: 'unchanged',
+                singleReturnOnly: false,
+            }
+        ],
     },
     ignorePatterns: ['dist/**/*', 'node_modules/**/*'],
 };

@@ -1,3 +1,86 @@
+@import url('https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;600;700&family=Roboto:wght@400;500&family=Roboto+Mono:wght@400;500&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+body {
+    @apply bg-background text-foreground antialiased;
+    font-feature-settings: 'kern' 1;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+}
+
+/* Custom scrollbar - GCP style */
+::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+    background: rgb(218 220 224);
+    border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: rgb(154 160 166);
+}
+
+.dark ::-webkit-scrollbar-thumb {
+    background: rgb(95 99 104);
+}
+
+.dark ::-webkit-scrollbar-thumb:hover {
+    background: rgb(154 160 166);
+}
+
+/* Modal animations */
+@keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+@keyframes scaleIn {
+    from {
+        opacity: 0;
+        transform: scale(0.95) translateY(-10px);
+    }
+    to {
+        opacity: 1;
+        transform: scale(1) translateY(0);
+    }
+}
+
+@keyframes slideUp {
+    from {
+        opacity: 0;
+        transform: translateY(10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+/* Focus ring style */
+.focus-ring {
+    @apply focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:ring-offset-1;
+}
+
+/* GCP-style card hover */
+.card-hover {
+    @apply transition-shadow duration-200 hover:shadow-gcp-hover;
+}
+
+/* Subtle border glow on focus */
+input:focus, select:focus, textarea:focus {
+    box-shadow: 0 0 0 2px rgba(26, 115, 232, 0.2);
+}
+
+.dark input:focus, .dark select:focus, .dark textarea:focus {
+    box-shadow: 0 0 0 2px rgba(138, 180, 248, 0.2);
+}

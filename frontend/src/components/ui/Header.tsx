@@ -6,7 +6,7 @@ interface HeaderProps {
 
 export const Header = ({ title = 'blokus-ai' }: HeaderProps) => {
     return (
-        <header className="w-full border-b border-border bg-background/95 backdrop-blur-md">
+        <header className="w-full border-b border-border bg-surface shadow-gcp">
             <nav className="max-w-5xl mx-auto flex justify-between items-center px-4 sm:px-6 h-14">
                 {/* Logo */}
                 <Link to="/" className="flex items-center gap-2.5">
@@ -24,7 +24,7 @@ export const Header = ({ title = 'blokus-ai' }: HeaderProps) => {
                 <div className="flex items-center gap-4">
                     <Link
                         to="/users"
-                        className="text-sm text-muted-foreground hover:text-foreground transition-colors"
+                        className="text-sm text-secondary hover:text-foreground transition-colors"
                     >
                         Users
                     </Link>

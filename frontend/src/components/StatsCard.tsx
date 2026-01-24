@@ -16,17 +16,17 @@ export const StatsCard = ({ stats, color }: StatsCardProps) => <div className="b
 
     <div className="space-y-3">
         <div className="flex justify-between">
-            <span className="text-muted-foreground">Pieces used</span>
+            <span className="text-secondary">Pieces used</span>
             <span className="font-medium text-foreground">{stats.piecesUsed}/21</span>
         </div>
 
         <div className="flex justify-between">
-            <span className="text-muted-foreground">Pieces remaining</span>
+            <span className="text-secondary">Pieces remaining</span>
             <span className="font-medium text-foreground">{stats.piecesRemaining}/21</span>
         </div>
 
         <div className="flex justify-between">
-            <span className="text-muted-foreground">Win probability</span>
+            <span className="text-secondary">Win probability</span>
             <span className="font-medium text-foreground">{stats.winProbability}%</span>
         </div>
 

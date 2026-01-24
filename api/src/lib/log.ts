@@ -22,7 +22,5 @@ export const logWithCid = (cid: string): Logger => {
 export const expressLogger = logger({
     winstonInstance: log,
     expressFormat: true,
-    skip: function (req, _res) {
-        return req.path === '/ping/liveness' || req.path === '/ping/readiness';
-    }
+    skip: (req, _res) => req.path === '/ping/liveness' || req.path === '/ping/readiness'
 });
