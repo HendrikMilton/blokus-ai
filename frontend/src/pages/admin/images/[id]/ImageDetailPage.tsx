@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams, useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { http, API_URL } from '../../../../api/config';
 import { Button } from '../../../../components/ui/Button';
@@ -47,6 +47,7 @@ const statusColors: Record<string, string> = {
 
 export const ImageDetailPage = () => {
     const { id } = useParams<{ id: string }>();
+    const navigate = useNavigate();
     const [sample, setSample] = useState<Sample | null>(null);
     const [isLoading, setIsLoading] = useState(true);
     const [isRunningDetection, setIsRunningDetection] = useState(false);
@@ -352,6 +353,32 @@ export const ImageDetailPage = () => {
         }));
     };
 
+    const handleVerify = async () => {
+        if (!id) {
+            return;
+        }
+        try {
+            await http.post(`/api/ml/detect/${id}/verify`, {});
+            setSample(prev => prev ? { ...prev, status: 'verified' } : null);
+            toast.success('Image verified');
+        } catch {
+            toast.error('Failed to verify image');
+        }
+    };
+
+    const handleUnverify = async () => {
+        if (!id) {
+            return;
+        }
+        try {
+            await http.delete(`/api/ml/detect/${id}/verify`);
+            setSample(prev => prev ? { ...prev, status: 'labeled' } : null);
+            toast.success('Verification removed');
+        } catch {
+            toast.error('Failed to remove verification');
+        }
+    };
+
     const formatDate = (dateString: string) => {
         const date = new Date(dateString);
         return date.toLocaleDateString(undefined, {
@@ -396,12 +423,12 @@ export const ImageDetailPage = () => {
         return (
             <div className="space-y-6">
                 <div className="flex items-center gap-3">
-                    <Link
-                        to="/admin/images"
+                    <button
+                        onClick={() => navigate(-1)}
                         className="p-1.5 -ml-1.5 rounded-lg hover:bg-surface-dim transition-colors text-secondary hover:text-foreground"
                     >
                         <BackIcon />
-                    </Link>
+                    </button>
                     <h1 className="text-xl font-medium text-foreground">Image not found</h1>
                 </div>
             </div>
@@ -417,12 +444,12 @@ export const ImageDetailPage = () => {
             {/* Header */}
             <div className="space-y-2">
                 <div className="flex items-center gap-2 flex-wrap">
-                    <Link
-                        to="/admin/images"
+                    <button
+                        onClick={() => navigate(-1)}
                         className="p-1.5 -ml-1.5 rounded-lg hover:bg-surface-dim transition-colors text-secondary hover:text-foreground"
                     >
                         <BackIcon />
-                    </Link>
+                    </button>
                     <h1 className="text-lg sm:text-xl font-medium text-foreground font-mono">{sample.id.slice(0, 8)}</h1>
                     <span className={`px-2 py-0.5 text-xs font-medium rounded-full capitalize ${statusColors[sample.status]}`}>
                         {sample.status}
@@ -524,44 +551,64 @@ export const ImageDetailPage = () => {
             )}
 
             {/* Action buttons */}
-            <div className="flex flex-col sm:flex-row gap-2 sm:gap-3">
-                <div className="flex gap-2 sm:gap-3">
+            <div className="grid grid-cols-2 gap-2">
+                <Button
+                    onClick={handleRunDetection}
+                    loading={isRunningDetection}
+                    leftIcon={hasPrediction ? <RefreshIcon /> : <PlayIcon />}
+                    variant="secondary"
+                >
+                    {hasPrediction ? 'Re-run' : 'Detect'}
+                </Button>
+                {isDrawingBox ? (
                     <Button
-                        onClick={handleRunDetection}
-                        loading={isRunningDetection}
-                        leftIcon={hasPrediction ? <RefreshIcon /> : <PlayIcon />}
+                        onClick={() => setIsDrawingBox(false)}
                         variant="secondary"
-                        className="flex-1 sm:flex-none"
                     >
-                        {hasPrediction ? 'Re-run' : 'Detect'}
+                        Cancel
                     </Button>
-                    {isDrawingBox ? (
+                ) : (
+                    <Button
+                        onClick={() => setIsDrawingBox(true)}
+                        variant="secondary"
+                    >
+                        Draw Box
+                    </Button>
+                )}
+                {hasPrediction && (
+                    sample.status === 'verified' ? (
                         <Button
-                            onClick={() => setIsDrawingBox(false)}
+                            onClick={handleUnverify}
                             variant="secondary"
-                            className="flex-1 sm:flex-none"
                         >
-                            Cancel
+                            Unverify
                         </Button>
                     ) : (
                         <Button
-                            onClick={() => setIsDrawingBox(true)}
-                            variant="secondary"
-                            className="flex-1 sm:flex-none"
+                            onClick={handleVerify}
+                            variant="success"
                         >
-                            Draw Box
+                            Verify
                         </Button>
-                    )}
-                </div>
+                    )
+                )}
+                {hasPrediction && (
+                    <Button
+                        onClick={handleDeleteDetection}
+                        variant="danger"
+                    >
+                        Delete
+                    </Button>
+                )}
                 {labelData.isModified && (
-                    <div className="flex gap-2 sm:gap-3">
-                        <Button onClick={handleSaveCorrections} loading={isSaving} className="flex-1 sm:flex-none">
+                    <>
+                        <Button onClick={handleSaveCorrections} loading={isSaving}>
                             Save
                         </Button>
-                        <Button onClick={handleResetCorrections} variant="secondary" className="flex-1 sm:flex-none">
+                        <Button onClick={handleResetCorrections} variant="secondary">
                             Reset
                         </Button>
-                    </div>
+                    </>
                 )}
             </div>
 
@@ -570,17 +617,9 @@ export const ImageDetailPage = () => {
             <div className="bg-surface rounded-lg border border-border p-4">
                 <div className="flex items-center justify-between mb-3">
                     <h2 className="text-sm font-medium text-foreground">Board Detection</h2>
-                    <div className="flex items-center gap-2">
-                        {labelData.correction && (
-                            <span className="text-xs text-success font-medium">Corrected</span>
-                        )}
-                        <button
-                            onClick={handleDeleteDetection}
-                            className="text-xs text-error hover:underline"
-                        >
-                            Delete
-                        </button>
-                    </div>
+                    {labelData.correction && (
+                        <span className="text-xs text-success font-medium">Corrected</span>
+                    )}
                 </div>
                 <div className="space-y-3">
                     {/* Board detected */}

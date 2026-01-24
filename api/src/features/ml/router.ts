@@ -3,7 +3,7 @@ import { asyncHandler } from '../../lib/async-handler';
 import { mlHttp, HttpError } from '../../lib/http';
 import { config } from '../../config';
 import type { DetectResponse } from '@blokus-ai/shared';
-import { getBoardDetectionBySampleId, upsertBoardDetection, insertBoardDetection, getLabeledSampleIds, deleteBoardDetection, saveBoardDetectionCorrection, CorrectionData } from './database';
+import { getBoardDetectionBySampleId, upsertBoardDetection, insertBoardDetection, getLabeledSampleIds, deleteBoardDetection, saveBoardDetectionCorrection, CorrectionData, getVerifiedSampleIds, setVerificationStatus, isDetectionVerified } from './database';
 
 export const mlRouter = Router();
 
@@ -38,9 +38,14 @@ mlRouter.get('/samples', asyncHandler(async (_req, res) => {
         const data = await mlHttp.get<{ samples: { id: string; status: string }[] }>('/samples/');
 
         // Update status based on detection results
-        const labeledIds = await getLabeledSampleIds();
+        const [labeledIds, verifiedIds] = await Promise.all([
+            getLabeledSampleIds(),
+            getVerifiedSampleIds(),
+        ]);
         for (const sample of data.samples) {
-            if (labeledIds.has(sample.id)) {
+            if (verifiedIds.has(sample.id)) {
+                sample.status = 'verified';
+            } else if (labeledIds.has(sample.id)) {
                 sample.status = 'labeled';
             }
         }
@@ -58,9 +63,14 @@ mlRouter.get('/samples/:id', asyncHandler(async (req, res) => {
     try {
         const data = await mlHttp.get<{ id: string; filename: string; status: string; created_at: string }>(`/samples/${id}`);
 
-        // Check if we have detection results - if so, status is 'labeled'
-        const detection = await getBoardDetectionBySampleId(id);
-        if (detection) {
+        // Check detection and verification status
+        const [detection, verified] = await Promise.all([
+            getBoardDetectionBySampleId(id),
+            isDetectionVerified(id),
+        ]);
+        if (verified) {
+            data.status = 'verified';
+        } else if (detection) {
             data.status = 'labeled';
         }
 
@@ -128,6 +138,30 @@ mlRouter.patch('/detect/:id/correction', asyncHandler(async (req, res) => {
     const correction = req.body as CorrectionData;
 
     const updated = await saveBoardDetectionCorrection(id, correction);
+    if (!updated) {
+        res.status(404).json({ error: 'Detection not found' });
+        return;
+    }
+    res.json({ success: true });
+}));
+
+// POST /api/ml/detect/:id/verify - Verify detection
+mlRouter.post('/detect/:id/verify', asyncHandler(async (req, res) => {
+    const { id } = req.params;
+
+    const updated = await setVerificationStatus(id, true);
+    if (!updated) {
+        res.status(404).json({ error: 'Detection not found' });
+        return;
+    }
+    res.json({ success: true });
+}));
+
+// DELETE /api/ml/detect/:id/verify - Unverify detection
+mlRouter.delete('/detect/:id/verify', asyncHandler(async (req, res) => {
+    const { id } = req.params;
+
+    const updated = await setVerificationStatus(id, false);
     if (!updated) {
         res.status(404).json({ error: 'Detection not found' });
         return;

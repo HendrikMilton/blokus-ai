@@ -1,11 +1,13 @@
 import { useRef, useState, useEffect, useCallback } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { http, API_URL } from '../../../api/config';
 import { Button } from '../../../components/ui/Button';
 
 type SampleStatus = 'unlabeled' | 'labeled' | 'verified';
 type FilterStatus = SampleStatus | 'all';
+
+const validFilters: FilterStatus[] = ['all', 'unlabeled', 'labeled', 'verified'];
 
 interface Sample {
     id: string;
@@ -43,11 +45,24 @@ const BackIcon = () => (
 
 export const ImagesPage = () => {
     const navigate = useNavigate();
+    const [searchParams, setSearchParams] = useSearchParams();
     const fileInputRef = useRef<HTMLInputElement>(null);
     const [isUploading, setIsUploading] = useState(false);
     const [isLoading, setIsLoading] = useState(true);
     const [samples, setSamples] = useState<Sample[]>([]);
-    const [filter, setFilter] = useState<FilterStatus>('all');
+
+    // Get filter from URL or default to 'all'
+    const urlFilter = searchParams.get('status') as FilterStatus | null;
+    const filter: FilterStatus = urlFilter && validFilters.includes(urlFilter) ? urlFilter : 'all';
+
+    const setFilter = (newFilter: FilterStatus) => {
+        if (newFilter === 'all') {
+            searchParams.delete('status');
+        } else {
+            searchParams.set('status', newFilter);
+        }
+        setSearchParams(searchParams);
+    };
 
     const loadSamples = useCallback(async () => {
         try {

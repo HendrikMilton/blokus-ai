@@ -128,3 +128,37 @@ export const saveBoardDetectionCorrection = async (
         });
     return updated > 0;
 };
+
+export const getVerifiedSampleIds = async (
+    trx: Knex.Transaction | Knex = knex
+): Promise<Set<string>> => {
+    const rows = await trx('board_detections')
+        .whereNotNull('verified_at')
+        .select('sample_id');
+    return new Set(rows.map(r => r.sample_id));
+};
+
+export const isDetectionVerified = async (
+    sampleId: string,
+    trx: Knex.Transaction | Knex = knex
+): Promise<boolean> => {
+    const row = await trx('board_detections')
+        .where('sample_id', sampleId)
+        .whereNotNull('verified_at')
+        .first();
+    return !!row;
+};
+
+export const setVerificationStatus = async (
+    sampleId: string,
+    verified: boolean,
+    trx: Knex.Transaction | Knex = knex
+): Promise<boolean> => {
+    const updated = await trx('board_detections')
+        .where('sample_id', sampleId)
+        .update({
+            verified_at: verified ? knex.fn.now() : null,
+            updated_at: knex.fn.now(),
+        });
+    return updated > 0;
+};
