@@ -7,7 +7,7 @@ interface BoardOverlayProps {
     showRecommendation?: boolean;
 }
 
-export function BoardOverlay({ boardState, analysis, playerColor, showRecommendation = false }: BoardOverlayProps) {
+export const BoardOverlay = ({ boardState, analysis, playerColor, showRecommendation = false }: BoardOverlayProps) => {
     const recommendationColor = playerColor ? PLAYER_COLORS[playerColor] : '#3b82f6';
     const cellSize = 100 / BOARD_SIZE;
 
@@ -87,4 +87,4 @@ export function BoardOverlay({ boardState, analysis, playerColor, showRecommenda
             </svg>
         </div>
     );
-}
+};

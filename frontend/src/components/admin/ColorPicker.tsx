@@ -28,12 +28,12 @@ const SHORTCUT_KEYS: Record<SelectedColor, string> = {
     clear: '0',
 };
 
-export function ColorPicker({
+export const ColorPicker = ({
     selectedColor,
     onColorSelect,
     showShortcuts = true,
     colorblindMode = false,
-}: ColorPickerProps) {
+}: ColorPickerProps) => {
     const colors: SelectedColor[] = ['blue', 'yellow', 'red', 'green', 'clear'];
 
     return (
@@ -85,4 +85,4 @@ export function ColorPicker({
             })}
         </div>
     );
-}
+};

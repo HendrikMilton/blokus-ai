@@ -30,13 +30,13 @@ const COLOR_PATTERNS: Record<PlayerColor, { pattern: string; size?: string }> = 
     },
 };
 
-export function BoardEditor({
+export const BoardEditor = ({
     boardState,
     selectedColor,
     onChange,
     readOnly = false,
     colorblindMode = false,
-}: BoardEditorProps) {
+}: BoardEditorProps) => {
     const [isDragging, setIsDragging] = useState(false);
     const lastCellRef = useRef<{ row: number; col: number } | null>(null);
     const containerRef = useRef<HTMLDivElement>(null);
@@ -265,4 +265,4 @@ export function BoardEditor({
             )}
         </div>
     );
-}
+};

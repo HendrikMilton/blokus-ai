@@ -1,11 +1,11 @@
 import { useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'react-hot-toast';
-import { useGame } from '../contexts/GameContext';
-import { useCamera } from '../hooks/useCamera';
-import { PLAYER_COLORS } from '../types/game';
+import { useGame } from '../../contexts/GameContext';
+import { useCamera } from '../../hooks/useCamera';
+import { PLAYER_COLORS } from '../../types/game';
 
-export function CameraCapturePage() {
+export const CameraCapturePage = () => {
     const navigate = useNavigate();
     const { state, captureBoard } = useGame();
     const { videoRef, canvasRef, isReady, error, startCamera, capture } = useCamera();
@@ -95,4 +95,4 @@ export function CameraCapturePage() {
             </div>
         </div>
     );
-}
+};

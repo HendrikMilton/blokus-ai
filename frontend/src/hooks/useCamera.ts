@@ -5,7 +5,7 @@ interface UseCameraOptions {
     facingMode?: 'user' | 'environment';
 }
 
-export function useCamera(options: UseCameraOptions = {}) {
+export const useCamera = (options: UseCameraOptions = {}) => {
     const { facingMode = 'environment' } = options;
     const videoRef = useRef<HTMLVideoElement>(null);
     const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -79,4 +79,4 @@ export function useCamera(options: UseCameraOptions = {}) {
         stopCamera,
         capture,
     };
-}
+};

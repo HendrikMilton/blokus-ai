@@ -1,36 +1,28 @@
 import { BrowserRouter, Routes, Route, Link } from 'react-router-dom';
 import { Toaster } from 'react-hot-toast';
 import { GameProvider } from './contexts/GameContext';
-import { ColorSelectionPage } from './pages/ColorSelectionPage';
-import { CameraCapturePage } from './pages/CameraCapturePage';
-import { BoardConfirmPage } from './pages/BoardConfirmPage';
-import { ResultsPage } from './pages/ResultsPage';
-import { MLAdminPage } from './pages/MLAdminPage';
+import { ColorSelectionPage } from './pages/color-selection/ColorSelectionPage';
+import { CameraCapturePage } from './pages/camera-capture/CameraCapturePage';
+import { BoardConfirmPage } from './pages/board-confirm/BoardConfirmPage';
+import { ResultsPage } from './pages/results/ResultsPage';
+import { MLAdminPage } from './pages/ml-admin/MLAdminPage';
 
-function Header() {
-    return (
-        <header className="bg-surface border-b border-border px-4 py-4 flex items-center justify-between">
-            <Link to="/" className="text-2xl font-bold text-foreground">
+const Header = () => <header className="bg-surface border-b border-border px-4 py-4 flex items-center justify-between">
+    <Link to="/" className="text-2xl font-bold text-foreground">
                 Blokus AI
-            </Link>
-            <Link
-                to="/admin"
-                className="text-sm text-muted-foreground hover:text-foreground transition-colors"
-            >
+    </Link>
+    <Link
+        to="/admin"
+        className="text-sm text-muted-foreground hover:text-foreground transition-colors"
+    >
                 Admin
-            </Link>
-        </header>
-    );
-}
+    </Link>
+</header>;
 
-function Layout({ children }: { children: React.ReactNode }) {
-    return (
-        <div className="min-h-screen bg-background">
-            <Header />
-            <main>{children}</main>
-        </div>
-    );
-}
+const Layout = ({ children }: { children: React.ReactNode }) => <div className="min-h-screen bg-background">
+    <Header />
+    <main>{children}</main>
+</div>;
 
 export default function App() {
     return (

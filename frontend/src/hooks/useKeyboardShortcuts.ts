@@ -17,7 +17,7 @@ interface KeyboardShortcutsConfig {
     enabled?: boolean;
 }
 
-export function useKeyboardShortcuts({
+export const useKeyboardShortcuts = ({
     onColorSelect,
     onUndo,
     onRedo,
@@ -27,7 +27,7 @@ export function useKeyboardShortcuts({
     onDelete,
     onClose,
     enabled = true,
-}: KeyboardShortcutsConfig) {
+}: KeyboardShortcutsConfig) => {
     const handleKeyDown = useCallback((e: KeyboardEvent) => {
         // Ignore if typing in an input or textarea
         if (
@@ -121,7 +121,7 @@ export function useKeyboardShortcuts({
         window.addEventListener('keydown', handleKeyDown);
         return () => window.removeEventListener('keydown', handleKeyDown);
     }, [enabled, handleKeyDown]);
-}
+};
 
 // Type-only export for component props
 export type { KeyboardShortcutsConfig };

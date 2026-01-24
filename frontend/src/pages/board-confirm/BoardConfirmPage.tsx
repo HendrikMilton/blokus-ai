@@ -1,12 +1,12 @@
 import { useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'react-hot-toast';
-import { useGame } from '../contexts/GameContext';
-import { BoardOverlay } from '../components/BoardOverlay';
-import { Button, Loading } from '../components/ui';
-import { PLAYER_COLORS } from '../types/game';
+import { useGame } from '../../contexts/GameContext';
+import { BoardOverlay } from '../../components/BoardOverlay';
+import { Button, Loading } from '../../components/ui';
+import { PLAYER_COLORS } from '../../types/game';
 
-export function BoardConfirmPage() {
+export const BoardConfirmPage = () => {
     const navigate = useNavigate();
     const { state, analyze } = useGame();
 
@@ -118,4 +118,4 @@ export function BoardConfirmPage() {
             </div>
         </div>
     );
-}
+};

@@ -17,35 +17,31 @@ interface MiniboardProps {
     size?: number;
 }
 
-function Miniboard({ boardState, size = 60 }: MiniboardProps) {
-    return (
-        <svg
-            width={size}
-            height={size}
-            viewBox={`0 0 ${BOARD_SIZE} ${BOARD_SIZE}`}
-            className="rounded"
-        >
-            <rect width={BOARD_SIZE} height={BOARD_SIZE} fill="#1a1a2e" />
-            {boardState.map((row, rowIdx) =>
-                row.map((cell, colIdx) => {
-                    if (!cell.color) {
-                        return null;
-                    }
-                    return (
-                        <rect
-                            key={`${rowIdx}-${colIdx}`}
-                            x={colIdx}
-                            y={rowIdx}
-                            width={1}
-                            height={1}
-                            fill={PLAYER_COLORS[cell.color]}
-                        />
-                    );
-                })
-            )}
-        </svg>
-    );
-}
+const Miniboard = ({ boardState, size = 60 }: MiniboardProps) => <svg
+    width={size}
+    height={size}
+    viewBox={`0 0 ${BOARD_SIZE} ${BOARD_SIZE}`}
+    className="rounded"
+>
+    <rect width={BOARD_SIZE} height={BOARD_SIZE} fill="#1a1a2e" />
+    {boardState.map((row, rowIdx) =>
+        row.map((cell, colIdx) => {
+            if (!cell.color) {
+                return null;
+            }
+            return (
+                <rect
+                    key={`${rowIdx}-${colIdx}`}
+                    x={colIdx}
+                    y={rowIdx}
+                    width={1}
+                    height={1}
+                    fill={PLAYER_COLORS[cell.color]}
+                />
+            );
+        })
+    )}
+</svg>;
 
 const STATUS_STYLES: Record<SampleStatus, { bg: string; text: string }> = {
     pending: { bg: 'bg-yellow-500/20', text: 'text-yellow-400' },
@@ -53,16 +49,16 @@ const STATUS_STYLES: Record<SampleStatus, { bg: string; text: string }> = {
     verified: { bg: 'bg-green-500/20', text: 'text-green-400' },
 };
 
-function StatusBadge({ status }: { status: SampleStatus }) {
+const StatusBadge = ({ status }: { status: SampleStatus }) => {
     const styles = STATUS_STYLES[status];
     return (
         <span className={`px-2 py-0.5 text-xs rounded-full ${styles.bg} ${styles.text}`}>
             {status}
         </span>
     );
-}
+};
 
-function SampleCard({
+const SampleCard = ({
     sample,
     isSelected,
     onClick,
@@ -70,7 +66,7 @@ function SampleCard({
     sample: TrainingSample;
     isSelected: boolean;
     onClick: () => void;
-}) {
+}) => {
     const imageUrl = ADMIN_API.getSampleImageUrl(sample.id);
     const createdAt = new Date(sample.created_at);
     const timeAgo = getTimeAgo(createdAt);
@@ -116,9 +112,9 @@ function SampleCard({
             </div>
         </button>
     );
-}
+};
 
-function getTimeAgo(date: Date): string {
+const getTimeAgo = (date: Date): string => {
     const now = new Date();
     const diffMs = now.getTime() - date.getTime();
     const diffMins = Math.floor(diffMs / 60000);
@@ -139,56 +135,48 @@ function getTimeAgo(date: Date): string {
     }
 
     return date.toLocaleDateString();
-}
+};
 
-function LoadingSkeleton() {
-    return (
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
-            {Array.from({ length: 8 }).map((_, i) => (
-                <div
-                    key={i}
-                    className="flex flex-col bg-surface rounded-lg border border-border overflow-hidden animate-pulse"
-                >
-                    <div className="aspect-square bg-muted" />
-                    <div className="p-2 space-y-2">
-                        <div className="flex justify-between">
-                            <div className="h-5 w-16 bg-muted rounded-full" />
-                            <div className="h-4 w-12 bg-muted rounded" />
-                        </div>
-                    </div>
+const LoadingSkeleton = () => <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
+    {Array.from({ length: 8 }).map((_, i) => (
+        <div
+            key={i}
+            className="flex flex-col bg-surface rounded-lg border border-border overflow-hidden animate-pulse"
+        >
+            <div className="aspect-square bg-muted" />
+            <div className="p-2 space-y-2">
+                <div className="flex justify-between">
+                    <div className="h-5 w-16 bg-muted rounded-full" />
+                    <div className="h-4 w-12 bg-muted rounded" />
                 </div>
-            ))}
-        </div>
-    );
-}
-
-function EmptyState() {
-    return (
-        <div className="flex flex-col items-center justify-center py-12 text-center">
-            <div className="w-16 h-16 mb-4 rounded-full bg-surface flex items-center justify-center">
-                <svg
-                    className="w-8 h-8 text-muted-foreground"
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                >
-                    <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth={1.5}
-                        d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"
-                    />
-                </svg>
             </div>
-            <h3 className="text-lg font-medium text-foreground mb-1">No samples yet</h3>
-            <p className="text-sm text-muted-foreground">
-                Upload board images to start labeling training data
-            </p>
         </div>
-    );
-}
+    ))}
+</div>;
 
-export function SampleGrid({ samples, selectedId, onSelect, loading }: SampleGridProps) {
+const EmptyState = () => <div className="flex flex-col items-center justify-center py-12 text-center">
+    <div className="w-16 h-16 mb-4 rounded-full bg-surface flex items-center justify-center">
+        <svg
+            className="w-8 h-8 text-muted-foreground"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+        >
+            <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={1.5}
+                d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"
+            />
+        </svg>
+    </div>
+    <h3 className="text-lg font-medium text-foreground mb-1">No samples yet</h3>
+    <p className="text-sm text-muted-foreground">
+                Upload board images to start labeling training data
+    </p>
+</div>;
+
+export const SampleGrid = ({ samples, selectedId, onSelect, loading }: SampleGridProps) => {
     if (loading) {
         return <LoadingSkeleton />;
     }
@@ -209,7 +197,7 @@ export function SampleGrid({ samples, selectedId, onSelect, loading }: SampleGri
             ))}
         </div>
     );
-}
+};
 
 interface PaginationProps {
     currentPage: number;
@@ -217,7 +205,7 @@ interface PaginationProps {
     onPageChange: (page: number) => void;
 }
 
-export function Pagination({ currentPage, totalPages, onPageChange }: PaginationProps) {
+export const Pagination = ({ currentPage, totalPages, onPageChange }: PaginationProps) => {
     if (totalPages <= 1) {
         return null;
     }
@@ -249,4 +237,4 @@ export function Pagination({ currentPage, totalPages, onPageChange }: Pagination
             </button>
         </div>
     );
-}
+};

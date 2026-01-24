@@ -11,12 +11,12 @@ interface UploadDropzoneProps {
     disabled?: boolean;
 }
 
-export function UploadDropzone({
+export const UploadDropzone = ({
     onUpload,
     accept = 'image/*',
     maxSize = 10 * 1024 * 1024, // 10MB default
     disabled = false,
-}: UploadDropzoneProps) {
+}: UploadDropzoneProps) => {
     const [isDragOver, setIsDragOver] = useState(false);
     const [isUploading, setIsUploading] = useState(false);
     const [error, setError] = useState<string | null>(null);
@@ -177,4 +177,4 @@ export function UploadDropzone({
             )}
         </div>
     );
-}
+};

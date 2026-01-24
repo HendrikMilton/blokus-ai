@@ -25,17 +25,13 @@ interface UseBoardEditorReturn {
     reset: (newState?: BoardCell[][]) => void;
 }
 
-function createEmptyBoard(): BoardCell[][] {
-    return Array.from({ length: BOARD_SIZE }, () =>
-        Array.from({ length: BOARD_SIZE }, () => ({ color: null }))
-    );
-}
+const createEmptyBoard = (): BoardCell[][] => Array.from({ length: BOARD_SIZE }, () =>
+    Array.from({ length: BOARD_SIZE }, () => ({ color: null }))
+);
 
-function cloneBoard(board: BoardCell[][]): BoardCell[][] {
-    return board.map(row => row.map(cell => ({ ...cell })));
-}
+const cloneBoard = (board: BoardCell[][]): BoardCell[][] => board.map(row => row.map(cell => ({ ...cell })));
 
-function boardsEqual(a: BoardCell[][], b: BoardCell[][]): boolean {
+const boardsEqual = (a: BoardCell[][], b: BoardCell[][]): boolean => {
     for (let i = 0; i < BOARD_SIZE; i++) {
         for (let j = 0; j < BOARD_SIZE; j++) {
             if (a[i][j].color !== b[i][j].color) {
@@ -44,14 +40,14 @@ function boardsEqual(a: BoardCell[][], b: BoardCell[][]): boolean {
         }
     }
     return true;
-}
+};
 
-export function useBoardEditor({
+export const useBoardEditor = ({
     initialState,
     onSave,
     autoSaveDelay = 1000,
     maxHistorySize = 50,
-}: UseBoardEditorOptions): UseBoardEditorReturn {
+}: UseBoardEditorOptions): UseBoardEditorReturn => {
     const [boardState, setBoardStateInternal] = useState<BoardCell[][]>(
         () => initialState || createEmptyBoard()
     );
@@ -197,4 +193,4 @@ export function useBoardEditor({
         saveNow,
         reset,
     };
-}
+};

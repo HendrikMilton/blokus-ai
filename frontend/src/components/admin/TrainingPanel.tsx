@@ -12,11 +12,11 @@ interface TrainingPanelProps {
     minSamplesRequired?: number;
 }
 
-export function TrainingPanel({
+export const TrainingPanel = ({
     labeledCount,
     onTrain,
     minSamplesRequired = 10,
-}: TrainingPanelProps) {
+}: TrainingPanelProps) => {
     const [isTraining, setIsTraining] = useState(false);
     const [result, setResult] = useState<TrainResponse | null>(null);
     const [validationSplit, setValidationSplit] = useState(0.2);
@@ -176,4 +176,4 @@ export function TrainingPanel({
             )}
         </div>
     );
-}
+};

@@ -28,13 +28,11 @@ interface SampleLabelingSectionProps {
     hasPrev?: boolean;
 }
 
-function createEmptyBoard(): BoardCell[][] {
-    return Array.from({ length: BOARD_SIZE }, () =>
-        Array.from({ length: BOARD_SIZE }, () => ({ color: null }))
-    );
-}
+const createEmptyBoard = (): BoardCell[][] => Array.from({ length: BOARD_SIZE }, () =>
+    Array.from({ length: BOARD_SIZE }, () => ({ color: null }))
+);
 
-export function SampleLabelingSection({
+export const SampleLabelingSection = ({
     sample,
     onUpdate,
     onDelete,
@@ -43,7 +41,7 @@ export function SampleLabelingSection({
     onNavigate,
     hasNext,
     hasPrev,
-}: SampleLabelingSectionProps) {
+}: SampleLabelingSectionProps) => {
     const [selectedColor, setSelectedColor] = useState<SelectedColor>('blue');
     const [notes, setNotes] = useState('');
     const [status, setStatus] = useState<SampleStatus>('pending');
@@ -99,7 +97,9 @@ export function SampleLabelingSection({
     };
 
     const handleNotesChange = async () => {
-        if (notes === sample.notes) return;
+        if (notes === sample.notes) {
+            return;
+        }
         await onUpdate(sample.id, { notes });
     };
 
@@ -409,4 +409,4 @@ export function SampleLabelingSection({
             </div>
         </div>
     );
-}
+};

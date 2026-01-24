@@ -1,11 +1,11 @@
 import { useNavigate } from 'react-router-dom';
-import { ColorButton } from '../components/ColorButton';
-import { useGame } from '../contexts/GameContext';
-import { PlayerColor } from '../types/game';
+import { ColorButton } from '../../components/ColorButton';
+import { useGame } from '../../contexts/GameContext';
+import { PlayerColor } from '../../types/game';
 
 const COLORS: PlayerColor[] = ['blue', 'yellow', 'red', 'green'];
 
-export function ColorSelectionPage() {
+export const ColorSelectionPage = () => {
     const navigate = useNavigate();
     const { selectColor } = useGame();
 
@@ -31,4 +31,4 @@ export function ColorSelectionPage() {
             </div>
         </div>
     );
-}
+};

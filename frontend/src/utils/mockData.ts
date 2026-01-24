@@ -15,7 +15,7 @@ export const BLOKUS_PIECES: PieceShape[] = [
     { name: 'X', cells: [[0, 1], [1, 0], [1, 1], [1, 2], [2, 1]], rotation: 0 },
 ];
 
-export function generateMockBoardState(): BoardCell[][] {
+export const generateMockBoardState = (): BoardCell[][] => {
     const board: BoardCell[][] = Array(BOARD_SIZE).fill(null).map(() =>
         Array(BOARD_SIZE).fill(null).map(() => ({ color: null }))
     );
@@ -37,9 +37,9 @@ export function generateMockBoardState(): BoardCell[][] {
     });
 
     return board;
-}
+};
 
-export function generateMockAnalysis(_playerColor: PlayerColor): AnalysisResult {
+export const generateMockAnalysis = (_playerColor: PlayerColor): AnalysisResult => {
     const randomPiece = BLOKUS_PIECES[Math.floor(Math.random() * BLOKUS_PIECES.length)];
     const rotations: (0 | 90 | 180 | 270)[] = [0, 90, 180, 270];
 
@@ -58,4 +58,4 @@ export function generateMockAnalysis(_playerColor: PlayerColor): AnalysisResult 
             winProbability: Math.floor(Math.random() * 40) + 30,
         },
     };
-}
+};

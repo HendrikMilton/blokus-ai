@@ -1,12 +1,12 @@
 import { useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useGame } from '../contexts/GameContext';
-import { BoardOverlay } from '../components/BoardOverlay';
-import { StatsCard } from '../components/StatsCard';
-import { Button, Loading } from '../components/ui';
-import { PLAYER_COLORS, PieceShape } from '../types/game';
+import { useGame } from '../../contexts/GameContext';
+import { BoardOverlay } from '../../components/BoardOverlay';
+import { StatsCard } from '../../components/StatsCard';
+import { Button, Loading } from '../../components/ui';
+import { PLAYER_COLORS, PieceShape } from '../../types/game';
 
-function PiecePreview({ piece, color }: { piece: PieceShape; color: string }) {
+const PiecePreview = ({ piece, color }: { piece: PieceShape; color: string }) => {
     const minRow = Math.min(...piece.cells.map(([r]) => r));
     const maxRow = Math.max(...piece.cells.map(([r]) => r));
     const minCol = Math.min(...piece.cells.map(([, c]) => c));
@@ -59,9 +59,9 @@ function PiecePreview({ piece, color }: { piece: PieceShape; color: string }) {
             </div>
         </div>
     );
-}
+};
 
-export function ResultsPage() {
+export const ResultsPage = () => {
     const navigate = useNavigate();
     const { state, reset } = useGame();
 
@@ -159,4 +159,4 @@ export function ResultsPage() {
             </div>
         </div>
     );
-}
+};

@@ -21,7 +21,7 @@ const initialState: GameState = {
 
 const GameContext = createContext<GameContextType | null>(null);
 
-export function GameProvider({ children }: { children: ReactNode }) {
+export const GameProvider = ({ children }: { children: ReactNode }) => {
     const [state, setState] = useState<GameState>(initialState);
 
     const selectColor = (color: PlayerColor) => {
@@ -88,12 +88,12 @@ export function GameProvider({ children }: { children: ReactNode }) {
             {children}
         </GameContext.Provider>
     );
-}
+};
 
-export function useGame() {
+export const useGame = () => {
     const context = useContext(GameContext);
     if (!context) {
         throw new Error('useGame must be used within a GameProvider');
     }
     return context;
-}
+};

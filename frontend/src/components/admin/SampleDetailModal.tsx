@@ -30,13 +30,11 @@ interface SampleDetailModalProps {
     hasPrev?: boolean;
 }
 
-function createEmptyBoard(): BoardCell[][] {
-    return Array.from({ length: BOARD_SIZE }, () =>
-        Array.from({ length: BOARD_SIZE }, () => ({ color: null }))
-    );
-}
+const createEmptyBoard = (): BoardCell[][] => Array.from({ length: BOARD_SIZE }, () =>
+    Array.from({ length: BOARD_SIZE }, () => ({ color: null }))
+);
 
-export function SampleDetailModal({
+export const SampleDetailModal = ({
     sample,
     isOpen,
     onClose,
@@ -46,7 +44,7 @@ export function SampleDetailModal({
     onNavigate,
     hasNext,
     hasPrev,
-}: SampleDetailModalProps) {
+}: SampleDetailModalProps) => {
     const [selectedColor, setSelectedColor] = useState<SelectedColor>('blue');
     const [notes, setNotes] = useState('');
     const [status, setStatus] = useState<SampleStatus>('pending');
@@ -406,4 +404,4 @@ export function SampleDetailModal({
             )}
         </Modal>
     );
-}
+};

@@ -11,7 +11,7 @@ import {
     SampleStatus,
     BoardCell,
 } from '@blokus-ai/shared';
-import { ADMIN_API } from '../api/admin';
+import { ADMIN_API } from '../../api/admin';
 import {
     SampleGrid,
     Pagination,
@@ -20,12 +20,12 @@ import {
     UploadDropzone,
     BoardCreator,
     SampleLabelingSection,
-} from '../components/admin';
-import { Button } from '../components/ui/Button';
+} from '../../components/admin';
+import { Button } from '../../components/ui/Button';
 
 type FilterStatus = SampleStatus | 'all';
 
-export function MLAdminPage() {
+export const MLAdminPage = () => {
     // Data state
     const [samples, setSamples] = useState<TrainingSample[]>([]);
     const [stats, setStats] = useState<AdminStats | null>(null);
@@ -343,4 +343,4 @@ export function MLAdminPage() {
             />
         </div>
     );
-}
+};

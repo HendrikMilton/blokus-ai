@@ -17,13 +17,11 @@ interface BoardCreatorProps {
     onSave: (boardState: BoardCell[][]) => void | Promise<void>;
 }
 
-function createEmptyBoard(): BoardCell[][] {
-    return Array.from({ length: BOARD_SIZE }, () =>
-        Array.from({ length: BOARD_SIZE }, () => ({ color: null }))
-    );
-}
+const createEmptyBoard = (): BoardCell[][] => Array.from({ length: BOARD_SIZE }, () =>
+    Array.from({ length: BOARD_SIZE }, () => ({ color: null }))
+);
 
-export function BoardCreator({ isOpen, onClose, onSave }: BoardCreatorProps) {
+export const BoardCreator = ({ isOpen, onClose, onSave }: BoardCreatorProps) => {
     const [selectedColor, setSelectedColor] = useState<SelectedColor>('blue');
     const [isSaving, setIsSaving] = useState(false);
     const [colorblindMode, setColorblindMode] = useState(false);
@@ -198,4 +196,4 @@ export function BoardCreator({ isOpen, onClose, onSave }: BoardCreatorProps) {
             </div>
         </Modal>
     );
-}
+};

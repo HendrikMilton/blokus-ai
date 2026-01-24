@@ -9,7 +9,7 @@ interface StatsPanelProps {
     loading?: boolean;
 }
 
-function StatCard({
+const StatCard = ({
     label,
     value,
     color,
@@ -17,21 +17,17 @@ function StatCard({
     label: string;
     value: number;
     color?: string;
-}) {
-    return (
-        <div className="flex flex-col p-3 bg-surface rounded-lg border border-border">
-            <span className="text-xs text-muted-foreground mb-1">{label}</span>
-            <span
-                className="text-2xl font-bold"
-                style={{ color: color || 'inherit' }}
-            >
-                {value}
-            </span>
-        </div>
-    );
-}
+}) => <div className="flex flex-col p-3 bg-surface rounded-lg border border-border">
+    <span className="text-xs text-muted-foreground mb-1">{label}</span>
+    <span
+        className="text-2xl font-bold"
+        style={{ color: color || 'inherit' }}
+    >
+        {value}
+    </span>
+</div>;
 
-function ProgressBar({
+const ProgressBar = ({
     labeled,
     verified,
     total,
@@ -39,7 +35,7 @@ function ProgressBar({
     labeled: number;
     verified: number;
     total: number;
-}) {
+}) => {
     if (total === 0) {
         return null;
     }
@@ -80,9 +76,9 @@ function ProgressBar({
             </div>
         </div>
     );
-}
+};
 
-function ColorDistribution({ distribution }: { distribution: Record<string, number> }) {
+const ColorDistribution = ({ distribution }: { distribution: Record<string, number> }) => {
     const colors = ['blue', 'yellow', 'red', 'green'] as const;
     const total = colors.reduce((sum, c) => sum + (distribution[c] || 0), 0);
 
@@ -127,25 +123,21 @@ function ColorDistribution({ distribution }: { distribution: Record<string, numb
             </div>
         </div>
     );
-}
+};
 
-function LoadingSkeleton() {
-    return (
-        <div className="space-y-4 animate-pulse">
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                {Array.from({ length: 4 }).map((_, i) => (
-                    <div key={i} className="p-3 bg-surface rounded-lg border border-border">
-                        <div className="h-3 w-16 bg-muted rounded mb-2" />
-                        <div className="h-8 w-12 bg-muted rounded" />
-                    </div>
-                ))}
+const LoadingSkeleton = () => <div className="space-y-4 animate-pulse">
+    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        {Array.from({ length: 4 }).map((_, i) => (
+            <div key={i} className="p-3 bg-surface rounded-lg border border-border">
+                <div className="h-3 w-16 bg-muted rounded mb-2" />
+                <div className="h-8 w-12 bg-muted rounded" />
             </div>
-            <div className="h-2 bg-surface rounded-full" />
-        </div>
-    );
-}
+        ))}
+    </div>
+    <div className="h-2 bg-surface rounded-full" />
+</div>;
 
-export function StatsPanel({ stats, loading }: StatsPanelProps) {
+export const StatsPanel = ({ stats, loading }: StatsPanelProps) => {
     if (loading || !stats) {
         return <LoadingSkeleton />;
     }
@@ -185,4 +177,4 @@ export function StatsPanel({ stats, loading }: StatsPanelProps) {
             )}
         </div>
     );
-}
+};
