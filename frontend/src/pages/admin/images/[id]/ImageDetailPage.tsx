@@ -3,25 +3,13 @@ import { useParams, Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { http, API_URL } from '../../../../api/config';
 import { Button } from '../../../../components/ui/Button';
+import type { BoundingBox, BoardDetection, DetectResponse } from '@blokus-ai/shared';
 
 interface Sample {
     id: string;
     filename: string;
-    status: 'pending' | 'labeled' | 'verified';
+    status: 'unlabeled' | 'labeled' | 'verified';
     created_at: string;
-}
-
-interface BoundingBox {
-    x: number;
-    y: number;
-    width: number;
-    height: number;
-}
-
-interface BoardDetection {
-    hasBoardDetected: boolean;
-    isEntireBoardVisible: boolean;
-    boundingBox: BoundingBox | null;
 }
 
 interface LabelData {
@@ -31,24 +19,6 @@ interface LabelData {
 }
 
 type DragHandle = 'nw' | 'ne' | 'sw' | 'se' | 'move' | null;
-
-// Mock detection data - will be replaced with real API call
-const getMockDetection = (sampleId: string): BoardDetection => {
-    const hash = sampleId.split('').reduce((a, b) => a + b.charCodeAt(0), 0);
-    const hasBoardDetected = hash % 3 !== 0;
-    const isEntireBoardVisible = hasBoardDetected && hash % 2 === 0;
-
-    return {
-        hasBoardDetected,
-        isEntireBoardVisible,
-        boundingBox: hasBoardDetected ? {
-            x: 0.1 + (hash % 10) / 100,
-            y: 0.05 + (hash % 15) / 100,
-            width: 0.7 + (hash % 10) / 100,
-            height: 0.7 + (hash % 10) / 100,
-        } : null,
-    };
-};
 
 const BackIcon = () => (
     <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -70,7 +40,7 @@ const RefreshIcon = () => (
 );
 
 const statusColors: Record<string, string> = {
-    pending: 'bg-warning/20 text-warning',
+    unlabeled: 'bg-warning/20 text-warning',
     labeled: 'bg-primary/20 text-primary',
     verified: 'bg-success/20 text-success',
 };
@@ -102,10 +72,11 @@ export const ImageDetailPage = () => {
             try {
                 const data = await http.get<Sample>(`/api/ml/samples/${id}`);
                 setSample(data);
-                // Load mock detection data as prediction
+                // Try to load existing detection result
                 if (id) {
+                    const detectResult = await http.get<DetectResponse | null>(`/api/ml/detect/${id}`);
                     setLabelData({
-                        prediction: getMockDetection(id),
+                        prediction: detectResult?.detection ?? null,
                         correction: null,
                         isModified: false,
                     });
@@ -120,19 +91,43 @@ export const ImageDetailPage = () => {
     }, [id]);
 
     const handleRunDetection = async () => {
+        if (!id) {
+            return;
+        }
         setIsRunningDetection(true);
-        // Simulate API call
-        await new Promise(resolve => setTimeout(resolve, 1500));
-        if (id) {
-            const newPrediction = getMockDetection(id + Date.now());
+        try {
+            const result = await http.post<DetectResponse>(`/api/ml/detect/${id}`, {});
             setLabelData({
-                prediction: newPrediction,
+                prediction: result.detection,
                 correction: null,
                 isModified: false,
             });
+            setSample(prev => prev ? { ...prev, status: 'labeled' } : null);
+            const timeStr = result.processing_time_ms.toFixed(0);
+            toast.success(`Detection complete (${timeStr}ms)`);
+        } catch {
+            toast.error('Detection failed');
+        } finally {
+            setIsRunningDetection(false);
         }
-        setIsRunningDetection(false);
-        toast.success('Detection complete');
+    };
+
+    const handleDeleteDetection = async () => {
+        if (!id) {
+            return;
+        }
+        try {
+            await http.delete(`/api/ml/detect/${id}`);
+            setLabelData({
+                prediction: null,
+                correction: null,
+                isModified: false,
+            });
+            setSample(prev => prev ? { ...prev, status: 'unlabeled' } : null);
+            toast.success('Detection deleted');
+        } catch {
+            toast.error('Failed to delete detection');
+        }
     };
 
     const updateCorrection = useCallback((updates: Partial<BoardDetection>) => {
@@ -180,7 +175,9 @@ export const ImageDetailPage = () => {
     };
 
     const getRelativePosition = useCallback((clientX: number, clientY: number) => {
-        if (!imageContainerRef.current) return null;
+        if (!imageContainerRef.current) {
+            return null;
+        }
         const rect = imageContainerRef.current.getBoundingClientRect();
         return {
             x: Math.max(0, Math.min(1, (clientX - rect.left) / rect.width)),
@@ -190,7 +187,9 @@ export const ImageDetailPage = () => {
 
     const handlePointerDown = (e: React.PointerEvent) => {
         const pos = getRelativePosition(e.clientX, e.clientY);
-        if (!pos) return;
+        if (!pos) {
+            return;
+        }
 
         // Drawing new box mode
         if (isDrawingBox) {
@@ -239,7 +238,9 @@ export const ImageDetailPage = () => {
 
     const handlePointerMove = (e: React.PointerEvent) => {
         const pos = getRelativePosition(e.clientX, e.clientY);
-        if (!pos) return;
+        if (!pos) {
+            return;
+        }
 
         // Drawing new box
         if (isDrawingBox && drawStart) {
@@ -261,48 +262,48 @@ export const ImageDetailPage = () => {
             let newBox: BoundingBox;
 
             switch (dragHandle) {
-                case 'move':
-                    newBox = {
-                        x: Math.max(0, Math.min(1 - dragStartBox.width, dragStartBox.x + dx)),
-                        y: Math.max(0, Math.min(1 - dragStartBox.height, dragStartBox.y + dy)),
-                        width: dragStartBox.width,
-                        height: dragStartBox.height,
-                    };
-                    break;
-                case 'nw':
-                    newBox = {
-                        x: dragStartBox.x + dx,
-                        y: dragStartBox.y + dy,
-                        width: dragStartBox.width - dx,
-                        height: dragStartBox.height - dy,
-                    };
-                    break;
-                case 'ne':
-                    newBox = {
-                        x: dragStartBox.x,
-                        y: dragStartBox.y + dy,
-                        width: dragStartBox.width + dx,
-                        height: dragStartBox.height - dy,
-                    };
-                    break;
-                case 'sw':
-                    newBox = {
-                        x: dragStartBox.x + dx,
-                        y: dragStartBox.y,
-                        width: dragStartBox.width - dx,
-                        height: dragStartBox.height + dy,
-                    };
-                    break;
-                case 'se':
-                    newBox = {
-                        x: dragStartBox.x,
-                        y: dragStartBox.y,
-                        width: dragStartBox.width + dx,
-                        height: dragStartBox.height + dy,
-                    };
-                    break;
-                default:
-                    return;
+            case 'move':
+                newBox = {
+                    x: Math.max(0, Math.min(1 - dragStartBox.width, dragStartBox.x + dx)),
+                    y: Math.max(0, Math.min(1 - dragStartBox.height, dragStartBox.y + dy)),
+                    width: dragStartBox.width,
+                    height: dragStartBox.height,
+                };
+                break;
+            case 'nw':
+                newBox = {
+                    x: dragStartBox.x + dx,
+                    y: dragStartBox.y + dy,
+                    width: dragStartBox.width - dx,
+                    height: dragStartBox.height - dy,
+                };
+                break;
+            case 'ne':
+                newBox = {
+                    x: dragStartBox.x,
+                    y: dragStartBox.y + dy,
+                    width: dragStartBox.width + dx,
+                    height: dragStartBox.height - dy,
+                };
+                break;
+            case 'sw':
+                newBox = {
+                    x: dragStartBox.x + dx,
+                    y: dragStartBox.y,
+                    width: dragStartBox.width - dx,
+                    height: dragStartBox.height + dy,
+                };
+                break;
+            case 'se':
+                newBox = {
+                    x: dragStartBox.x,
+                    y: dragStartBox.y,
+                    width: dragStartBox.width + dx,
+                    height: dragStartBox.height + dy,
+                };
+                break;
+            default:
+                return;
             }
 
             updateBoundingBox(newBox);
@@ -324,12 +325,23 @@ export const ImageDetailPage = () => {
     };
 
     const handleSaveCorrections = async () => {
+        if (!id || !labelData.correction) {
+            return;
+        }
         setIsSaving(true);
-        // Simulate API call
-        await new Promise(resolve => setTimeout(resolve, 800));
-        setLabelData(prev => ({ ...prev, isModified: false }));
-        setIsSaving(false);
-        toast.success('Corrections saved');
+        try {
+            await http.patch(`/api/ml/detect/${id}/correction`, {
+                hasBoardDetected: labelData.correction.hasBoardDetected,
+                isEntireBoardVisible: labelData.correction.isEntireBoardVisible,
+                boundingBox: labelData.correction.boundingBox,
+            });
+            setLabelData(prev => ({ ...prev, isModified: false }));
+            toast.success('Corrections saved');
+        } catch {
+            toast.error('Failed to save corrections');
+        } finally {
+            setIsSaving(false);
+        }
     };
 
     const handleResetCorrections = () => {
@@ -353,10 +365,18 @@ export const ImageDetailPage = () => {
 
     // Determine cursor based on position
     const getCursor = () => {
-        if (isDrawingBox) return 'crosshair';
-        if (dragHandle === 'move') return 'move';
-        if (dragHandle === 'nw' || dragHandle === 'se') return 'nwse-resize';
-        if (dragHandle === 'ne' || dragHandle === 'sw') return 'nesw-resize';
+        if (isDrawingBox) {
+            return 'crosshair';
+        }
+        if (dragHandle === 'move') {
+            return 'move';
+        }
+        if (dragHandle === 'nw' || dragHandle === 'se') {
+            return 'nwse-resize';
+        }
+        if (dragHandle === 'ne' || dragHandle === 'sw') {
+            return 'nesw-resize';
+        }
         return 'default';
     };
 
@@ -417,6 +437,9 @@ export const ImageDetailPage = () => {
                     {formatDate(sample.created_at)}
                 </p>
             </div>
+
+            {/* Content container - centered with max width */}
+            <div className="max-w-2xl mx-auto space-y-6">
 
             {/* Image with bounding box overlay */}
             <div
@@ -542,13 +565,22 @@ export const ImageDetailPage = () => {
                 )}
             </div>
 
-            {/* Detection Info */}
+            {/* Detection Info - only show if we have detection data */}
+            {(labelData.prediction || labelData.correction) && (
             <div className="bg-surface rounded-lg border border-border p-4">
                 <div className="flex items-center justify-between mb-3">
                     <h2 className="text-sm font-medium text-foreground">Board Detection</h2>
-                    {labelData.correction && (
-                        <span className="text-xs text-success font-medium">Corrected</span>
-                    )}
+                    <div className="flex items-center gap-2">
+                        {labelData.correction && (
+                            <span className="text-xs text-success font-medium">Corrected</span>
+                        )}
+                        <button
+                            onClick={handleDeleteDetection}
+                            className="text-xs text-error hover:underline"
+                        >
+                            Delete
+                        </button>
+                    </div>
                 </div>
                 <div className="space-y-3">
                     {/* Board detected */}
@@ -557,7 +589,9 @@ export const ImageDetailPage = () => {
                         <div className="flex rounded-lg overflow-hidden border border-border shrink-0">
                             <button
                                 onClick={() => {
-                                    if (!currentDetection?.hasBoardDetected) toggleBoardDetected();
+                                    if (!currentDetection?.hasBoardDetected) {
+                                        toggleBoardDetected();
+                                    }
                                 }}
                                 className={`px-3 py-1 text-sm font-medium transition-colors ${
                                     currentDetection?.hasBoardDetected
@@ -569,7 +603,9 @@ export const ImageDetailPage = () => {
                             </button>
                             <button
                                 onClick={() => {
-                                    if (currentDetection?.hasBoardDetected) toggleBoardDetected();
+                                    if (currentDetection?.hasBoardDetected) {
+                                        toggleBoardDetected();
+                                    }
                                 }}
                                 className={`px-3 py-1 text-sm font-medium transition-colors ${
                                     !currentDetection?.hasBoardDetected
@@ -585,35 +621,47 @@ export const ImageDetailPage = () => {
                     {/* Entire board visible */}
                     <div className="flex items-center justify-between gap-4">
                         <span className="text-sm text-secondary">Entire board visible</span>
-                        <div className="flex rounded-lg overflow-hidden border border-border shrink-0">
+                        <div className={`flex rounded-lg overflow-hidden border border-border shrink-0 select-none ${!currentDetection?.hasBoardDetected ? 'opacity-50 pointer-events-none' : ''}`}>
                             <button
                                 onClick={() => {
-                                    if (!currentDetection?.isEntireBoardVisible) toggleEntireBoardVisible();
+                                    if (!currentDetection?.isEntireBoardVisible) {
+                                        toggleEntireBoardVisible();
+                                    }
                                 }}
-                                disabled={!currentDetection?.hasBoardDetected}
                                 className={`px-3 py-1 text-sm font-medium transition-colors ${
                                     currentDetection?.isEntireBoardVisible
                                         ? 'bg-success text-white'
-                                        : 'bg-surface hover:bg-surface-dim text-secondary disabled:opacity-50 disabled:cursor-not-allowed'
+                                        : 'bg-surface hover:bg-surface-dim text-secondary'
                                 }`}
                             >
                                 Yes
                             </button>
                             <button
                                 onClick={() => {
-                                    if (currentDetection?.isEntireBoardVisible) toggleEntireBoardVisible();
+                                    if (currentDetection?.isEntireBoardVisible) {
+                                        toggleEntireBoardVisible();
+                                    }
                                 }}
-                                disabled={!currentDetection?.hasBoardDetected}
                                 className={`px-3 py-1 text-sm font-medium transition-colors ${
                                     currentDetection?.hasBoardDetected && !currentDetection?.isEntireBoardVisible
                                         ? 'bg-error text-white'
-                                        : 'bg-surface hover:bg-surface-dim text-secondary disabled:opacity-50 disabled:cursor-not-allowed'
+                                        : 'bg-surface hover:bg-surface-dim text-secondary'
                                 }`}
                             >
                                 No
                             </button>
                         </div>
                     </div>
+
+                    {/* Confidence - only show when board is detected */}
+                    {labelData.prediction?.hasBoardDetected && labelData.prediction?.confidence !== undefined && (
+                        <div className="flex items-center justify-between gap-4">
+                            <span className="text-sm text-secondary">Confidence</span>
+                            <span className="text-sm font-mono text-foreground">
+                                {(labelData.prediction.confidence * 100).toFixed(0)}%
+                            </span>
+                        </div>
+                    )}
 
                     {/* Bounding box coordinates */}
                     {boundingBox && (
@@ -650,6 +698,9 @@ export const ImageDetailPage = () => {
                         </div>
                     )}
                 </div>
+            </div>
+            )}
+
             </div>
         </div>
     );

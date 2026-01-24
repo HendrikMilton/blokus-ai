@@ -60,7 +60,7 @@ export const PLAYER_COLORS: Record<PlayerColor, string> = {
 // Admin types
 // ============================================================================
 
-export type SampleStatus = 'pending' | 'labeled' | 'verified';
+export type SampleStatus = 'unlabeled' | 'labeled' | 'verified';
 export type SampleSource = 'upload' | 'camera' | 'synthetic';
 
 export interface TrainingSample {
@@ -101,7 +101,7 @@ export interface TrainingSampleListResponse {
 
 export interface AdminStats {
     total_samples: number;
-    pending_samples: number;
+    unlabeled_samples: number;
     labeled_samples: number;
     verified_samples: number;
     total_cells_labeled: number;
@@ -121,4 +121,28 @@ export interface TrainResponse {
     train_accuracy: number | null;
     color_accuracies: Record<string, number> | null;
     model_path: string | null;
+}
+
+// ============================================================================
+// Board Detection types
+// ============================================================================
+
+export interface BoundingBox {
+    x: number;      // left edge (0-1)
+    y: number;      // top edge (0-1)
+    width: number;  // (0-1)
+    height: number; // (0-1)
+}
+
+export interface BoardDetection {
+    hasBoardDetected: boolean;
+    isEntireBoardVisible: boolean;
+    boundingBox: BoundingBox | null;
+    confidence: number;
+}
+
+export interface DetectResponse {
+    sample_id: string;
+    detection: BoardDetection;
+    processing_time_ms: number;
 }

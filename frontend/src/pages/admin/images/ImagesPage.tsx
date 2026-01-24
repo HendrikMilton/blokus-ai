@@ -4,7 +4,7 @@ import toast from 'react-hot-toast';
 import { http, API_URL } from '../../../api/config';
 import { Button } from '../../../components/ui/Button';
 
-type SampleStatus = 'pending' | 'labeled' | 'verified';
+type SampleStatus = 'unlabeled' | 'labeled' | 'verified';
 type FilterStatus = SampleStatus | 'all';
 
 interface Sample {
@@ -24,7 +24,7 @@ interface UploadResponse {
 }
 
 const statusColors: Record<SampleStatus, string> = {
-    pending: 'bg-warning/20 text-warning',
+    unlabeled: 'bg-warning/20 text-warning',
     labeled: 'bg-primary/20 text-primary',
     verified: 'bg-success/20 text-success',
 };
@@ -107,7 +107,7 @@ export const ImagesPage = () => {
 
     const counts = {
         all: samples.length,
-        pending: samples.filter(s => s.status === 'pending').length,
+        unlabeled: samples.filter(s => s.status === 'unlabeled').length,
         labeled: samples.filter(s => s.status === 'labeled').length,
         verified: samples.filter(s => s.status === 'verified').length,
     };
@@ -156,16 +156,16 @@ export const ImagesPage = () => {
 
             {/* Filter Tabs */}
             <div className="flex gap-1">
-                {(['all', 'pending', 'labeled', 'verified'] as const).map((status) => (
+                {(['all', 'unlabeled', 'labeled', 'verified'] as const).map((status) => (
                     <button
                         key={status}
                         onClick={() => setFilter(status)}
                         className={`
                             px-2.5 py-1 text-xs font-medium rounded-full transition-colors capitalize
                             ${filter === status
-                                ? 'bg-primary text-white'
-                                : 'bg-surface-dim text-secondary hover:text-foreground'
-                            }
+                        ? 'bg-primary text-white'
+                        : 'bg-surface-dim text-secondary hover:text-foreground'
+                    }
                         `}
                     >
                         {status} {counts[status] > 0 && `(${counts[status]})`}

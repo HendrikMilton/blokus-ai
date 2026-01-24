@@ -14,7 +14,7 @@ DATA_DIR = Path(__file__).parent.parent.parent.parent / "data" / "images"
 class Sample(BaseModel):
     id: str
     filename: str
-    status: Literal["pending", "labeled", "verified"]
+    status: Literal["unlabeled", "labeled", "verified"]
     created_at: str
 
 
@@ -35,7 +35,7 @@ async def list_samples():
             samples.append(Sample(
                 id=sample_id,
                 filename=filepath.name,
-                status="pending",
+                status="unlabeled",
                 created_at=created_at,
             ))
 
@@ -58,7 +58,7 @@ async def get_sample(sample_id: str):
     return Sample(
         id=sample_id,
         filename=filepath.name,
-        status="pending",
+        status="unlabeled",
         created_at=created_at,
     )
 

@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.features.ping import router as ping_router
 from app.features.upload import router as upload_router
 from app.features.samples import router as samples_router
+from app.features.detect import router as detect_router
 from app.middleware import CorrelationIdMiddleware
 
 app = FastAPI(
@@ -26,6 +27,7 @@ app.add_middleware(CorrelationIdMiddleware)
 app.include_router(ping_router, prefix="/ping", tags=["health"])
 app.include_router(upload_router, prefix="/upload", tags=["upload"])
 app.include_router(samples_router, prefix="/samples", tags=["samples"])
+app.include_router(detect_router, prefix="/detect", tags=["detect"])
 
 
 @app.get("/")

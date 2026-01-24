@@ -61,3 +61,32 @@ bun run --cwd shared build
 - Pages go in `frontend/src/pages/<page-name>/<PageName>.tsx`
 - Export pages from `frontend/src/pages/index.ts`
 - Use `@blokus-ai/shared` for shared types between frontend and api
+
+## Database
+
+PostgreSQL runs in Docker container `postgres17`.
+
+```bash
+# Connect to database
+docker exec postgres17 psql -U c_connect_user -d blokus_ai
+
+# Run query
+docker exec postgres17 psql -U c_connect_user -d blokus_ai -c "SELECT * FROM users;"
+
+# List tables
+docker exec postgres17 psql -U c_connect_user -d blokus_ai -c "\dt"
+
+# Describe table
+docker exec postgres17 psql -U c_connect_user -d blokus_ai -c "\d table_name"
+```
+
+Migrations are in `api/src/migrations/`. Migrations run automatically on API startup - no need to apply manually.
+
+```bash
+# Create new migration
+bun run --cwd api migrate:make <migration_name>
+```
+
+## Notes
+
+- Glob/search from frontend folder won't find files in other packages. Use `ls` or search from project root `/home/hendrik/blokus-ai/`.

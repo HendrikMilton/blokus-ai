@@ -2,7 +2,7 @@
   "name": "@blokus-ai/api",
   "version": "1.0.0",
   "scripts": {
-    "dev": "bun run build.ts && bun --watch dist/index.js",
+    "dev": "bun --watch --hot run src/index.ts",
     "build": "bun run build.ts",
     "start": "bun dist/index.js",
     "test": "cross-env NODE_ENV=test mocha 'src/**/*.test.ts' --require ts-node/register --exit --timeout 30000",
