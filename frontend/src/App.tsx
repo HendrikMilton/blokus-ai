@@ -3,11 +3,7 @@ import { Toaster } from 'react-hot-toast';
 import { GameProvider } from './contexts/GameContext';
 import { ThemeProvider } from './contexts/ThemeProvider';
 import { useTheme } from './hooks/useTheme';
-import { ColorSelectionPage } from './pages/color-selection/ColorSelectionPage';
-import { CameraCapturePage } from './pages/camera-capture/CameraCapturePage';
-import { BoardConfirmPage } from './pages/board-confirm/BoardConfirmPage';
-import { ResultsPage } from './pages/results/ResultsPage';
-import { MLAdminPage } from './pages/ml-admin/MLAdminPage';
+import { routes } from './routes';
 
 const SunIcon = () => (
     <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -32,7 +28,7 @@ const Header = () => {
             <div className="flex items-center gap-4">
                 <button
                     onClick={toggleTheme}
-                    className="p-2 rounded-lg hover:bg-surface-dim transition-colors"
+                    className="p-2 rounded-lg hover:bg-surface-dim transition-colors text-secondary hover:text-foreground"
                     title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
                 >
                     {theme === 'dark' ? (
@@ -65,11 +61,17 @@ const App = () => (
             <BrowserRouter>
                 <Toaster />
                 <Routes>
-                    <Route path="/" element={<Layout><ColorSelectionPage /></Layout>} />
-                    <Route path="/capture" element={<CameraCapturePage />} />
-                    <Route path="/confirm" element={<BoardConfirmPage />} />
-                    <Route path="/results" element={<ResultsPage />} />
-                    <Route path="/admin" element={<Layout><MLAdminPage /></Layout>} />
+                    {routes.map((route) => (
+                        <Route
+                            key={route.path}
+                            path={route.path}
+                            element={
+                                route.layout
+                                    ? <Layout>{route.element}</Layout>
+                                    : route.element
+                            }
+                        />
+                    ))}
                 </Routes>
             </BrowserRouter>
         </GameProvider>

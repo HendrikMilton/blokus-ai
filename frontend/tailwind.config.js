@@ -70,7 +70,7 @@ export default {
                     '--surface': '41 42 45',            // #292a2d
                     '--surface-dim': '53 54 58',        // #35363a
                     '--border': '95 99 104',            // #5f6368
-                    '--primary': '138 180 248',         // #8ab4f8
+                    '--primary': '66 133 244',          // #4285f4 - Google Blue (better contrast)
                     '--secondary': '154 160 166',       // #9aa0a6
                     '--muted': '154 160 166',           // #9aa0a6
                     '--error': '242 139 130',           // #f28b82

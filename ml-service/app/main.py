@@ -1,9 +1,9 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.features.analysis import router as analysis_router
-from app.features.detection import router as detection_router
 from app.features.ping import router as ping_router
+from app.features.upload import router as upload_router
+from app.features.samples import router as samples_router
 from app.middleware import CorrelationIdMiddleware
 
 app = FastAPI(
@@ -24,8 +24,8 @@ app.add_middleware(CorrelationIdMiddleware)
 
 # Mount feature routers
 app.include_router(ping_router, prefix="/ping", tags=["health"])
-app.include_router(detection_router, prefix="/detect-board", tags=["detection"])
-app.include_router(analysis_router, prefix="/analyze", tags=["analysis"])
+app.include_router(upload_router, prefix="/upload", tags=["upload"])
+app.include_router(samples_router, prefix="/samples", tags=["samples"])
 
 
 @app.get("/")
