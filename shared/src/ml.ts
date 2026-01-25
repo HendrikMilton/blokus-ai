@@ -179,3 +179,29 @@ export interface DetectResponse {
     detection: BoardDetection;
     processing_time_ms: number;
 }
+
+export interface DetectResponseWithCorrection extends DetectResponse {
+    correction: BoardDetection | null;
+    isHumanLabeled: boolean;
+}
+
+// ============================================================================
+// Training Run types
+// ============================================================================
+
+export type TrainingRunStatus = 'pending' | 'running' | 'completed' | 'failed';
+
+export interface TrainingRun {
+    id: string;
+    status: TrainingRunStatus;
+    imageCount: number;
+    startedAt: string | null;
+    completedAt: string | null;
+    durationMs: number | null;
+    accuracy: number | null;
+    loss: number | null;
+    valAccuracy: number | null;
+    valLoss: number | null;
+    errorMessage: string | null;
+    createdAt: string;
+}

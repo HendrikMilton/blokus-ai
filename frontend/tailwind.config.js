@@ -19,6 +19,7 @@ export default {
                 error: 'rgb(var(--error) / <alpha-value>)',
                 success: 'rgb(var(--success) / <alpha-value>)',
                 warning: 'rgb(var(--warning) / <alpha-value>)',
+                info: 'rgb(var(--info) / <alpha-value>)',
             },
             boxShadow: {
                 'gcp': '0 1px 2px 0 rgba(60,64,67,0.3), 0 1px 3px 1px rgba(60,64,67,0.15)',
@@ -63,6 +64,7 @@ export default {
                     '--error': '217 48 37',             // #d93025 - Google Red
                     '--success': '24 128 56',           // #188038 - Google Green
                     '--warning': '249 171 0',           // #f9ab00 - Google Yellow
+                    '--info': '142 68 173',             // #8e44ad - Purple
                 },
                 '.dark': {
                     '--background': '32 33 36',         // #202124
@@ -76,6 +78,7 @@ export default {
                     '--error': '242 139 130',           // #f28b82
                     '--success': '129 201 149',         // #81c995
                     '--warning': '253 214 99',          // #fdd663
+                    '--info': '187 143 206',            // #bb8fce - Light purple
                 },
             });
         },

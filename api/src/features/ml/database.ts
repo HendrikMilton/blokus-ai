@@ -1,6 +1,6 @@
 import { Knex } from 'knex';
 import { knex } from '../../knex';
-import type { DetectResponse, SampleStatusFlags } from '@blokus-ai/shared';
+import type { DetectResponse, DetectResponseWithCorrection, SampleStatusFlags, TrainingRun, TrainingRunStatus, BoardDetection } from '@blokus-ai/shared';
 
 interface BoardDetectionRow {
     id: string;
@@ -13,6 +13,15 @@ interface BoardDetectionRow {
     bbox_width: number | null;
     bbox_height: number | null;
     processing_time_ms: number;
+    // Corrected fields
+    corrected_has_board: boolean | null;
+    corrected_is_entire_visible: boolean | null;
+    corrected_bbox_x: number | null;
+    corrected_bbox_y: number | null;
+    corrected_bbox_width: number | null;
+    corrected_bbox_height: number | null;
+    corrected_at: Date | null;
+    human_labeled_at: Date | null;
     created_at: Date;
     updated_at: Date;
 }
@@ -33,6 +42,30 @@ const rowToDetectResponse = (row: BoardDetectionRow): DetectResponse => ({
     processing_time_ms: row.processing_time_ms,
 });
 
+const rowToCorrection = (row: BoardDetectionRow): BoardDetection | null => {
+    // Return correction only if corrected_at is set
+    if (!row.corrected_at) {
+        return null;
+    }
+    return {
+        hasBoardDetected: row.corrected_has_board ?? row.has_board_detected,
+        isEntireBoardVisible: row.corrected_is_entire_visible ?? row.is_entire_board_visible,
+        confidence: 1.0, // Corrections have 100% confidence
+        boundingBox: row.corrected_bbox_x !== null ? {
+            x: row.corrected_bbox_x,
+            y: row.corrected_bbox_y!,
+            width: row.corrected_bbox_width!,
+            height: row.corrected_bbox_height!,
+        } : null,
+    };
+};
+
+const rowToDetectResponseWithCorrection = (row: BoardDetectionRow): DetectResponseWithCorrection => ({
+    ...rowToDetectResponse(row),
+    correction: rowToCorrection(row),
+    isHumanLabeled: row.human_labeled_at !== null,
+});
+
 export const getBoardDetectionBySampleId = async (
     sampleId: string,
     trx: Knex.Transaction | Knex = knex
@@ -42,6 +75,17 @@ export const getBoardDetectionBySampleId = async (
         .first();
 
     return row ? rowToDetectResponse(row) : null;
+};
+
+export const getBoardDetectionWithCorrectionBySampleId = async (
+    sampleId: string,
+    trx: Knex.Transaction | Knex = knex
+): Promise<DetectResponseWithCorrection | null> => {
+    const row = await trx<BoardDetectionRow>('board_detections')
+        .where('sample_id', sampleId)
+        .first();
+
+    return row ? rowToDetectResponseWithCorrection(row) : null;
 };
 
 export const upsertBoardDetection = async (
@@ -244,11 +288,207 @@ export const getSampleStatusFlagsById = async (
         .select('sample_id', 'human_labeled_at', 'verified_at')
         .first();
 
-    if (!row) return null;
+    if (!row) {
+        return null;
+    }
 
     return {
         aiLabeled: row.human_labeled_at === null,
         humanLabeled: row.human_labeled_at !== null,
         verified: row.verified_at !== null,
     };
+};
+
+// ============================================================================
+// Training Runs
+// ============================================================================
+
+interface TrainingRunRow {
+    id: string;
+    status: TrainingRunStatus;
+    image_count: number;
+    started_at: Date | null;
+    completed_at: Date | null;
+    duration_ms: number | null;
+    accuracy: number | null;
+    loss: number | null;
+    val_accuracy: number | null;
+    val_loss: number | null;
+    error_message: string | null;
+    created_at: Date;
+    updated_at: Date;
+}
+
+const rowToTrainingRun = (row: TrainingRunRow): TrainingRun => ({
+    id: row.id,
+    status: row.status,
+    imageCount: row.image_count,
+    startedAt: row.started_at?.toISOString() ?? null,
+    completedAt: row.completed_at?.toISOString() ?? null,
+    durationMs: row.duration_ms,
+    accuracy: row.accuracy,
+    loss: row.loss,
+    valAccuracy: row.val_accuracy,
+    valLoss: row.val_loss,
+    errorMessage: row.error_message,
+    createdAt: row.created_at.toISOString(),
+});
+
+export const createTrainingRun = async (
+    imageCount: number,
+    trx: Knex.Transaction | Knex = knex
+): Promise<TrainingRun> => {
+    const [row] = await trx<TrainingRunRow>('training_runs')
+        .insert({ image_count: imageCount })
+        .returning('*');
+    return rowToTrainingRun(row);
+};
+
+export interface TrainingRunUpdate {
+    status?: TrainingRunStatus;
+    startedAt?: Date;
+    completedAt?: Date;
+    durationMs?: number;
+    accuracy?: number;
+    loss?: number;
+    valAccuracy?: number;
+    valLoss?: number;
+    errorMessage?: string;
+}
+
+export const updateTrainingRun = async (
+    id: string,
+    updates: TrainingRunUpdate,
+    trx: Knex.Transaction | Knex = knex
+): Promise<TrainingRun | null> => {
+    const dbUpdates: Partial<TrainingRunRow> = {
+        updated_at: new Date(),
+    };
+
+    if (updates.status !== undefined) {
+        dbUpdates.status = updates.status;
+    }
+    if (updates.startedAt !== undefined) {
+        dbUpdates.started_at = updates.startedAt;
+    }
+    if (updates.completedAt !== undefined) {
+        dbUpdates.completed_at = updates.completedAt;
+    }
+    if (updates.durationMs !== undefined) {
+        dbUpdates.duration_ms = updates.durationMs;
+    }
+    if (updates.accuracy !== undefined) {
+        dbUpdates.accuracy = updates.accuracy;
+    }
+    if (updates.loss !== undefined) {
+        dbUpdates.loss = updates.loss;
+    }
+    if (updates.valAccuracy !== undefined) {
+        dbUpdates.val_accuracy = updates.valAccuracy;
+    }
+    if (updates.valLoss !== undefined) {
+        dbUpdates.val_loss = updates.valLoss;
+    }
+    if (updates.errorMessage !== undefined) {
+        dbUpdates.error_message = updates.errorMessage;
+    }
+
+    const [row] = await trx<TrainingRunRow>('training_runs')
+        .where('id', id)
+        .update(dbUpdates)
+        .returning('*');
+
+    return row ? rowToTrainingRun(row) : null;
+};
+
+export const listTrainingRuns = async (
+    trx: Knex.Transaction | Knex = knex
+): Promise<TrainingRun[]> => {
+    const rows = await trx<TrainingRunRow>('training_runs')
+        .orderBy('created_at', 'desc');
+    return rows.map(rowToTrainingRun);
+};
+
+export const getTrainingRun = async (
+    id: string,
+    trx: Knex.Transaction | Knex = knex
+): Promise<TrainingRun | null> => {
+    const row = await trx<TrainingRunRow>('training_runs')
+        .where('id', id)
+        .first();
+    return row ? rowToTrainingRun(row) : null;
+};
+
+export const getVerifiedImageCount = async (
+    trx: Knex.Transaction | Knex = knex
+): Promise<number> => {
+    const result = await trx('board_detections')
+        .whereNotNull('verified_at')
+        .count('* as count')
+        .first();
+    return Number(result?.count ?? 0);
+};
+
+export const getHumanLabeledImageCount = async (
+    trx: Knex.Transaction | Knex = knex
+): Promise<number> => {
+    const result = await trx('board_detections')
+        .whereNotNull('human_labeled_at')
+        .count('* as count')
+        .first();
+    return Number(result?.count ?? 0);
+};
+
+export interface TrainingDataSample {
+    sample_id: string;
+    image_url: string;
+    bbox: {
+        x: number;
+        y: number;
+        width: number;
+        height: number;
+    };
+}
+
+export const getTrainingData = async (
+    trx: Knex.Transaction | Knex = knex
+): Promise<TrainingDataSample[]> => {
+    // Get human-labeled samples with bounding boxes
+    // Use corrected bbox if available, otherwise use original bbox
+    const rows = await trx<BoardDetectionRow>('board_detections')
+        .whereNotNull('human_labeled_at')
+        .select(
+            'sample_id',
+            'bbox_x',
+            'bbox_y',
+            'bbox_width',
+            'bbox_height',
+            'corrected_bbox_x',
+            'corrected_bbox_y',
+            'corrected_bbox_width',
+            'corrected_bbox_height'
+        );
+
+    const cloudFrontDomain = 'd26azxov2byjpl.cloudfront.net';
+
+    return rows
+        .filter(row => {
+            // Must have bbox (either corrected or original)
+            const hasCorrectedBbox = row.corrected_bbox_x !== null;
+            const hasOriginalBbox = row.bbox_x !== null;
+            return hasCorrectedBbox || hasOriginalBbox;
+        })
+        .map(row => {
+            // Prefer corrected bbox over original
+            const x = row.corrected_bbox_x ?? row.bbox_x!;
+            const y = row.corrected_bbox_y ?? row.bbox_y!;
+            const width = row.corrected_bbox_width ?? row.bbox_width!;
+            const height = row.corrected_bbox_height ?? row.bbox_height!;
+
+            return {
+                sample_id: row.sample_id,
+                image_url: `https://${cloudFrontDomain}/thumbnails/${row.sample_id}.jpg`,
+                bbox: { x, y, width, height },
+            };
+        });
 };

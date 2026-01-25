@@ -79,7 +79,7 @@ export const Select = ({
                         {selectedOption?.label || placeholder}
                     </span>
                     <svg
-                        className={`h-4 w-4 transition-transform ${isOpen ? 'rotate-180' : ''}`}
+                        className={`h-4 w-4 text-secondary transition-transform ${isOpen ? 'rotate-180' : ''}`}
                         fill="none"
                         stroke="currentColor"
                         viewBox="0 0 24 24"

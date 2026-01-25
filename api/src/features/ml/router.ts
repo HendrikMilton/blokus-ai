@@ -4,9 +4,11 @@ import { asyncHandler } from '../../lib/async-handler';
 import { mlHttp } from '../../lib/http';
 import type { DetectResponse } from '@blokus-ai/shared';
 import { BadRequestError, NotFoundError } from '../../error';
-import { getBoardDetectionBySampleId, upsertBoardDetection, deleteBoardDetection, saveBoardDetectionCorrection, CorrectionData, setVerificationStatus, saveManualLabel, ManualLabelData, getSampleStatusFlags, getSampleStatusFlagsById } from './database';
+import { getBoardDetectionWithCorrectionBySampleId, upsertBoardDetection, deleteBoardDetection, saveBoardDetectionCorrection, CorrectionData, setVerificationStatus, saveManualLabel, ManualLabelData, getSampleStatusFlags, getSampleStatusFlagsById, createTrainingRun, updateTrainingRun, listTrainingRuns, getTrainingRun, getHumanLabeledImageCount, getTrainingData } from './database';
 import type { SampleStatusFlags } from '@blokus-ai/shared';
 import { listSamples, getSample, getUploadPresignedUrl, getCloudFrontUrl, getThumbnailUrl, generateThumbnail } from './s3';
+import { emitEvent } from '../../lib/socket';
+import { log } from '../../lib/log';
 
 export const mlRouter = Router();
 
@@ -92,6 +94,7 @@ mlRouter.get('/samples/:id', asyncHandler(async (req, res) => {
         status,
         created_at: s3Sample.lastModified.toISOString(),
         imageUrl: getCloudFrontUrl(s3Sample.id),
+        thumbnailUrl: getThumbnailUrl(s3Sample.id),
     });
 }));
 
@@ -111,11 +114,11 @@ mlRouter.post('/detect/:id', asyncHandler(async (req, res) => {
     res.json(data);
 }));
 
-// GET /api/ml/detect/:id - Get cached detection result only
+// GET /api/ml/detect/:id - Get cached detection result with correction
 mlRouter.get('/detect/:id', asyncHandler(async (req, res) => {
     const { id } = req.params;
 
-    const cached = await getBoardDetectionBySampleId(id);
+    const cached = await getBoardDetectionWithCorrectionBySampleId(id);
     res.json(cached);
 }));
 
@@ -167,5 +170,118 @@ mlRouter.post('/samples/:id/label', asyncHandler(async (req, res) => {
     const label = req.body as ManualLabelData;
 
     await saveManualLabel(id, label);
+    res.json({ success: true });
+}));
+
+// ============================================================================
+// Training Routes
+// ============================================================================
+
+// GET /api/ml/training-data - Get human-labeled samples for training
+mlRouter.get('/training-data', asyncHandler(async (_req, res) => {
+    const samples = await getTrainingData();
+    res.json({ samples });
+}));
+
+// POST /api/ml/train - Start a new training run
+mlRouter.post('/train', asyncHandler(async (_req, res) => {
+    // Get count of human-labeled images (used for training)
+    const imageCount = await getHumanLabeledImageCount();
+
+    if (imageCount === 0) {
+        throw new BadRequestError('No human-labeled images available for training');
+    }
+
+    // Create training run record
+    const run = await createTrainingRun(imageCount);
+
+    // Update to running status
+    const runningRun = await updateTrainingRun(run.id, {
+        status: 'running',
+        startedAt: new Date(),
+    });
+
+    // Emit start event
+    emitEvent('training-run-started', { run: runningRun! });
+
+    // Return immediately - training runs in background
+    res.json(runningRun);
+
+    // Run training in background (don't await)
+    const startTime = Date.now();
+    (async () => {
+        try {
+            interface TrainResult {
+                accuracy?: number;
+                loss?: number;
+                val_accuracy?: number;
+                val_loss?: number;
+            }
+            const result = await mlHttp.post<TrainResult>('/train/', { run_id: run.id });
+
+            const durationMs = Date.now() - startTime;
+            const completedRun = await updateTrainingRun(run.id, {
+                status: 'completed',
+                completedAt: new Date(),
+                durationMs,
+                accuracy: result.accuracy,
+                loss: result.loss,
+                valAccuracy: result.val_accuracy,
+                valLoss: result.val_loss,
+            });
+
+            // Emit completion event
+            emitEvent('training-run-completed', { run: completedRun! });
+            log.info(`Training run ${run.id} completed`, { durationMs, accuracy: result.accuracy });
+        } catch (error) {
+            const durationMs = Date.now() - startTime;
+            const errorMessage = error instanceof Error ? error.message : 'Training failed';
+
+            const failedRun = await updateTrainingRun(run.id, {
+                status: 'failed',
+                completedAt: new Date(),
+                durationMs,
+                errorMessage,
+            });
+
+            // Emit failure event
+            emitEvent('training-run-failed', { run: failedRun! });
+            log.error(`Training run ${run.id} failed`, { error: errorMessage, durationMs });
+        }
+    })();
+}));
+
+// GET /api/ml/training-runs - List all training runs
+mlRouter.get('/training-runs', asyncHandler(async (_req, res) => {
+    const runs = await listTrainingRuns();
+    res.json({ runs });
+}));
+
+// GET /api/ml/training-runs/:id - Get single training run
+mlRouter.get('/training-runs/:id', asyncHandler(async (req, res) => {
+    const { id } = req.params;
+
+    const run = await getTrainingRun(id);
+    if (!run) {
+        throw new NotFoundError('Training run not found');
+    }
+
+    res.json(run);
+}));
+
+// POST /api/ml/training-runs/:id/progress - Receive progress update from ML service
+mlRouter.post('/training-runs/:id/progress', asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const { epoch, totalEpochs, loss, accuracy } = req.body;
+
+    // Emit progress event via WebSocket
+    emitEvent('training-run-progress', {
+        runId: id,
+        epoch,
+        totalEpochs,
+        loss,
+        accuracy,
+    });
+
     res.json({ success: true });
 }));

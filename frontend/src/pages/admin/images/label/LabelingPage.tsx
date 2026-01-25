@@ -85,7 +85,9 @@ export const LabelingPage = () => {
     // Load existing label when sample changes
     useEffect(() => {
         const loadExistingLabel = async () => {
-            if (!currentSample) return;
+            if (!currentSample) {
+                return;
+            }
 
             // Reset first
             setLabelData({
@@ -98,11 +100,11 @@ export const LabelingPage = () => {
             // If sample has any labels, load the existing detection
             if (!isUnlabeled(currentSample.status)) {
                 try {
-                    const data = await http.get<{ detection: { hasBoardDetected: boolean; isEntireBoardVisible: boolean; boundingBox: { x: number; y: number; width: number; height: number } | null } } | null>(`/api/ml/detect/${currentSample.id}`);
-                    if (data?.detection) {
+                    const data = await http.get<{ detection: BoardDetection; correction: BoardDetection | null } | null>(`/api/ml/detect/${currentSample.id}`);
+                    if (data) {
                         setLabelData({
                             prediction: data.detection,
-                            correction: null,
+                            correction: data.correction,
                             isModified: false,
                         });
                     }
@@ -127,7 +129,9 @@ export const LabelingPage = () => {
     };
 
     const handleSaveAndNext = async () => {
-        if (!currentSample || !labelData.correction) return;
+        if (!currentSample || !labelData.correction) {
+            return;
+        }
 
         try {
             // Save the manual label
@@ -252,7 +256,9 @@ export const LabelingPage = () => {
     }, [currentIndex, samples.length, labelData.correction, currentSample, currentDetection, updateCorrection, goToPrevious, goToNext, handleSaveAndNext]);
 
     const getRelativePosition = useCallback((clientX: number, clientY: number) => {
-        if (!imageContainerRef.current) return null;
+        if (!imageContainerRef.current) {
+            return null;
+        }
         const rect = imageContainerRef.current.getBoundingClientRect();
         return {
             x: Math.max(0, Math.min(1, (clientX - rect.left) / rect.width)),
@@ -262,7 +268,9 @@ export const LabelingPage = () => {
 
     const handlePointerDown = (e: React.PointerEvent) => {
         const pos = getRelativePosition(e.clientX, e.clientY);
-        if (!pos) return;
+        if (!pos) {
+            return;
+        }
 
         if (isDrawingBox) {
             e.preventDefault();
@@ -306,7 +314,9 @@ export const LabelingPage = () => {
 
     const handlePointerMove = (e: React.PointerEvent) => {
         const pos = getRelativePosition(e.clientX, e.clientY);
-        if (!pos) return;
+        if (!pos) {
+            return;
+        }
 
         if (isDrawingBox && drawStart) {
             e.preventDefault();
@@ -367,10 +377,18 @@ export const LabelingPage = () => {
     };
 
     const getCursor = () => {
-        if (isDrawingBox) return 'crosshair';
-        if (dragHandle === 'move') return 'move';
-        if (dragHandle === 'nw' || dragHandle === 'se') return 'nwse-resize';
-        if (dragHandle === 'ne' || dragHandle === 'sw') return 'nesw-resize';
+        if (isDrawingBox) {
+            return 'crosshair';
+        }
+        if (dragHandle === 'move') {
+            return 'move';
+        }
+        if (dragHandle === 'nw' || dragHandle === 'se') {
+            return 'nwse-resize';
+        }
+        if (dragHandle === 'ne' || dragHandle === 'sw') {
+            return 'nesw-resize';
+        }
         return 'default';
     };
 
@@ -544,7 +562,11 @@ export const LabelingPage = () => {
                         <span className="text-sm text-secondary">Board detected</span>
                         <div className="flex rounded-lg overflow-hidden border border-border shrink-0">
                             <button
-                                onClick={() => { if (!currentDetection?.hasBoardDetected) toggleBoardDetected(); }}
+                                onClick={() => {
+                                    if (!currentDetection?.hasBoardDetected) {
+                                        toggleBoardDetected();
+                                    } 
+                                }}
                                 className={`px-3 py-1 text-sm font-medium transition-colors ${
                                     currentDetection?.hasBoardDetected === true ? 'bg-success text-white' : 'bg-surface hover:bg-surface-dim text-secondary'
                                 }`}
@@ -552,7 +574,11 @@ export const LabelingPage = () => {
                                 Yes (1)
                             </button>
                             <button
-                                onClick={() => { if (currentDetection?.hasBoardDetected !== false) updateCorrection({ hasBoardDetected: false, isEntireBoardVisible: false, boundingBox: null }); }}
+                                onClick={() => {
+                                    if (currentDetection?.hasBoardDetected !== false) {
+                                        updateCorrection({ hasBoardDetected: false, isEntireBoardVisible: false, boundingBox: null });
+                                    } 
+                                }}
                                 className={`px-3 py-1 text-sm font-medium transition-colors ${
                                     currentDetection?.hasBoardDetected === false ? 'bg-error text-white' : 'bg-surface hover:bg-surface-dim text-secondary'
                                 }`}
@@ -566,7 +592,11 @@ export const LabelingPage = () => {
                         <span className="text-sm text-secondary">Entire board visible</span>
                         <div className={`flex rounded-lg overflow-hidden border border-border shrink-0 ${!currentDetection?.hasBoardDetected ? 'opacity-50 pointer-events-none' : ''}`}>
                             <button
-                                onClick={() => { if (!currentDetection?.isEntireBoardVisible) toggleEntireBoardVisible(); }}
+                                onClick={() => {
+                                    if (!currentDetection?.isEntireBoardVisible) {
+                                        toggleEntireBoardVisible();
+                                    } 
+                                }}
                                 className={`px-3 py-1 text-sm font-medium transition-colors ${
                                     currentDetection?.isEntireBoardVisible === true ? 'bg-success text-white' : 'bg-surface hover:bg-surface-dim text-secondary'
                                 }`}
@@ -574,7 +604,11 @@ export const LabelingPage = () => {
                                 Yes (3)
                             </button>
                             <button
-                                onClick={() => { if (currentDetection?.isEntireBoardVisible !== false) updateCorrection({ isEntireBoardVisible: false }); }}
+                                onClick={() => {
+                                    if (currentDetection?.isEntireBoardVisible !== false) {
+                                        updateCorrection({ isEntireBoardVisible: false });
+                                    } 
+                                }}
                                 className={`px-3 py-1 text-sm font-medium transition-colors ${
                                     currentDetection?.hasBoardDetected && currentDetection?.isEntireBoardVisible === false ? 'bg-error text-white' : 'bg-surface hover:bg-surface-dim text-secondary'
                                 }`}

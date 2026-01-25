@@ -16,7 +16,7 @@ export interface S3Sample {
     size: number;
 }
 
-export async function listSamples(): Promise<S3Sample[]> {
+export const listSamples = async (): Promise<S3Sample[]> => {
     const command = new ListObjectsV2Command({
         Bucket: BUCKET,
         Prefix: ORIGINALS_PREFIX,
@@ -26,7 +26,9 @@ export async function listSamples(): Promise<S3Sample[]> {
     const samples: S3Sample[] = [];
 
     for (const obj of response.Contents || []) {
-        if (!obj.Key || !obj.Key.endsWith('.png')) continue;
+        if (!obj.Key || !obj.Key.endsWith('.png')) {
+            continue;
+        }
 
         const filename = obj.Key.replace(ORIGINALS_PREFIX, '');
         const id = filename.replace('.png', '');
@@ -43,9 +45,9 @@ export async function listSamples(): Promise<S3Sample[]> {
     samples.sort((a, b) => b.lastModified.getTime() - a.lastModified.getTime());
 
     return samples;
-}
+};
 
-export async function getSample(id: string): Promise<S3Sample | null> {
+export const getSample = async (id: string): Promise<S3Sample | null> => {
     const key = `${ORIGINALS_PREFIX}${id}.png`;
 
     try {
@@ -65,9 +67,9 @@ export async function getSample(id: string): Promise<S3Sample | null> {
     } catch {
         return null;
     }
-}
+};
 
-export async function getUploadPresignedUrl(id: string): Promise<{ url: string; key: string }> {
+export const getUploadPresignedUrl = async (id: string): Promise<{ url: string; key: string }> => {
     const key = `${ORIGINALS_PREFIX}${id}.png`;
 
     const command = new PutObjectCommand({
@@ -79,17 +81,13 @@ export async function getUploadPresignedUrl(id: string): Promise<{ url: string; 
     const url = await getSignedUrl(s3Client, command, { expiresIn: 3600 });
 
     return { url, key };
-}
+};
 
-export function getCloudFrontUrl(id: string): string {
-    return `${config.CLOUDFRONT_URL}/${ORIGINALS_PREFIX}${id}.png`;
-}
+export const getCloudFrontUrl = (id: string): string => `${config.CLOUDFRONT_URL}/${ORIGINALS_PREFIX}${id}.png`;
 
-export function getThumbnailUrl(id: string): string {
-    return `${config.CLOUDFRONT_URL}/${THUMBNAILS_PREFIX}${id}.jpg`;
-}
+export const getThumbnailUrl = (id: string): string => `${config.CLOUDFRONT_URL}/${THUMBNAILS_PREFIX}${id}.jpg`;
 
-export async function generateThumbnail(id: string): Promise<void> {
+export const generateThumbnail = async (id: string): Promise<void> => {
     const originalKey = `${ORIGINALS_PREFIX}${id}.png`;
     const thumbnailKey = `${THUMBNAILS_PREFIX}${id}.jpg`;
 
@@ -117,9 +115,9 @@ export async function generateThumbnail(id: string): Promise<void> {
     });
 
     await s3Client.send(putCommand);
-}
+};
 
-export async function thumbnailExists(id: string): Promise<boolean> {
+export const thumbnailExists = async (id: string): Promise<boolean> => {
     const key = `${THUMBNAILS_PREFIX}${id}.jpg`;
 
     try {
@@ -132,4 +130,4 @@ export async function thumbnailExists(id: string): Promise<boolean> {
     } catch {
         return false;
     }
-}
+};

@@ -2,10 +2,11 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { http, API_URL } from '../../../../api/config';
+import { ML_API } from '../../../../api/ml';
 import { Button } from '../../../../components/ui/Button';
 import { Select } from '../../../../components/ui/Select';
-import type { BoundingBox, BoardDetection, DetectResponse, DetectorModel, SampleStatusFlags } from '@blokus-ai/shared';
-import { DETECTOR_MODELS, getStatusLabels } from '@blokus-ai/shared';
+import type { BoundingBox, BoardDetection, DetectResponse, DetectResponseWithCorrection, SampleStatusFlags, TrainingRun } from '@blokus-ai/shared';
+import { getStatusLabels } from '@blokus-ai/shared';
 import { statusColors, statusLabels } from '../../../../lib/status';
 
 interface Sample {
@@ -13,12 +14,15 @@ interface Sample {
     filename: string;
     status: SampleStatusFlags;
     created_at: string;
+    imageUrl?: string;
+    thumbnailUrl?: string;
 }
 
 interface LabelData {
     prediction: BoardDetection | null;
     correction: BoardDetection | null;
     isModified: boolean;
+    isHumanLabeled: boolean;
 }
 
 type DragHandle = 'nw' | 'ne' | 'sw' | 'se' | 'move' | null;
@@ -52,6 +56,7 @@ export const ImageDetailPage = () => {
         prediction: null,
         correction: null,
         isModified: false,
+        isHumanLabeled: false,
     });
     const [isDrawingBox, setIsDrawingBox] = useState(false);
     const [drawStart, setDrawStart] = useState<{ x: number; y: number } | null>(null);
@@ -59,7 +64,8 @@ export const ImageDetailPage = () => {
     const [dragStartBox, setDragStartBox] = useState<BoundingBox | null>(null);
     const [dragStartPos, setDragStartPos] = useState<{ x: number; y: number } | null>(null);
     const [isSaving, setIsSaving] = useState(false);
-    const [detectorModel, setDetectorModel] = useState<DetectorModel>('yolo');
+    const [trainingRuns, setTrainingRuns] = useState<TrainingRun[]>([]);
+    const [selectedModelId, setSelectedModelId] = useState<string>('');
     const imageContainerRef = useRef<HTMLDivElement>(null);
 
     // Get the current detection values (correction overrides prediction)
@@ -73,11 +79,12 @@ export const ImageDetailPage = () => {
                 setSample(data);
                 // Try to load existing detection result
                 if (id) {
-                    const detectResult = await http.get<DetectResponse | null>(`/api/ml/detect/${id}`);
+                    const detectResult = await http.get<DetectResponseWithCorrection | null>(`/api/ml/detect/${id}`);
                     setLabelData({
                         prediction: detectResult?.detection ?? null,
-                        correction: null,
+                        correction: detectResult?.correction ?? null,
                         isModified: false,
+                        isHumanLabeled: detectResult?.isHumanLabeled ?? false,
                     });
                 }
             } catch {
@@ -89,17 +96,40 @@ export const ImageDetailPage = () => {
         loadSample();
     }, [id]);
 
+    // Load completed training runs for model selector
+    useEffect(() => {
+        const loadTrainingRuns = async () => {
+            try {
+                const runs = await ML_API.getTrainingRuns();
+                const completedRuns = runs.filter(r => r.status === 'completed');
+                setTrainingRuns(completedRuns);
+                // Select the most recent completed run by default
+                if (completedRuns.length > 0 && !selectedModelId) {
+                    setSelectedModelId(completedRuns[0].id);
+                }
+            } catch {
+                // Ignore errors
+            }
+        };
+        loadTrainingRuns();
+    }, [selectedModelId]);
+
     const handleRunDetection = async () => {
         if (!id) {
             return;
         }
+        if (!selectedModelId) {
+            toast.error('Please select a model first');
+            return;
+        }
         setIsRunningDetection(true);
         try {
-            const result = await http.post<DetectResponse>(`/api/ml/detect/${id}`, { model: detectorModel });
+            const result = await http.post<DetectResponse>(`/api/ml/detect/${id}`, { model_id: selectedModelId });
             setLabelData({
                 prediction: result.detection,
                 correction: null,
                 isModified: false,
+                isHumanLabeled: false,
             });
             setSample(prev => prev ? { ...prev, status: { ...prev.status, aiLabeled: true } } : null);
             const timeStr = result.processing_time_ms.toFixed(0);
@@ -433,7 +463,9 @@ export const ImageDetailPage = () => {
         );
     }
 
-    const hasPrediction = labelData.prediction !== null;
+    // For human-labeled images, prediction contains human label, not AI prediction
+    const hasAiPrediction = labelData.prediction !== null && !labelData.isHumanLabeled;
+    const hasAnyLabel = labelData.prediction !== null || labelData.correction !== null;
     const isInteracting = isDrawingBox || dragHandle !== null || drawStart !== null;
     const isEditable = !isDrawingBox && boundingBox;
 
@@ -471,290 +503,298 @@ export const ImageDetailPage = () => {
             {/* Content container - centered with max width */}
             <div className="max-w-2xl mx-auto space-y-6">
 
-            {/* Image with bounding box overlay */}
-            <div
-                ref={imageContainerRef}
-                className="relative bg-surface rounded-lg border border-border overflow-hidden"
-                onPointerDown={handlePointerDown}
-                onPointerMove={handlePointerMove}
-                onPointerUp={handlePointerUp}
-                onPointerCancel={handlePointerUp}
-                style={{
-                    touchAction: isInteracting || isDrawingBox || boundingBox ? 'none' : 'auto',
-                    cursor: getCursor(),
-                }}
-            >
-                <img
-                    src={`${API_URL}/api/ml/samples/${sample.id}/image`}
-                    alt={`Sample ${sample.id}`}
-                    className="w-full h-auto select-none"
-                    draggable={false}
-                />
-                {/* Bounding box overlay */}
-                {boundingBox && (
-                    <div
-                        className={`absolute rounded-sm ${
-                            labelData.correction?.boundingBox
-                                ? 'border-2 border-success'
-                                : 'border-2 border-primary border-dashed'
-                        } ${isEditable ? 'cursor-move' : ''}`}
-                        style={{
-                            left: `${boundingBox.x * 100}%`,
-                            top: `${boundingBox.y * 100}%`,
-                            width: `${boundingBox.width * 100}%`,
-                            height: `${boundingBox.height * 100}%`,
-                            pointerEvents: isDrawingBox ? 'none' : 'auto',
-                        }}
-                    >
-                        {/* Label */}
-                        <div className={`absolute -top-6 left-0 text-white text-xs px-1.5 py-0.5 rounded pointer-events-none ${
-                            labelData.correction?.boundingBox ? 'bg-success' : 'bg-primary'
-                        }`}>
-                            {labelData.correction?.boundingBox ? 'Corrected' : 'Predicted'}
-                        </div>
-
-                        {/* Corner handles - only show when not in draw mode */}
-                        {isEditable && (
-                            <>
-                                {/* NW corner */}
-                                <div
-                                    className="absolute -left-2 -top-2 w-4 h-4 bg-white border-2 border-success rounded-full cursor-nwse-resize shadow-sm"
-                                    style={{ pointerEvents: 'auto' }}
-                                />
-                                {/* NE corner */}
-                                <div
-                                    className="absolute -right-2 -top-2 w-4 h-4 bg-white border-2 border-success rounded-full cursor-nesw-resize shadow-sm"
-                                    style={{ pointerEvents: 'auto' }}
-                                />
-                                {/* SW corner */}
-                                <div
-                                    className="absolute -left-2 -bottom-2 w-4 h-4 bg-white border-2 border-success rounded-full cursor-nesw-resize shadow-sm"
-                                    style={{ pointerEvents: 'auto' }}
-                                />
-                                {/* SE corner */}
-                                <div
-                                    className="absolute -right-2 -bottom-2 w-4 h-4 bg-white border-2 border-success rounded-full cursor-nwse-resize shadow-sm"
-                                    style={{ pointerEvents: 'auto' }}
-                                />
-                            </>
-                        )}
-                    </div>
-                )}
-                {/* Drawing mode overlay */}
-                {isDrawingBox && (
-                    <div className="absolute inset-0 bg-black/10 pointer-events-none" />
-                )}
-            </div>
-
-            {/* Hint text */}
-            {isEditable && (
-                <p className="text-xs text-muted">
-                    Drag corners to resize, drag center to move
-                </p>
-            )}
-
-            {/* Model selector and action buttons */}
-            <div className="flex items-end gap-2">
-                <div className="flex-1">
-                    <Select
-                        label="Detection Model"
-                        value={detectorModel}
-                        options={DETECTOR_MODELS}
-                        onChange={(val) => setDetectorModel(val as DetectorModel)}
-                    />
-                </div>
-                <Button
-                    onClick={handleRunDetection}
-                    loading={isRunningDetection}
-                    leftIcon={hasPrediction ? <RefreshIcon /> : <PlayIcon />}
-                    variant="secondary"
-                    className="shrink-0"
+                {/* Image with bounding box overlay */}
+                <div
+                    ref={imageContainerRef}
+                    className="relative bg-surface rounded-lg border border-border overflow-hidden"
+                    onPointerDown={handlePointerDown}
+                    onPointerMove={handlePointerMove}
+                    onPointerUp={handlePointerUp}
+                    onPointerCancel={handlePointerUp}
+                    style={{
+                        touchAction: isInteracting || isDrawingBox || boundingBox ? 'none' : 'auto',
+                        cursor: getCursor(),
+                    }}
                 >
-                    {hasPrediction ? 'Re-run' : 'Detect'}
-                </Button>
-            </div>
+                    <img
+                        src={sample.thumbnailUrl || sample.imageUrl || `${API_URL}/api/ml/samples/${sample.id}/image`}
+                        alt={`Sample ${sample.id}`}
+                        className="w-full h-auto select-none"
+                        draggable={false}
+                    />
+                    {/* Bounding box overlay */}
+                    {boundingBox && (
+                        <div
+                            className={`absolute rounded-sm ${
+                                labelData.correction?.boundingBox
+                                    ? 'border-2 border-success'
+                                    : 'border-2 border-primary border-dashed'
+                            } ${isEditable ? 'cursor-move' : ''}`}
+                            style={{
+                                left: `${boundingBox.x * 100}%`,
+                                top: `${boundingBox.y * 100}%`,
+                                width: `${boundingBox.width * 100}%`,
+                                height: `${boundingBox.height * 100}%`,
+                                pointerEvents: isDrawingBox ? 'none' : 'auto',
+                            }}
+                        >
+                            {/* Label */}
+                            <div className={`absolute -top-6 left-0 text-white text-xs px-1.5 py-0.5 rounded pointer-events-none ${
+                                labelData.isHumanLabeled ? 'bg-info' : labelData.correction?.boundingBox ? 'bg-success' : 'bg-primary'
+                            }`}>
+                                {labelData.isHumanLabeled ? 'Human Labeled' : labelData.correction?.boundingBox ? 'Corrected' : 'Predicted'}
+                            </div>
 
-            {/* Action buttons */}
-            <div className="grid grid-cols-2 gap-2">
-                {isDrawingBox ? (
-                    <Button
-                        onClick={() => setIsDrawingBox(false)}
-                        variant="secondary"
-                    >
-                        Cancel
-                    </Button>
-                ) : (
-                    <Button
-                        onClick={() => setIsDrawingBox(true)}
-                        variant="secondary"
-                    >
-                        Draw Box
-                    </Button>
+                            {/* Corner handles - only show when not in draw mode */}
+                            {isEditable && (
+                                <>
+                                    {/* NW corner */}
+                                    <div
+                                        className="absolute -left-2 -top-2 w-4 h-4 bg-white border-2 border-success rounded-full cursor-nwse-resize shadow-sm"
+                                        style={{ pointerEvents: 'auto' }}
+                                    />
+                                    {/* NE corner */}
+                                    <div
+                                        className="absolute -right-2 -top-2 w-4 h-4 bg-white border-2 border-success rounded-full cursor-nesw-resize shadow-sm"
+                                        style={{ pointerEvents: 'auto' }}
+                                    />
+                                    {/* SW corner */}
+                                    <div
+                                        className="absolute -left-2 -bottom-2 w-4 h-4 bg-white border-2 border-success rounded-full cursor-nesw-resize shadow-sm"
+                                        style={{ pointerEvents: 'auto' }}
+                                    />
+                                    {/* SE corner */}
+                                    <div
+                                        className="absolute -right-2 -bottom-2 w-4 h-4 bg-white border-2 border-success rounded-full cursor-nwse-resize shadow-sm"
+                                        style={{ pointerEvents: 'auto' }}
+                                    />
+                                </>
+                            )}
+                        </div>
+                    )}
+                    {/* Drawing mode overlay */}
+                    {isDrawingBox && (
+                        <div className="absolute inset-0 bg-black/10 pointer-events-none" />
+                    )}
+                </div>
+
+                {/* Hint text */}
+                {isEditable && (
+                    <p className="text-xs text-muted">
+                    Drag corners to resize, drag center to move
+                    </p>
                 )}
-                {hasPrediction && (
-                    sample.status.verified ? (
+
+                {/* Model selector and action buttons */}
+                <div className="flex items-end gap-2">
+                    <div className="flex-1">
+                        <Select
+                            label="Detection Model"
+                            value={selectedModelId}
+                            options={trainingRuns.map(run => ({
+                                value: run.id,
+                                label: `${new Date(run.createdAt).toLocaleDateString()} - ${(run.accuracy! * 100).toFixed(1)}% acc`,
+                            }))}
+                            onChange={(val) => setSelectedModelId(val as string)}
+                            placeholder={trainingRuns.length === 0 ? 'No trained models' : 'Select model...'}
+                            disabled={trainingRuns.length === 0}
+                        />
+                    </div>
+                    <Button
+                        onClick={handleRunDetection}
+                        loading={isRunningDetection}
+                        leftIcon={hasAiPrediction ? <RefreshIcon /> : <PlayIcon />}
+                        variant="secondary"
+                        className="shrink-0"
+                        disabled={trainingRuns.length === 0}
+                    >
+                        {hasAiPrediction ? 'Re-run' : 'Detect'}
+                    </Button>
+                </div>
+
+                {/* Action buttons */}
+                <div className="grid grid-cols-2 gap-2">
+                    {isDrawingBox ? (
                         <Button
-                            onClick={handleUnverify}
+                            onClick={() => setIsDrawingBox(false)}
                             variant="secondary"
                         >
-                            Unverify
+                        Cancel
                         </Button>
                     ) : (
                         <Button
-                            onClick={handleVerify}
-                            variant="success"
+                            onClick={() => setIsDrawingBox(true)}
+                            variant="secondary"
                         >
+                        Draw Box
+                        </Button>
+                    )}
+                    {hasAnyLabel && (
+                        sample.status.verified ? (
+                            <Button
+                                onClick={handleUnverify}
+                                variant="secondary"
+                            >
+                            Unverify
+                            </Button>
+                        ) : (
+                            <Button
+                                onClick={handleVerify}
+                                variant="success"
+                            >
                             Verify
-                        </Button>
-                    )
-                )}
-                {hasPrediction && (
-                    <Button
-                        onClick={handleDeleteDetection}
-                        variant="danger"
-                    >
+                            </Button>
+                        )
+                    )}
+                    {hasAnyLabel && (
+                        <Button
+                            onClick={handleDeleteDetection}
+                            variant="danger"
+                        >
                         Delete
-                    </Button>
-                )}
-                {labelData.isModified && (
-                    <>
-                        <Button onClick={handleSaveCorrections} loading={isSaving}>
+                        </Button>
+                    )}
+                    {labelData.isModified && (
+                        <>
+                            <Button onClick={handleSaveCorrections} loading={isSaving}>
                             Save
-                        </Button>
-                        <Button onClick={handleResetCorrections} variant="secondary">
+                            </Button>
+                            <Button onClick={handleResetCorrections} variant="secondary">
                             Reset
-                        </Button>
-                    </>
-                )}
-            </div>
-
-            {/* Detection Info - only show if we have detection data */}
-            {(labelData.prediction || labelData.correction) && (
-            <div className="bg-surface rounded-lg border border-border p-4">
-                <div className="flex items-center justify-between mb-3">
-                    <h2 className="text-sm font-medium text-foreground">Board Detection</h2>
-                    {labelData.correction && (
-                        <span className="text-xs text-success font-medium">Corrected</span>
+                            </Button>
+                        </>
                     )}
                 </div>
-                <div className="space-y-3">
-                    {/* Board detected */}
-                    <div className="flex items-center justify-between gap-4">
-                        <span className="text-sm text-secondary">Board detected</span>
-                        <div className="flex rounded-lg overflow-hidden border border-border shrink-0">
-                            <button
-                                onClick={() => {
-                                    if (!currentDetection?.hasBoardDetected) {
-                                        toggleBoardDetected();
-                                    }
-                                }}
-                                className={`px-3 py-1 text-sm font-medium transition-colors ${
-                                    currentDetection?.hasBoardDetected
-                                        ? 'bg-success text-white'
-                                        : 'bg-surface hover:bg-surface-dim text-secondary'
-                                }`}
-                            >
-                                Yes
-                            </button>
-                            <button
-                                onClick={() => {
-                                    if (currentDetection?.hasBoardDetected) {
-                                        toggleBoardDetected();
-                                    }
-                                }}
-                                className={`px-3 py-1 text-sm font-medium transition-colors ${
-                                    !currentDetection?.hasBoardDetected
-                                        ? 'bg-error text-white'
-                                        : 'bg-surface hover:bg-surface-dim text-secondary'
-                                }`}
-                            >
-                                No
-                            </button>
-                        </div>
-                    </div>
 
-                    {/* Entire board visible */}
-                    <div className="flex items-center justify-between gap-4">
-                        <span className="text-sm text-secondary">Entire board visible</span>
-                        <div className={`flex rounded-lg overflow-hidden border border-border shrink-0 select-none ${!currentDetection?.hasBoardDetected ? 'opacity-50 pointer-events-none' : ''}`}>
-                            <button
-                                onClick={() => {
-                                    if (!currentDetection?.isEntireBoardVisible) {
-                                        toggleEntireBoardVisible();
-                                    }
-                                }}
-                                className={`px-3 py-1 text-sm font-medium transition-colors ${
-                                    currentDetection?.isEntireBoardVisible
-                                        ? 'bg-success text-white'
-                                        : 'bg-surface hover:bg-surface-dim text-secondary'
-                                }`}
-                            >
-                                Yes
-                            </button>
-                            <button
-                                onClick={() => {
-                                    if (currentDetection?.isEntireBoardVisible) {
-                                        toggleEntireBoardVisible();
-                                    }
-                                }}
-                                className={`px-3 py-1 text-sm font-medium transition-colors ${
-                                    currentDetection?.hasBoardDetected && !currentDetection?.isEntireBoardVisible
-                                        ? 'bg-error text-white'
-                                        : 'bg-surface hover:bg-surface-dim text-secondary'
-                                }`}
-                            >
-                                No
-                            </button>
+                {/* Detection Info - only show if we have detection data */}
+                {(labelData.prediction || labelData.correction) && (
+                    <div className="bg-surface rounded-lg border border-border p-4">
+                        <div className="flex items-center justify-between mb-3">
+                            <h2 className="text-sm font-medium text-foreground">
+                                {labelData.isHumanLabeled ? 'Human Label' : 'Board Detection'}
+                            </h2>
+                            {!labelData.isHumanLabeled && labelData.correction && (
+                                <span className="text-xs text-success font-medium">Corrected</span>
+                            )}
                         </div>
-                    </div>
-
-                    {/* Confidence - only show when board is detected */}
-                    {labelData.prediction?.hasBoardDetected && labelData.prediction?.confidence !== undefined && (
-                        <div className="flex items-center justify-between gap-4">
-                            <span className="text-sm text-secondary">Confidence</span>
-                            <span className="text-sm font-mono text-foreground">
-                                {(labelData.prediction.confidence * 100).toFixed(0)}%
-                            </span>
-                        </div>
-                    )}
-
-                    {/* Bounding box coordinates */}
-                    {boundingBox && (
-                        <div className="pt-2 border-t border-border">
-                            <div className="flex items-center justify-between mb-1">
-                                <span className="text-xs text-muted">Bounding box</span>
-                                {labelData.correction?.boundingBox && (
+                        <div className="space-y-3">
+                            {/* Board detected */}
+                            <div className="flex items-center justify-between gap-4">
+                                <span className="text-sm text-secondary">Board detected</span>
+                                <div className="flex rounded-lg overflow-hidden border border-border shrink-0">
                                     <button
-                                        onClick={() => updateCorrection({ boundingBox: null })}
-                                        className="text-xs text-error hover:underline"
+                                        onClick={() => {
+                                            if (!currentDetection?.hasBoardDetected) {
+                                                toggleBoardDetected();
+                                            }
+                                        }}
+                                        className={`px-3 py-1 text-sm font-medium transition-colors ${
+                                            currentDetection?.hasBoardDetected
+                                                ? 'bg-success text-white'
+                                                : 'bg-surface hover:bg-surface-dim text-secondary'
+                                        }`}
                                     >
-                                        Clear
+                                Yes
                                     </button>
-                                )}
-                            </div>
-                            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs font-mono">
-                                <div className="bg-surface-dim rounded px-2 py-1">
-                                    <span className="text-muted">x:</span>{' '}
-                                    <span className="text-foreground">{(boundingBox.x * 100).toFixed(1)}%</span>
-                                </div>
-                                <div className="bg-surface-dim rounded px-2 py-1">
-                                    <span className="text-muted">y:</span>{' '}
-                                    <span className="text-foreground">{(boundingBox.y * 100).toFixed(1)}%</span>
-                                </div>
-                                <div className="bg-surface-dim rounded px-2 py-1">
-                                    <span className="text-muted">w:</span>{' '}
-                                    <span className="text-foreground">{(boundingBox.width * 100).toFixed(1)}%</span>
-                                </div>
-                                <div className="bg-surface-dim rounded px-2 py-1">
-                                    <span className="text-muted">h:</span>{' '}
-                                    <span className="text-foreground">{(boundingBox.height * 100).toFixed(1)}%</span>
+                                    <button
+                                        onClick={() => {
+                                            if (currentDetection?.hasBoardDetected) {
+                                                toggleBoardDetected();
+                                            }
+                                        }}
+                                        className={`px-3 py-1 text-sm font-medium transition-colors ${
+                                            !currentDetection?.hasBoardDetected
+                                                ? 'bg-error text-white'
+                                                : 'bg-surface hover:bg-surface-dim text-secondary'
+                                        }`}
+                                    >
+                                No
+                                    </button>
                                 </div>
                             </div>
+
+                            {/* Entire board visible */}
+                            <div className="flex items-center justify-between gap-4">
+                                <span className="text-sm text-secondary">Entire board visible</span>
+                                <div className={`flex rounded-lg overflow-hidden border border-border shrink-0 select-none ${!currentDetection?.hasBoardDetected ? 'opacity-50 pointer-events-none' : ''}`}>
+                                    <button
+                                        onClick={() => {
+                                            if (!currentDetection?.isEntireBoardVisible) {
+                                                toggleEntireBoardVisible();
+                                            }
+                                        }}
+                                        className={`px-3 py-1 text-sm font-medium transition-colors ${
+                                            currentDetection?.isEntireBoardVisible
+                                                ? 'bg-success text-white'
+                                                : 'bg-surface hover:bg-surface-dim text-secondary'
+                                        }`}
+                                    >
+                                Yes
+                                    </button>
+                                    <button
+                                        onClick={() => {
+                                            if (currentDetection?.isEntireBoardVisible) {
+                                                toggleEntireBoardVisible();
+                                            }
+                                        }}
+                                        className={`px-3 py-1 text-sm font-medium transition-colors ${
+                                            currentDetection?.hasBoardDetected && !currentDetection?.isEntireBoardVisible
+                                                ? 'bg-error text-white'
+                                                : 'bg-surface hover:bg-surface-dim text-secondary'
+                                        }`}
+                                    >
+                                No
+                                    </button>
+                                </div>
+                            </div>
+
+                            {/* Confidence - only show when board is detected */}
+                            {labelData.prediction?.hasBoardDetected && labelData.prediction?.confidence !== undefined && (
+                                <div className="flex items-center justify-between gap-4">
+                                    <span className="text-sm text-secondary">Confidence</span>
+                                    <span className="text-sm font-mono text-foreground">
+                                        {(labelData.prediction.confidence * 100).toFixed(0)}%
+                                    </span>
+                                </div>
+                            )}
+
+                            {/* Bounding box coordinates */}
+                            {boundingBox && (
+                                <div className="pt-2 border-t border-border">
+                                    <div className="flex items-center justify-between mb-1">
+                                        <span className="text-xs text-muted">Bounding box</span>
+                                        {labelData.correction?.boundingBox && (
+                                            <button
+                                                onClick={() => updateCorrection({ boundingBox: null })}
+                                                className="text-xs text-error hover:underline"
+                                            >
+                                        Clear
+                                            </button>
+                                        )}
+                                    </div>
+                                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs font-mono">
+                                        <div className="bg-surface-dim rounded px-2 py-1">
+                                            <span className="text-muted">x:</span>{' '}
+                                            <span className="text-foreground">{(boundingBox.x * 100).toFixed(1)}%</span>
+                                        </div>
+                                        <div className="bg-surface-dim rounded px-2 py-1">
+                                            <span className="text-muted">y:</span>{' '}
+                                            <span className="text-foreground">{(boundingBox.y * 100).toFixed(1)}%</span>
+                                        </div>
+                                        <div className="bg-surface-dim rounded px-2 py-1">
+                                            <span className="text-muted">w:</span>{' '}
+                                            <span className="text-foreground">{(boundingBox.width * 100).toFixed(1)}%</span>
+                                        </div>
+                                        <div className="bg-surface-dim rounded px-2 py-1">
+                                            <span className="text-muted">h:</span>{' '}
+                                            <span className="text-foreground">{(boundingBox.height * 100).toFixed(1)}%</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
                         </div>
-                    )}
-                </div>
-            </div>
-            )}
+                    </div>
+                )}
 
             </div>
         </div>

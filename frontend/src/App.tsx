@@ -1,9 +1,11 @@
+import { useEffect } from 'react';
 import { BrowserRouter, Routes, Route, Link } from 'react-router-dom';
 import { Toaster } from 'react-hot-toast';
 import { GameProvider } from './contexts/GameContext';
 import { ThemeProvider } from './contexts/ThemeProvider';
 import { useTheme } from './hooks/useTheme';
 import { routes } from './routes';
+import { initializeSocket, connectSocket, disconnectSocket } from './api/config';
 
 const SunIcon = () => (
     <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -55,27 +57,39 @@ const Layout = ({ children }: { children: React.ReactNode }) => (
     </div>
 );
 
-const App = () => (
-    <ThemeProvider>
-        <GameProvider>
-            <BrowserRouter>
-                <Toaster />
-                <Routes>
-                    {routes.map((route) => (
-                        <Route
-                            key={route.path}
-                            path={route.path}
-                            element={
-                                route.layout
-                                    ? <Layout>{route.element}</Layout>
-                                    : route.element
-                            }
-                        />
-                    ))}
-                </Routes>
-            </BrowserRouter>
-        </GameProvider>
-    </ThemeProvider>
-);
+const App = () => {
+    // Initialize and connect WebSocket on mount
+    useEffect(() => {
+        initializeSocket();
+        connectSocket();
+
+        return () => {
+            disconnectSocket();
+        };
+    }, []);
+
+    return (
+        <ThemeProvider>
+            <GameProvider>
+                <BrowserRouter>
+                    <Toaster />
+                    <Routes>
+                        {routes.map((route) => (
+                            <Route
+                                key={route.path}
+                                path={route.path}
+                                element={
+                                    route.layout
+                                        ? <Layout>{route.element}</Layout>
+                                        : route.element
+                                }
+                            />
+                        ))}
+                    </Routes>
+                </BrowserRouter>
+            </GameProvider>
+        </ThemeProvider>
+    );
+};
 
 export default App;
