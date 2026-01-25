@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { http, API_URL } from '../../../../api/config';
 import { Button } from '../../../../components/ui/Button';
@@ -48,9 +48,11 @@ const ChevronRightIcon = () => (
 
 export const LabelingPage = () => {
     const navigate = useNavigate();
+    const { id: initialId } = useParams<{ id: string }>();
     const [samples, setSamples] = useState<Sample[]>([]);
     const [currentIndex, setCurrentIndex] = useState(0);
     const [isLoading, setIsLoading] = useState(true);
+    const [initialIndexSet, setInitialIndexSet] = useState(false);
     const [labelData, setLabelData] = useState<LabelData>({
         prediction: null,
         correction: null,
@@ -72,7 +74,22 @@ export const LabelingPage = () => {
         const loadSamples = async () => {
             try {
                 const data = await http.get<SamplesResponse>('/api/ml/samples');
-                setSamples(data.samples || []);
+                const loadedSamples = data.samples || [];
+                setSamples(loadedSamples);
+
+                // Set initial index based on URL param or default to first
+                if (!initialIndexSet && loadedSamples.length > 0) {
+                    if (initialId) {
+                        const index = loadedSamples.findIndex(s => s.id === initialId);
+                        if (index >= 0) {
+                            setCurrentIndex(index);
+                        }
+                    } else {
+                        // No ID in URL, update URL to first sample
+                        navigate(`/admin/images/label/${loadedSamples[0].id}`, { replace: true });
+                    }
+                    setInitialIndexSet(true);
+                }
             } catch {
                 // Error toast shown by http client
             } finally {
@@ -80,7 +97,7 @@ export const LabelingPage = () => {
             }
         };
         loadSamples();
-    }, []);
+    }, [initialId, initialIndexSet, navigate]);
 
     // Load existing label when sample changes
     useEffect(() => {
@@ -116,17 +133,21 @@ export const LabelingPage = () => {
         loadExistingLabel();
     }, [currentSample]);
 
-    const goToPrevious = () => {
+    const goToPrevious = useCallback(() => {
         if (currentIndex > 0) {
-            setCurrentIndex(currentIndex - 1);
+            const newIndex = currentIndex - 1;
+            setCurrentIndex(newIndex);
+            navigate(`/admin/images/label/${samples[newIndex].id}`, { replace: true });
         }
-    };
+    }, [currentIndex, samples, navigate]);
 
-    const goToNext = () => {
+    const goToNext = useCallback(() => {
         if (currentIndex < samples.length - 1) {
-            setCurrentIndex(currentIndex + 1);
+            const newIndex = currentIndex + 1;
+            setCurrentIndex(newIndex);
+            navigate(`/admin/images/label/${samples[newIndex].id}`, { replace: true });
         }
-    };
+    }, [currentIndex, samples, navigate]);
 
     const handleSaveAndNext = async () => {
         if (!currentSample || !labelData.correction) {
@@ -157,7 +178,9 @@ export const LabelingPage = () => {
 
             // Move to next if not at the end
             if (currentIndex < samples.length - 1) {
-                setCurrentIndex(currentIndex + 1);
+                const newIndex = currentIndex + 1;
+                setCurrentIndex(newIndex);
+                navigate(`/admin/images/label/${samples[newIndex].id}`, { replace: true });
             }
         } catch {
             toast.error('Failed to save');

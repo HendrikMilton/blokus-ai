@@ -51,6 +51,11 @@ export const routes: RouteConfig[] = [
         layout: true,
     },
     {
+        path: '/admin/images/label/:id',
+        element: <LabelingPage />,
+        layout: true,
+    },
+    {
         path: '/admin/images/:id',
         element: <ImageDetailPage />,
         layout: true,
