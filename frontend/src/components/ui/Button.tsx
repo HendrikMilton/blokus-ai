@@ -14,9 +14,9 @@ const variants = {
     primary: 'bg-primary text-white hover:bg-primary/90 disabled:bg-muted disabled:text-white/60 disabled:opacity-60',
     secondary: 'bg-surface-dim text-foreground hover:bg-border/50 disabled:bg-surface-dim disabled:text-muted disabled:opacity-60',
     ghost: 'hover:bg-surface-dim text-foreground disabled:text-muted disabled:opacity-50',
-    destructive: 'bg-error text-white hover:bg-error/90 disabled:bg-muted disabled:text-white/60 disabled:opacity-60',
+    destructive: 'bg-red-600 dark:bg-red-500 text-white hover:bg-red-700 dark:hover:bg-red-600 disabled:bg-muted disabled:text-white/60 disabled:opacity-60',
     success: 'bg-success text-white hover:bg-success/90 disabled:bg-muted disabled:text-white/60 disabled:opacity-60',
-    danger: 'bg-error text-white hover:bg-error/90 disabled:bg-muted disabled:text-white/60 disabled:opacity-60',
+    danger: 'bg-red-600 dark:bg-red-500 text-white hover:bg-red-700 dark:hover:bg-red-600 disabled:bg-muted disabled:text-white/60 disabled:opacity-60',
 };
 
 const sizes = {

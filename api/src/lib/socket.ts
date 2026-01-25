@@ -4,10 +4,29 @@ import type { EventPayloads, SocketEvent } from '@blokus-ai/shared';
 
 let io: SocketServer | null = null;
 
+// CORS origin checker for socket.io (matches Express CORS config)
+const checkOrigin = (origin: string | undefined): boolean => {
+    if (!origin) return true;
+    if (origin === process.env.FRONTEND_URL) return true;
+    if (process.env.NODE_ENV === 'dev') {
+        const isIPOrigin = /^https?:\/\/\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(:\d+)?$/.test(origin);
+        const isLocalhost = origin.includes('localhost') || origin.includes('127.0.0.1');
+        const isCloudflare = origin.includes('trycloudflare.com');
+        if (isIPOrigin || isLocalhost || isCloudflare) return true;
+    }
+    return false;
+};
+
 export const initializeSocket = (httpServer: HttpServer): SocketServer => {
     io = new SocketServer(httpServer, {
         cors: {
-            origin: process.env.FRONTEND_URL || 'http://localhost:5174',
+            origin: (origin, callback) => {
+                if (checkOrigin(origin)) {
+                    callback(null, true);
+                } else {
+                    callback(new Error('Not allowed by CORS'));
+                }
+            },
             credentials: true,
         },
     });

@@ -4,9 +4,9 @@ import { asyncHandler } from '../../lib/async-handler';
 import { mlHttp } from '../../lib/http';
 import type { DetectResponse } from '@blokus-ai/shared';
 import { BadRequestError, NotFoundError } from '../../error';
-import { getBoardDetectionWithCorrectionBySampleId, upsertBoardDetection, deleteBoardDetection, saveBoardDetectionCorrection, CorrectionData, setVerificationStatus, saveManualLabel, ManualLabelData, getSampleStatusFlags, getSampleStatusFlagsById, createTrainingRun, updateTrainingRun, listTrainingRuns, getTrainingRun, getHumanLabeledImageCount, getTrainingData } from './database';
+import { getBoardDetectionWithCorrectionBySampleId, upsertBoardDetection, deleteBoardDetection, deleteBoardDetections, saveBoardDetectionCorrection, CorrectionData, setVerificationStatus, saveManualLabel, ManualLabelData, getSampleStatusFlags, getSampleStatusFlagsById, getSampleDetectionInfoMap, createTrainingRun, updateTrainingRun, listTrainingRuns, getTrainingRun, deleteTrainingRun, getHumanLabeledImageCount, getTrainingData, getClassifierTrainingData, createDetectionRun, updateDetectionRun, listDetectionRuns, getDetectionRun, deleteDetectionRun, clearAllAiLabels, getSampleIdsForBulkDetection, calculateAverageIoU } from './database';
 import type { SampleStatusFlags } from '@blokus-ai/shared';
-import { listSamples, getSample, getUploadPresignedUrl, getCloudFrontUrl, getThumbnailUrl, generateThumbnail } from './s3';
+import { listSamples, getSample, getUploadPresignedUrl, getCloudFrontUrl, getThumbnailUrl, generateThumbnail, deleteSamples } from './s3';
 import { emitEvent } from '../../lib/socket';
 import { log } from '../../lib/log';
 
@@ -38,6 +38,29 @@ mlRouter.post('/upload/complete', asyncHandler(async (req, res) => {
     res.json({ success: true, thumbnailUrl: getThumbnailUrl(id) });
 }));
 
+// POST /api/ml/thumbnails/regenerate - Regenerate all thumbnails
+mlRouter.post('/thumbnails/regenerate', asyncHandler(async (_req, res) => {
+    const samples = await listSamples();
+    log.info(`Regenerating ${samples.length} thumbnails...`);
+
+    let success = 0;
+    let failed = 0;
+
+    for (const sample of samples) {
+        try {
+            await generateThumbnail(sample.id);
+            success++;
+            log.info(`Regenerated thumbnail ${success}/${samples.length}: ${sample.id}`);
+        } catch (err) {
+            failed++;
+            log.error(`Failed to regenerate thumbnail for ${sample.id}`, { error: err });
+        }
+    }
+
+    log.info(`Thumbnail regeneration complete: ${success} success, ${failed} failed`);
+    res.json({ success, failed, total: samples.length });
+}));
+
 // POST /api/ml/upload - Upload board image (legacy, through API)
 mlRouter.post('/upload', asyncHandler(async (req, res) => {
     const { image } = req.body;
@@ -59,15 +82,18 @@ const defaultStatusFlags: SampleStatusFlags = {
 // GET /api/ml/samples - List all samples from S3
 mlRouter.get('/samples', asyncHandler(async (_req, res) => {
     const s3Samples = await listSamples();
-    const statusMap = await getSampleStatusFlags();
+    const detectionInfoMap = await getSampleDetectionInfoMap();
 
     const samples = s3Samples.map(s => {
-        const status = statusMap.get(s.id) || defaultStatusFlags;
+        const info = detectionInfoMap.get(s.id);
 
         return {
             id: s.id,
             filename: `${s.id}.png`,
-            status,
+            status: info?.status || defaultStatusFlags,
+            ai: info?.ai || null,
+            human: info?.human || null,
+            iou: info?.iou ?? null,
             created_at: s.lastModified.toISOString(),
             imageUrl: getCloudFrontUrl(s.id),
             thumbnailUrl: getThumbnailUrl(s.id),
@@ -102,6 +128,45 @@ mlRouter.get('/samples/:id', asyncHandler(async (req, res) => {
 mlRouter.get('/samples/:id/image', asyncHandler(async (req, res) => {
     const { id } = req.params;
     res.redirect(301, getCloudFrontUrl(id));
+}));
+
+// DELETE /api/ml/samples - Delete multiple samples (images + detections)
+mlRouter.delete('/samples', asyncHandler(async (req, res) => {
+    const { ids } = req.body;
+
+    if (!ids || !Array.isArray(ids) || ids.length === 0) {
+        throw new BadRequestError('ids array is required');
+    }
+
+    // Delete detections from database first
+    const detectionsDeleted = await deleteBoardDetections(ids);
+
+    // Delete images from S3
+    const samplesDeleted = await deleteSamples(ids);
+
+    log.info(`Deleted ${samplesDeleted} samples and ${detectionsDeleted} detections`);
+
+    res.json({
+        deleted: samplesDeleted,
+        detectionsDeleted,
+    });
+}));
+
+// POST /api/ml/detect/test - Test detection with base64 image (proxy to ML service)
+// MUST be defined before /detect/:id to avoid route conflicts
+mlRouter.post('/detect/test', asyncHandler(async (req, res) => {
+    const { image, modelId } = req.body as { image: string; modelId?: string };
+
+    if (!image) {
+        throw new BadRequestError('Image is required');
+    }
+
+    const response = await mlHttp.post('/detect/test', {
+        image,
+        model_id: modelId,
+    });
+
+    res.json(response);
 }));
 
 // POST /api/ml/detect/:id - Run board detection and store result
@@ -183,6 +248,12 @@ mlRouter.get('/training-data', asyncHandler(async (_req, res) => {
     res.json({ samples });
 }));
 
+// GET /api/ml/classifier-training-data - Get human-labeled samples for classifier training
+mlRouter.get('/classifier-training-data', asyncHandler(async (_req, res) => {
+    const samples = await getClassifierTrainingData();
+    res.json({ samples });
+}));
+
 // POST /api/ml/train - Start a new training run
 mlRouter.post('/train', asyncHandler(async (_req, res) => {
     // Get count of human-labeled images (used for training)
@@ -216,6 +287,8 @@ mlRouter.post('/train', asyncHandler(async (_req, res) => {
                 loss?: number;
                 val_accuracy?: number;
                 val_loss?: number;
+                classifier_accuracy?: number;
+                classifier_loss?: number;
             }
             const result = await mlHttp.post<TrainResult>('/train/', { run_id: run.id });
 
@@ -228,6 +301,8 @@ mlRouter.post('/train', asyncHandler(async (_req, res) => {
                 loss: result.loss,
                 valAccuracy: result.val_accuracy,
                 valLoss: result.val_loss,
+                classifierAccuracy: result.classifier_accuracy,
+                classifierLoss: result.classifier_loss,
             });
 
             // Emit completion event
@@ -272,16 +347,241 @@ mlRouter.get('/training-runs/:id', asyncHandler(async (req, res) => {
 // POST /api/ml/training-runs/:id/progress - Receive progress update from ML service
 mlRouter.post('/training-runs/:id/progress', asyncHandler(async (req, res) => {
     const { id } = req.params;
-    const { epoch, totalEpochs, loss, accuracy } = req.body;
+    const { phase, epoch, totalEpochs, loss, accuracy } = req.body;
+
+    log.info(`[DEBUG] Received progress for run ${id}: phase=${phase}, epoch=${epoch}/${totalEpochs}, loss=${loss}, accuracy=${accuracy}`);
 
     // Emit progress event via WebSocket
-    emitEvent('training-run-progress', {
+    const payload = {
         runId: id,
+        phase: phase || 'detection',
         epoch,
         totalEpochs,
         loss,
         accuracy,
+    };
+    log.info(`[DEBUG] Emitting training-run-progress event: ${JSON.stringify(payload)}`);
+    emitEvent('training-run-progress', payload);
+
+    res.json({ success: true });
+}));
+
+// DELETE /api/ml/training-runs/:id - Delete a training run and its model files
+mlRouter.delete('/training-runs/:id', asyncHandler(async (req, res) => {
+    const { id } = req.params;
+
+    const run = await getTrainingRun(id);
+    if (!run) {
+        throw new NotFoundError('Training run not found');
+    }
+
+    // Delete model files via ML service
+    try {
+        await mlHttp.delete(`/models/${id}`);
+    } catch (err) {
+        // Log but don't fail if model deletion fails (might not exist)
+        log.warn(`Failed to delete model files for run ${id}: ${err}`);
+    }
+
+    // Clear all AI labels (detection runs will be cascade-deleted, but we need to clear labels too)
+    const clearedCount = await clearAllAiLabels();
+
+    // Delete from database (cascade deletes detection_runs)
+    await deleteTrainingRun(id);
+
+    // Notify all clients
+    emitEvent('training-run-deleted', { runId: id });
+
+    log.info(`Deleted training run ${id}, cleared ${clearedCount} AI labels`);
+    res.json({ success: true, clearedAiLabels: clearedCount });
+}));
+
+// ============================================================================
+// Detection Run Routes
+// ============================================================================
+
+// POST /api/ml/detection-runs - Start a new bulk detection run
+mlRouter.post('/detection-runs', asyncHandler(async (req, res) => {
+    const { modelId, includeExistingAiLabeled = false } = req.body;
+
+    log.info(`[DEBUG] Starting detection run with modelId: ${modelId}`);
+
+    if (!modelId) {
+        throw new BadRequestError('modelId is required');
+    }
+
+    // Validate that the model exists and is completed
+    const trainingRun = await getTrainingRun(modelId);
+    log.info(`[DEBUG] Found training run: ${JSON.stringify(trainingRun)}`);
+    if (!trainingRun) {
+        throw new NotFoundError('Training run not found');
+    }
+    if (trainingRun.status !== 'completed') {
+        throw new BadRequestError('Training run must be completed to use for detection');
+    }
+
+    // Get all sample IDs from S3
+    const s3Samples = await listSamples();
+    const allSampleIds = s3Samples.map(s => s.id);
+    log.info(`[DEBUG] Found ${allSampleIds.length} samples in S3, includeExistingAiLabeled=${includeExistingAiLabeled}`);
+
+    // Get eligible sample IDs (optionally excluding samples with existing AI detections)
+    const { sampleIds, existingDetectionCount } = await getSampleIdsForBulkDetection(allSampleIds, includeExistingAiLabeled);
+    log.info(`[DEBUG] Found ${sampleIds.length} eligible samples (${existingDetectionCount} already have AI detections, ${includeExistingAiLabeled ? 'included' : 'excluded'})`);
+
+    if (sampleIds.length === 0) {
+        if (!includeExistingAiLabeled && existingDetectionCount > 0) {
+            throw new BadRequestError(`All ${existingDetectionCount} samples already have AI detections. Check "Include samples with existing AI detections" to re-process them.`);
+        } else {
+            throw new BadRequestError('No samples found in S3.');
+        }
+    }
+
+    // Create detection run record
+    const run = await createDetectionRun(modelId, sampleIds.length);
+
+    // Update to running status
+    const runningRun = await updateDetectionRun(run.id, {
+        status: 'running',
+        startedAt: new Date(),
     });
 
+    // Emit start event
+    emitEvent('detection-run-started', { run: runningRun! });
+
+    // Return immediately - detection runs in background
+    res.json(runningRun);
+
+    // Run detection in background (don't await)
+    const startTime = Date.now();
+    (async () => {
+        try {
+            await mlHttp.post('/detect/bulk', {
+                run_id: run.id,
+                model_id: modelId,
+                sample_ids: sampleIds,
+            });
+            // ML service will call back to /detection-runs/:id/complete when done
+        } catch (error) {
+            const durationMs = Date.now() - startTime;
+            const errorMessage = error instanceof Error ? error.message : 'Detection failed';
+
+            const failedRun = await updateDetectionRun(run.id, {
+                status: 'failed',
+                completedAt: new Date(),
+                durationMs,
+                errorMessage,
+            });
+
+            // Emit failure event
+            emitEvent('detection-run-failed', { run: failedRun! });
+            log.error(`Detection run ${run.id} failed`, { error: errorMessage, durationMs });
+        }
+    })();
+}));
+
+// GET /api/ml/detection-runs - List all detection runs
+mlRouter.get('/detection-runs', asyncHandler(async (_req, res) => {
+    const runs = await listDetectionRuns();
+    res.json({ runs });
+}));
+
+// GET /api/ml/detection-runs/:id - Get single detection run
+mlRouter.get('/detection-runs/:id', asyncHandler(async (req, res) => {
+    const { id } = req.params;
+
+    const run = await getDetectionRun(id);
+    if (!run) {
+        throw new NotFoundError('Detection run not found');
+    }
+
+    res.json(run);
+}));
+
+// POST /api/ml/detection-runs/:id/progress - Receive progress update from ML service
+mlRouter.post('/detection-runs/:id/progress', asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const { processedCount, successCount, failedCount, totalCount } = req.body;
+
+    // Update the detection run record
+    await updateDetectionRun(id, {
+        processedCount,
+        successCount,
+        failedCount,
+    });
+
+    // Emit progress event via WebSocket
+    emitEvent('detection-run-progress', {
+        runId: id,
+        processedCount,
+        totalCount,
+        successCount,
+        failedCount,
+    });
+
+    res.json({ success: true });
+}));
+
+// POST /api/ml/detection-runs/:id/complete - ML service calls when detection is complete
+mlRouter.post('/detection-runs/:id/complete', asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const { successCount, failedCount, durationMs } = req.body;
+
+    // Calculate average IoU after detection completes
+    const avgIou = await calculateAverageIoU();
+
+    const completedRun = await updateDetectionRun(id, {
+        status: 'completed',
+        completedAt: new Date(),
+        successCount,
+        failedCount,
+        durationMs,
+        avgIou: avgIou ?? undefined,
+    });
+
+    if (!completedRun) {
+        throw new NotFoundError('Detection run not found');
+    }
+
+    // Emit completion event
+    emitEvent('detection-run-completed', { run: completedRun });
+    log.info(`Detection run ${id} completed`, { successCount, failedCount, durationMs, avgIou });
+
+    res.json({ success: true });
+}));
+
+// DELETE /api/ml/detection-runs/:id - Delete a detection run and clear associated AI labels
+mlRouter.delete('/detection-runs/:id', asyncHandler(async (req, res) => {
+    const { id } = req.params;
+
+    const run = await getDetectionRun(id);
+    if (!run) {
+        throw new NotFoundError('Detection run not found');
+    }
+
+    // Clear all AI labels from board_detections (resets to placeholder values)
+    const clearedCount = await clearAllAiLabels();
+
+    // Delete the detection run record
+    await deleteDetectionRun(id);
+
+    // Notify all clients
+    emitEvent('detection-run-deleted', { runId: id });
+
+    log.info(`Deleted detection run ${id}, cleared ${clearedCount} AI labels`);
+    res.json({ success: true, clearedAiLabels: clearedCount });
+}));
+
+// POST /api/ml/detect/:id/result - Store single detection result (internal, used by ML service)
+mlRouter.post('/detect/:id/result', asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const detection = req.body as DetectResponse;
+
+    // Ensure the sample_id matches
+    if (detection.sample_id !== id) {
+        detection.sample_id = id;
+    }
+
+    await upsertBoardDetection(detection);
     res.json({ success: true });
 }));

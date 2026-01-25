@@ -1,4 +1,4 @@
-import { S3Client, PutObjectCommand, ListObjectsV2Command, HeadObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
+import { S3Client, PutObjectCommand, ListObjectsV2Command, HeadObjectCommand, GetObjectCommand, DeleteObjectsCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { config } from '../../config';
 import sharp from 'sharp';
@@ -100,10 +100,11 @@ export const generateThumbnail = async (id: string): Promise<void> => {
     const response = await s3Client.send(getCommand);
     const originalBuffer = Buffer.from(await response.Body!.transformToByteArray());
 
-    // Resize to max 800px width, convert to JPEG for smaller size
+    // Apply EXIF rotation, resize preserving aspect ratio, convert to JPEG
     const thumbnailBuffer = await sharp(originalBuffer)
-        .resize(800, 800, { fit: 'inside', withoutEnlargement: true })
-        .jpeg({ quality: 80 })
+        .rotate() // Auto-rotate based on EXIF orientation
+        .resize(1200, 1200, { fit: 'inside', withoutEnlargement: true }) // Max 1200px, preserve aspect ratio
+        .jpeg({ quality: 85 })
         .toBuffer();
 
     // Upload thumbnail
@@ -130,4 +131,39 @@ export const thumbnailExists = async (id: string): Promise<boolean> => {
     } catch {
         return false;
     }
+};
+
+export const deleteSamples = async (ids: string[]): Promise<number> => {
+    if (ids.length === 0) {
+        return 0;
+    }
+
+    // Build list of objects to delete (original + thumbnail for each ID)
+    const objects = ids.flatMap(id => [
+        { Key: `${ORIGINALS_PREFIX}${id}.png` },
+        { Key: `${THUMBNAILS_PREFIX}${id}.jpg` },
+    ]);
+
+    // S3 DeleteObjects can handle max 1000 objects per request
+    const batchSize = 1000;
+    let deletedCount = 0;
+
+    for (let i = 0; i < objects.length; i += batchSize) {
+        const batch = objects.slice(i, i + batchSize);
+
+        const command = new DeleteObjectsCommand({
+            Bucket: BUCKET,
+            Delete: {
+                Objects: batch,
+                Quiet: true,
+            },
+        });
+
+        const response = await s3Client.send(command);
+        // Count successful deletions (errors array contains failed deletions)
+        deletedCount += batch.length - (response.Errors?.length ?? 0);
+    }
+
+    // Return number of samples deleted (not objects, so divide by 2)
+    return Math.floor(deletedCount / 2);
 };

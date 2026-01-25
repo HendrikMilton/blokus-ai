@@ -18,12 +18,8 @@ export const useSocketEvent = <T extends SocketEvent>(
     deps: React.DependencyList = []
 ) => {
     useEffect(() => {
-        if (!apiSocket) {
-            console.warn('Socket not initialized');
-            return;
-        }
-
         const handleEvent = (serializedData: string) => {
+            console.log(`[DEBUG] Socket received event '${eventName}':`, serializedData);
             try {
                 const data = JSON.parse(serializedData) as EventPayloads[T];
                 callback(data);
@@ -32,10 +28,11 @@ export const useSocketEvent = <T extends SocketEvent>(
             }
         };
 
+        console.log(`[DEBUG] Socket registering listener for '${eventName}'`);
         apiSocket.on(eventName as string, handleEvent);
 
         return () => {
-            apiSocket?.off(eventName as string, handleEvent);
+            apiSocket.off(eventName as string, handleEvent);
         };
     }, [eventName, ...deps]);
 };

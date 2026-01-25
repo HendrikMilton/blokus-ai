@@ -203,8 +203,9 @@ def detect_board_with_trained_model(image_path: Path, model_id: str) -> BoardDet
             f"bbox=[{x1:.1f}, {y1:.1f}, {bw:.1f}, {bh:.1f}]"
         )
 
-        # Only consider class 0 (board) with decent confidence
-        if cls_id == 0 and conf > best_conf and conf > 0.25:
+        # Only consider class 0 (board) with high confidence
+        # Real boards typically have 99%+ confidence, false positives are 30-70%
+        if cls_id == 0 and conf > best_conf and conf > 0.80:
             best_conf = conf
             best_box = (x1, y1, bw, bh, conf)
             print(f"[detect_board_trained] new best: box[{i}] conf={conf:.4f}")
@@ -212,30 +213,47 @@ def detect_board_with_trained_model(image_path: Path, model_id: str) -> BoardDet
     if best_box:
         x, y, bw, bh, conf = best_box
 
-        # Check if box touches image edges (partial board)
-        margin = 5
-        is_entire = (
-            x > margin and
-            y > margin and
-            x + bw < img_w - margin and
-            y + bh < img_h - margin
-        )
+        # Calculate normalized bbox
+        bbox_dict = {
+            "x": x / img_w,
+            "y": y / img_h,
+            "width": bw / img_w,
+            "height": bh / img_h,
+        }
+
+        # Run classifier to determine if entire board is visible
+        from .classifier import classify_board_visibility
+
+        is_entire, cls_conf = classify_board_visibility(image_path, bbox_dict, model_id)
+
+        # If classifier didn't run (no model), fall back to edge heuristic
+        if cls_conf == 0.0:
+            margin = 5
+            is_entire = (
+                x > margin and
+                y > margin and
+                x + bw < img_w - margin and
+                y + bh < img_h - margin
+            )
+            cls_conf = None
 
         print(
             f"[detect_board_trained] SUCCESS conf={conf:.3f}, is_entire={is_entire}, "
-            f"bbox=[{x/img_w:.3f}, {y/img_h:.3f}, {bw/img_w:.3f}, {bh/img_h:.3f}]"
+            f"cls_conf={cls_conf}, bbox=[{bbox_dict['x']:.3f}, {bbox_dict['y']:.3f}, "
+            f"{bbox_dict['width']:.3f}, {bbox_dict['height']:.3f}]"
         )
 
         return BoardDetection(
             hasBoardDetected=True,
             isEntireBoardVisible=is_entire,
             boundingBox=BoundingBox(
-                x=x / img_w,
-                y=y / img_h,
-                width=bw / img_w,
-                height=bh / img_h,
+                x=bbox_dict["x"],
+                y=bbox_dict["y"],
+                width=bbox_dict["width"],
+                height=bbox_dict["height"],
             ),
             confidence=conf,
+            classifierConfidence=cls_conf,
         )
 
     print(f"[detect_board_trained] no board detected from {len(boxes)} boxes")
@@ -244,4 +262,5 @@ def detect_board_with_trained_model(image_path: Path, model_id: str) -> BoardDet
         isEntireBoardVisible=False,
         boundingBox=None,
         confidence=0.0,
+        classifierConfidence=None,
     )

@@ -13,6 +13,7 @@ class BoardDetection(BaseModel):
     isEntireBoardVisible: bool
     boundingBox: BoundingBox | None
     confidence: float = 0.0
+    classifierConfidence: float | None = None
 
 
 class DetectResponse(BaseModel):

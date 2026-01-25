@@ -25,13 +25,13 @@ export const ConfirmModal = ({
     variant = 'danger',
 }: ConfirmModalProps) => {
     const iconColors = {
-        danger: 'bg-error/10 text-error',
+        danger: 'bg-red-500/10 text-red-500',
         warning: 'bg-warning/10 text-warning',
         info: 'bg-primary/10 text-primary',
     };
 
     const buttonVariants = {
-        danger: 'destructive' as const,
+        danger: 'danger' as const,
         warning: 'primary' as const,
         info: 'primary' as const,
     };

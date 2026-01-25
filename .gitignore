@@ -27,6 +27,10 @@ npm-debug.log*
 # Test coverage
 coverage/
 
+# ML models (generated/trained)
+ml-service/models/
+ml-service/*.pt
+
 # Terraform
 .terraform/
 *.tfstate

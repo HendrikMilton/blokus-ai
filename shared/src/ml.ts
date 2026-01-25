@@ -172,6 +172,7 @@ export interface BoardDetection {
     isEntireBoardVisible: boolean;
     boundingBox: BoundingBox | null;
     confidence: number;
+    classifierConfidence?: number | null;
 }
 
 export interface DetectResponse {
@@ -202,6 +203,30 @@ export interface TrainingRun {
     loss: number | null;
     valAccuracy: number | null;
     valLoss: number | null;
+    classifierAccuracy: number | null;
+    classifierLoss: number | null;
     errorMessage: string | null;
+    createdAt: string;
+}
+
+// ============================================================================
+// Detection Run types
+// ============================================================================
+
+export type DetectionRunStatus = 'pending' | 'running' | 'completed' | 'failed';
+
+export interface DetectionRun {
+    id: string;
+    status: DetectionRunStatus;
+    modelId: string;
+    totalCount: number;
+    processedCount: number;
+    successCount: number | null;
+    failedCount: number | null;
+    startedAt: string | null;
+    completedAt: string | null;
+    durationMs: number | null;
+    errorMessage: string | null;
+    avgIou: number | null;
     createdAt: string;
 }

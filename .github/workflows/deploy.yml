@@ -1,10 +1,12 @@
 name: Deploy
 
-on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
+# Temporarily disabled
+# on:
+#   push:
+#     branches: [main]
+#   pull_request:
+#     branches: [main]
+on: workflow_dispatch
 
 env:
   AWS_REGION: eu-central-1

@@ -2,8 +2,9 @@ import { io, Socket } from 'socket.io-client';
 import { toast } from 'react-hot-toast';
 import { debug } from './debug';
 
-// API base URL
-export const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
+// API base URL - use relative URLs so requests go through Vite proxy (dev) or same origin (prod)
+// This works for localhost, LAN IP, and tunnel access automatically
+export const API_URL = '';
 
 // Storage keys
 export const storageKeys = {
@@ -20,60 +21,35 @@ const generateCid = (): string => {
 const pendingRequests = new Map<string, Promise<unknown>>();
 const REQUEST_TIMEOUT_MS = 120_000;
 
-// Socket.IO instance
-export let apiSocket: Socket | null = null;
+// Socket.IO instance - connect to current origin (works for localhost, LAN, and tunnel)
+export const apiSocket: Socket = io({
+    withCredentials: true,
+});
 
-// Initialize socket connection
-export const initializeSocket = () => {
-    if (apiSocket) {
-        return apiSocket;
-    }
+apiSocket.on('connect', () => {
+    debug.info('Socket connected');
+    joinUserRoom();
+});
 
-    apiSocket = io(API_URL, {
-        withCredentials: true,
-        autoConnect: false,
-    });
-
-    apiSocket.on('connect', () => {
-        debug.info('Socket connected');
-        joinUserRoom();
-    });
-
-    apiSocket.on('disconnect', () => {
-        debug.info('Socket disconnected');
-    });
-
-    return apiSocket;
-};
+apiSocket.on('disconnect', () => {
+    debug.info('Socket disconnected');
+});
 
 // Join user-specific room for targeted events
 export const joinUserRoom = () => {
     const token = localStorage.getItem(storageKeys.accessToken);
-    if (!token || !apiSocket) {
+    if (!token) {
         return;
     }
 
     try {
         const payload = JSON.parse(atob(token.split('.')[1]));
-        if (payload?.sub) {
+        if (payload?.sub && apiSocket.connected) {
             apiSocket.emit('joinRoom', `user-${payload.sub}`);
         }
     } catch {
         // Invalid token format
     }
-};
-
-// Connect socket (call after login)
-export const connectSocket = () => {
-    if (!apiSocket) {
-        initializeSocket();
-    }
-    apiSocket?.connect();
-};
-
-// Disconnect socket (call on logout)
-export const disconnectSocket = () => {
-    apiSocket?.disconnect();
 };
 
 // HTTP client
@@ -159,7 +135,7 @@ const createHttp = () => {
         post: <T>(path: string, body?: unknown) => makeRequest<T>(path, 'POST', body),
         put: <T>(path: string, body?: unknown) => makeRequest<T>(path, 'PUT', body),
         patch: <T>(path: string, body?: unknown) => makeRequest<T>(path, 'PATCH', body),
-        delete: <T>(path: string) => makeRequest<T>(path, 'DELETE'),
+        delete: <T>(path: string, body?: unknown) => makeRequest<T>(path, 'DELETE', body),
     };
 };
 

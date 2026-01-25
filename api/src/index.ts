@@ -19,7 +19,7 @@ const app = express();
 const httpServer = createServer(app);
 
 // Trust proxy for rate limiting behind nginx
-app.set('trust proxy', 1);
+// app.set('trust proxy', 1);
 
 // Initialize database and run migrations on startup
 const initDatabaseAndMigrate = async () => {
@@ -58,12 +58,12 @@ const corsOrigin = (origin: string | undefined, callback: (err: Error | null, al
     if (origin === config.FRONTEND_URL) {
         return callback(null, true);
     }
-    // In dev mode, allow localhost, IP-based origins, and cloudflare tunnels
+    // In dev mode, allow localhost, IP-based origins, and tunnels
     if (config.NODE_ENV === 'dev') {
         const isIPOrigin = /^https?:\/\/\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(:\d+)?$/.test(origin);
         const isLocalhost = origin.includes('localhost') || origin.includes('127.0.0.1');
-        const isCloudflare = origin.includes('trycloudflare.com');
-        if (isIPOrigin || isLocalhost || isCloudflare) {
+        const isTunnel = origin.includes('trycloudflare.com') || origin.includes('ngrok-free.app') || origin.includes('ngrok.io') || origin.includes('hycapital.io');
+        if (isIPOrigin || isLocalhost || isTunnel) {
             return callback(null, true);
         }
     }
@@ -71,7 +71,7 @@ const corsOrigin = (origin: string | undefined, callback: (err: Error | null, al
 };
 
 // Middleware
-app.use(limiter);
+// app.use(limiter);
 app.use(compression());
 app.use(expressLogger);
 app.use(express.json({ limit: '10mb' }));

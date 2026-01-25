@@ -27,15 +27,26 @@ class TrainResponse(BaseModel):
     loss: float
     val_accuracy: float
     val_loss: float
+    classifier_accuracy: float | None = None
+    classifier_loss: float | None = None
 
 
-def report_progress(run_id: str, epoch: int, total_epochs: int, loss: float, accuracy: float):
+def report_progress(
+    run_id: str,
+    phase: str,
+    epoch: int,
+    total_epochs: int,
+    loss: float,
+    accuracy: float,
+):
     """Report training progress back to the API."""
     try:
         url = f"{API_BASE_URL}/api/ml/training-runs/{run_id}/progress"
-        httpx.post(
+        print(f"[DEBUG] Sending progress to {url}: phase={phase}, epoch={epoch}, loss={loss:.4f}, accuracy={accuracy:.4f}")
+        response = httpx.post(
             url,
             json={
+                "phase": phase,
                 "epoch": epoch,
                 "totalEpochs": total_epochs,
                 "loss": loss,
@@ -43,6 +54,7 @@ def report_progress(run_id: str, epoch: int, total_epochs: int, loss: float, acc
             },
             timeout=5.0,
         )
+        print(f"[DEBUG] Progress API response: {response.status_code}")
     except Exception as e:
         print(f"[train] Failed to report progress: {e}")
 
@@ -187,23 +199,37 @@ async def start_training(request: TrainRequest):
             raise ValueError("No training images were downloaded successfully")
 
         # Load base model and train
-        print("[train] Loading YOLOv8 base model...")
-        model = YOLO("yolov8n.pt")  # Start with nano model for fine-tuning
+        # Using YOLO26x (extra-large) - the latest and most accurate model
+        # YOLO26x has 55.7M params and 57.5 mAP on COCO (vs yolov8n's 3.2M/37.3 mAP)
+        # YOLO26 (Jan 2026) removes NMS/DFL bottlenecks for better convergence
+        print("[train] Loading YOLO26x base model...")
+        model = YOLO("yolo26x.pt")
 
-        # Training parameters
-        total_epochs = 50
+        # Training parameters - increased epochs for better convergence
+        # CIoU is already the default loss function (best for bbox regression)
+        total_epochs = 100
 
-        # Add callback for progress reporting
-        def on_train_epoch_end(trainer):
-            """Called at the end of each training epoch."""
+        # Track last known loss for final metrics (not available in results_dict)
+        last_detection_loss = 0.0
+
+        # Add callback for progress reporting after validation (metrics available)
+        def on_fit_epoch_end(trainer):
+            """Called at the end of each epoch after validation."""
+            nonlocal last_detection_loss
             epoch = trainer.epoch + 1  # 0-indexed to 1-indexed
-            metrics = trainer.metrics or {}
-            loss = metrics.get("train/box_loss", 0.0)
-            accuracy = metrics.get("metrics/mAP50", 0.0)
-            print(f"[train] Epoch {epoch}/{total_epochs} - loss: {loss:.4f}, mAP50: {accuracy:.4f}")
-            report_progress(request.run_id, epoch, total_epochs, float(loss), float(accuracy))
+            # Get loss from trainer's loss_items (box, cls, dfl losses)
+            loss = float(trainer.loss_items[0]) if trainer.loss_items is not None else 0.0
+            last_detection_loss = loss  # Store for final metrics
+            # Get mAP50 from validator metrics
+            accuracy = 0.0
+            if hasattr(trainer, 'validator') and trainer.validator and hasattr(trainer.validator, 'metrics'):
+                val_metrics = trainer.validator.metrics
+                if hasattr(val_metrics, 'box'):
+                    accuracy = float(val_metrics.box.map50)
+            print(f"[train] Detection Epoch {epoch}/{total_epochs} - loss: {loss:.4f}, mAP50: {accuracy:.4f}")
+            report_progress(request.run_id, "detection", epoch, total_epochs, loss, accuracy)
 
-        model.add_callback("on_train_epoch_end", on_train_epoch_end)
+        model.add_callback("on_fit_epoch_end", on_fit_epoch_end)
 
         # Train the model
         print("[train] Starting training...")
@@ -228,16 +254,24 @@ async def start_training(request: TrainRequest):
         # Get metrics from training results
         # results.results_dict contains final metrics
         metrics = results.results_dict if hasattr(results, "results_dict") else {}
+        print(f"[DEBUG] results.results_dict keys: {list(metrics.keys())}")
+        print(f"[DEBUG] results.results_dict: {metrics}")
 
-        # Extract metrics - YOLO stores these with specific keys
-        # For detection: metrics/precision, metrics/recall, metrics/mAP50, metrics/mAP50-95
-        # For loss: train/box_loss, train/cls_loss, train/dfl_loss, val/box_loss, etc.
-        accuracy = metrics.get("metrics/mAP50", 0.0)
-        val_accuracy = metrics.get("metrics/mAP50-95", 0.0)
+        # Extract metrics - YOLO stores these with (B) suffix for box metrics
+        accuracy = (
+            metrics.get("metrics/mAP50(B)", 0.0) or
+            metrics.get("metrics/mAP50", 0.0) or
+            0.0
+        )
+        val_accuracy = (
+            metrics.get("metrics/mAP50-95(B)", 0.0) or
+            metrics.get("metrics/mAP50-95", 0.0) or
+            0.0
+        )
 
-        # Loss values (use box loss as primary)
-        loss = metrics.get("train/box_loss", 0.0)
-        val_loss = metrics.get("val/box_loss", 0.0)
+        # Loss values - use last known from training callback
+        loss = last_detection_loss
+        val_loss = 0.0  # Not tracked separately
 
         # Ensure model directory structure
         model_dir = MODELS_DIR / request.run_id
@@ -260,13 +294,48 @@ async def start_training(request: TrainRequest):
                 print(f"[train] Model saved from last.pt to {model_dir / 'best.pt'}")
 
         print(
-            f"[train] Metrics: accuracy={accuracy:.4f}, loss={loss:.4f}, "
+            f"[train] YOLO Metrics: accuracy={accuracy:.4f}, loss={loss:.4f}, "
             f"val_accuracy={val_accuracy:.4f}, val_loss={val_loss:.4f}"
         )
+
+        # Train classifier after YOLO
+        classifier_accuracy = None
+        classifier_loss = None
+
+        try:
+            from .classifier import fetch_classifier_training_data, train_classifier
+
+            print("[train] Fetching classifier training data...")
+            classifier_samples = fetch_classifier_training_data()
+            print(f"[train] Got {len(classifier_samples)} classifier samples")
+
+            if len(classifier_samples) >= 2:
+                print("[train] Starting classifier training...")
+                classifier_epochs = 20  # Match the default in classifier.py
+                classifier_metrics = train_classifier(
+                    run_id=request.run_id,
+                    samples=classifier_samples,
+                    progress_callback=lambda epoch, total, loss, acc: report_progress(
+                        request.run_id, "classifier", epoch, total, loss, acc
+                    ),
+                )
+                classifier_accuracy = classifier_metrics.accuracy
+                classifier_loss = classifier_metrics.loss
+                print(
+                    f"[train] Classifier Metrics: accuracy={classifier_accuracy:.4f}, "
+                    f"loss={classifier_loss:.4f}"
+                )
+            else:
+                print(f"[train] Skipping classifier: need >= 2 samples, got {len(classifier_samples)}")
+        except Exception as e:
+            print(f"[train] Classifier training failed: {e}")
+            # Don't fail the whole training run if classifier fails
 
         return TrainResponse(
             accuracy=float(accuracy),
             loss=float(loss),
             val_accuracy=float(val_accuracy),
             val_loss=float(val_loss),
+            classifier_accuracy=classifier_accuracy,
+            classifier_loss=classifier_loss,
         )

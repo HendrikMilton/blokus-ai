@@ -5,7 +5,9 @@
   "scripts": {
     "start": "bun install && bun run --cwd shared build && bun run --filter '*' dev",
     "build": "bun install && bun run --cwd shared build && bun run --cwd api build && bun run --cwd frontend build",
-    "dev:tunnel": "bun run --cwd shared build && (bun run --cwd api dev & ./tunnel.sh)"
+    "dev:tunnel": "./tunnel-ssh.sh",
+    "dev:cf": "./tunnel-cf.sh",
+    "dev:lt": "./tunnel.sh"
   },
   "devDependencies": {
     "@ryoppippi/unplugin-typia": "^2.6.5",

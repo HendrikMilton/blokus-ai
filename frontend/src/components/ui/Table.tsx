@@ -101,7 +101,7 @@ export function Table<T>({
                                 {columns.map((column) => (
                                     <td
                                         key={String(column.key)}
-                                        className={`px-4 py-3 ${column.className || ''}`}
+                                        className={`px-4 py-3 text-foreground ${column.className || ''}`}
                                     >
                                         {getCellValue(row, column)}
                                     </td>

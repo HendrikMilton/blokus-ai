@@ -6,7 +6,7 @@ import boto3
 
 S3_BUCKET = os.environ.get("AWS_S3_BUCKET", "blokus-ai-images")
 AWS_REGION = os.environ.get("AWS_REGION", "eu-central-1")
-ORIGINALS_PREFIX = "originals/"
+THUMBNAILS_PREFIX = "thumbnails/"
 
 _s3_client = None
 
@@ -19,14 +19,21 @@ def get_s3_client():
 
 
 def download_sample_image(sample_id: str) -> Path:
-    """Download sample image from S3 to a temp file and return the path."""
+    """
+    Download sample thumbnail from S3 to a temp file and return the path.
+
+    Uses thumbnails (800px max, EXIF-corrected) instead of originals to ensure
+    consistency with labeling (which is done on thumbnails in the browser).
+    This fixes EXIF rotation issues where originals have orientation metadata
+    that isn't applied consistently across different image loaders.
+    """
     s3 = get_s3_client()
-    key = f"{ORIGINALS_PREFIX}{sample_id}.png"
+    key = f"{THUMBNAILS_PREFIX}{sample_id}.jpg"
 
     # Create temp file
     temp_dir = Path(tempfile.gettempdir()) / "blokus-ai-samples"
     temp_dir.mkdir(exist_ok=True)
-    local_path = temp_dir / f"{sample_id}.png"
+    local_path = temp_dir / f"{sample_id}.jpg"
 
     # Check if already downloaded
     if local_path.exists():
