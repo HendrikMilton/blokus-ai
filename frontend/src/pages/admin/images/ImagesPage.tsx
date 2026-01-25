@@ -597,11 +597,11 @@ export const ImagesPage = () => {
             </div>
 
             {/* Tabs */}
-            <div className="flex gap-1 border-b border-border">
+            <div className="flex gap-1 border-b border-border overflow-x-auto overflow-y-hidden scrollbar-hide">
                 <button
                     onClick={() => setTab('images')}
                     className={`
-                        px-4 py-2 text-sm font-medium transition-colors -mb-px
+                        px-4 py-2 text-sm font-medium transition-colors -mb-px whitespace-nowrap
                         ${tab === 'images'
             ? 'border-b-2 border-primary text-foreground'
             : 'text-secondary hover:text-foreground'
@@ -616,7 +616,7 @@ export const ImagesPage = () => {
                 <button
                     onClick={() => setTab('models')}
                     className={`
-                        px-4 py-2 text-sm font-medium transition-colors -mb-px
+                        px-4 py-2 text-sm font-medium transition-colors -mb-px whitespace-nowrap
                         ${tab === 'models'
             ? 'border-b-2 border-primary text-foreground'
             : 'text-secondary hover:text-foreground'
@@ -633,7 +633,7 @@ export const ImagesPage = () => {
                 <button
                     onClick={() => setTab('detections')}
                     className={`
-                        px-4 py-2 text-sm font-medium transition-colors -mb-px
+                        px-4 py-2 text-sm font-medium transition-colors -mb-px whitespace-nowrap
                         ${tab === 'detections'
             ? 'border-b-2 border-primary text-foreground'
             : 'text-secondary hover:text-foreground'
@@ -650,7 +650,7 @@ export const ImagesPage = () => {
                 <button
                     onClick={() => setTab('test')}
                     className={`
-                        px-4 py-2 text-sm font-medium transition-colors -mb-px
+                        px-4 py-2 text-sm font-medium transition-colors -mb-px whitespace-nowrap
                         ${tab === 'test'
             ? 'border-b-2 border-primary text-foreground'
             : 'text-secondary hover:text-foreground'

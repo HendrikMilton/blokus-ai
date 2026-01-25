@@ -35,12 +35,15 @@ export const TestModelTab = ({ trainingRuns }: Props) => {
     // Get completed training runs for model selection
     const completedRuns = trainingRuns.filter(r => r.status === 'completed');
 
-    // Set default model to most recent completed run
+    // Track if user has made a selection (to allow selecting "Default")
+    const [hasUserSelected, setHasUserSelected] = useState(false);
+
+    // Set default model to most recent completed run (only on initial load)
     useEffect(() => {
-        if (!selectedModelId && completedRuns.length > 0) {
+        if (!hasUserSelected && !selectedModelId && completedRuns.length > 0) {
             setSelectedModelId(completedRuns[0].id);
         }
-    }, [completedRuns, selectedModelId]);
+    }, [completedRuns, selectedModelId, hasUserSelected]);
 
     const startCamera = useCallback(async () => {
         try {
@@ -189,7 +192,10 @@ export const TestModelTab = ({ trainingRuns }: Props) => {
                 <Select
                     label="Model"
                     value={selectedModelId}
-                    onChange={setSelectedModelId}
+                    onChange={(val) => {
+                        setHasUserSelected(true);
+                        setSelectedModelId(val);
+                    }}
                     options={[
                         { value: '', label: 'Default (YOLO)' },
                         ...completedRuns.map(run => ({

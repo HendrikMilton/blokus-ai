@@ -84,3 +84,12 @@ input:focus, select:focus, textarea:focus {
 .dark input:focus, .dark select:focus, .dark textarea:focus {
     box-shadow: 0 0 0 2px rgba(138, 180, 248, 0.2);
 }
+
+/* Hide scrollbar but keep functionality */
+.scrollbar-hide {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+}
+.scrollbar-hide::-webkit-scrollbar {
+    display: none;
+}
