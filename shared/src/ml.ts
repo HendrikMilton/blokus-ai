@@ -60,7 +60,33 @@ export const PLAYER_COLORS: Record<PlayerColor, string> = {
 // Admin types
 // ============================================================================
 
-export type SampleStatus = 'unlabeled' | 'labeled' | 'verified';
+// Sample can have multiple status flags (not mutually exclusive)
+export interface SampleStatusFlags {
+    aiLabeled: boolean;
+    humanLabeled: boolean;
+    verified: boolean;
+}
+
+// For display purposes - derived from flags (shows highest priority status)
+export type SampleStatusDisplay = 'unlabeled' | 'ai-labeled' | 'human-labeled' | 'verified';
+
+// Get the primary display status from flags (priority: verified > human-labeled > ai-labeled > unlabeled)
+export const getDisplayStatus = (flags: SampleStatusFlags): SampleStatusDisplay => {
+    if (flags.verified) return 'verified';
+    if (flags.humanLabeled) return 'human-labeled';
+    if (flags.aiLabeled) return 'ai-labeled';
+    return 'unlabeled';
+};
+
+// Get all active status labels for display
+export const getStatusLabels = (flags: SampleStatusFlags): SampleStatusDisplay[] => {
+    const labels: SampleStatusDisplay[] = [];
+    if (flags.aiLabeled) labels.push('ai-labeled');
+    if (flags.humanLabeled) labels.push('human-labeled');
+    if (flags.verified) labels.push('verified');
+    if (labels.length === 0) labels.push('unlabeled');
+    return labels;
+};
 export type SampleSource = 'upload' | 'camera' | 'synthetic';
 
 export interface TrainingSample {
@@ -72,7 +98,7 @@ export interface TrainingSample {
     labeled_state: BoardCell[][] | null;
     source: SampleSource;
     notes: string | null;
-    status: SampleStatus;
+    status: SampleStatusFlags;
     labeled_at: string | null;
     features_extracted: boolean;
     created_at: string;
@@ -88,7 +114,7 @@ export interface TrainingSampleCreate {
 export interface TrainingSampleUpdate {
     labeled_state?: BoardCell[][] | null;
     notes?: string | null;
-    status?: SampleStatus;
+    status?: SampleStatusFlags;
 }
 
 export interface TrainingSampleListResponse {
@@ -102,7 +128,8 @@ export interface TrainingSampleListResponse {
 export interface AdminStats {
     total_samples: number;
     unlabeled_samples: number;
-    labeled_samples: number;
+    ai_labeled_samples: number;
+    human_labeled_samples: number;
     verified_samples: number;
     total_cells_labeled: number;
     color_distribution: Record<string, number>;

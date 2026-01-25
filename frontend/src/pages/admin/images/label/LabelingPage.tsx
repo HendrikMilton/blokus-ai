@@ -3,12 +3,14 @@ import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { http, API_URL } from '../../../../api/config';
 import { Button } from '../../../../components/ui/Button';
-import type { BoundingBox, BoardDetection } from '@blokus-ai/shared';
+import type { BoundingBox, BoardDetection, SampleStatusFlags } from '@blokus-ai/shared';
+import { getStatusLabels } from '@blokus-ai/shared';
+import { statusColors, statusLabels, isUnlabeled } from '../../../../lib/status';
 
 interface Sample {
     id: string;
     filename: string;
-    status: 'unlabeled' | 'labeled' | 'verified';
+    status: SampleStatusFlags;
     created_at: string;
     imageUrl?: string;
     thumbnailUrl?: string;
@@ -46,7 +48,7 @@ const ChevronRightIcon = () => (
 
 export const LabelingPage = () => {
     const navigate = useNavigate();
-    const [unlabeledSamples, setUnlabeledSamples] = useState<Sample[]>([]);
+    const [samples, setSamples] = useState<Sample[]>([]);
     const [currentIndex, setCurrentIndex] = useState(0);
     const [isLoading, setIsLoading] = useState(true);
     const [labelData, setLabelData] = useState<LabelData>({
@@ -61,17 +63,16 @@ export const LabelingPage = () => {
     const [dragStartPos, setDragStartPos] = useState<{ x: number; y: number } | null>(null);
     const imageContainerRef = useRef<HTMLDivElement>(null);
 
-    const currentSample = unlabeledSamples[currentIndex] || null;
+    const currentSample = samples[currentIndex] || null;
     const currentDetection = labelData.correction || labelData.prediction;
     const boundingBox = currentDetection?.boundingBox;
 
-    // Load unlabeled samples
+    // Load all samples
     useEffect(() => {
         const loadSamples = async () => {
             try {
                 const data = await http.get<SamplesResponse>('/api/ml/samples');
-                const unlabeled = (data.samples || []).filter(s => s.status === 'unlabeled');
-                setUnlabeledSamples(unlabeled);
+                setSamples(data.samples || []);
             } catch {
                 // Error toast shown by http client
             } finally {
@@ -81,41 +82,37 @@ export const LabelingPage = () => {
         loadSamples();
     }, []);
 
-    // Reset label data when sample changes
+    // Load existing label when sample changes
     useEffect(() => {
-        setLabelData({
-            prediction: null,
-            correction: null,
-            isModified: false,
-        });
-        setIsDrawingBox(false);
-    }, [currentIndex]);
+        const loadExistingLabel = async () => {
+            if (!currentSample) return;
 
-    // Keyboard navigation
-    useEffect(() => {
-        const handleKeyDown = (e: KeyboardEvent) => {
-            // Don't handle if user is typing in an input
-            if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
-                return;
-            }
+            // Reset first
+            setLabelData({
+                prediction: null,
+                correction: null,
+                isModified: false,
+            });
+            setIsDrawingBox(false);
 
-            if (e.key === 'ArrowLeft') {
-                e.preventDefault();
-                goToPrevious();
-            } else if (e.key === 'ArrowRight') {
-                e.preventDefault();
-                goToNext();
-            } else if (e.key === 's' || e.key === 'S') {
-                e.preventDefault();
-                if (currentSample && labelData.correction) {
-                    handleSaveAndNext();
+            // If sample has any labels, load the existing detection
+            if (!isUnlabeled(currentSample.status)) {
+                try {
+                    const data = await http.get<{ detection: { hasBoardDetected: boolean; isEntireBoardVisible: boolean; boundingBox: { x: number; y: number; width: number; height: number } | null } } | null>(`/api/ml/detect/${currentSample.id}`);
+                    if (data?.detection) {
+                        setLabelData({
+                            prediction: data.detection,
+                            correction: null,
+                            isModified: false,
+                        });
+                    }
+                } catch {
+                    // Ignore errors
                 }
             }
         };
-
-        window.addEventListener('keydown', handleKeyDown);
-        return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [currentIndex, unlabeledSamples.length, labelData.correction, currentSample]);
+        loadExistingLabel();
+    }, [currentSample]);
 
     const goToPrevious = () => {
         if (currentIndex > 0) {
@@ -124,7 +121,7 @@ export const LabelingPage = () => {
     };
 
     const goToNext = () => {
-        if (currentIndex < unlabeledSamples.length - 1) {
+        if (currentIndex < samples.length - 1) {
             setCurrentIndex(currentIndex + 1);
         }
     };
@@ -141,12 +138,22 @@ export const LabelingPage = () => {
             });
             toast.success('Saved!');
 
-            // Remove from list and move to next
-            setUnlabeledSamples(prev => prev.filter(s => s.id !== currentSample.id));
-            // Index stays the same (next item slides into current position)
-            // Unless we were at the end
-            if (currentIndex >= unlabeledSamples.length - 1 && currentIndex > 0) {
-                setCurrentIndex(currentIndex - 1);
+            // Update sample status locally (human labeled)
+            setSamples(prev => prev.map(s =>
+                s.id === currentSample.id ? { ...s, status: { ...s.status, humanLabeled: true } } : s
+            ));
+
+            // Reset label data and move to next image
+            setLabelData({
+                prediction: null,
+                correction: null,
+                isModified: false,
+            });
+            setIsDrawingBox(false);
+
+            // Move to next if not at the end
+            if (currentIndex < samples.length - 1) {
+                setCurrentIndex(currentIndex + 1);
             }
         } catch {
             toast.error('Failed to save');
@@ -194,6 +201,55 @@ export const LabelingPage = () => {
         const current = currentDetection?.isEntireBoardVisible ?? false;
         updateCorrection({ isEntireBoardVisible: !current });
     };
+
+    // Keyboard navigation
+    useEffect(() => {
+        const handleKeyDown = (e: KeyboardEvent) => {
+            // Don't handle if user is typing in an input
+            if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
+                return;
+            }
+
+            if (e.key === 'ArrowLeft') {
+                e.preventDefault();
+                goToPrevious();
+            } else if (e.key === 'ArrowRight') {
+                e.preventDefault();
+                goToNext();
+            } else if (e.key === 's' || e.key === 'S') {
+                e.preventDefault();
+                if (currentSample && labelData.correction) {
+                    handleSaveAndNext();
+                }
+            } else if (e.key === 'd' || e.key === 'D') {
+                e.preventDefault();
+                setIsDrawingBox(prev => !prev);
+            } else if (e.key === '1') {
+                e.preventDefault();
+                if (currentDetection?.hasBoardDetected !== true) {
+                    updateCorrection({ hasBoardDetected: true });
+                }
+            } else if (e.key === '2') {
+                e.preventDefault();
+                if (currentDetection?.hasBoardDetected !== false) {
+                    updateCorrection({ hasBoardDetected: false, isEntireBoardVisible: false, boundingBox: null });
+                }
+            } else if (e.key === '3') {
+                e.preventDefault();
+                if (currentDetection?.hasBoardDetected && currentDetection?.isEntireBoardVisible !== true) {
+                    updateCorrection({ isEntireBoardVisible: true });
+                }
+            } else if (e.key === '4') {
+                e.preventDefault();
+                if (currentDetection?.hasBoardDetected && currentDetection?.isEntireBoardVisible !== false) {
+                    updateCorrection({ isEntireBoardVisible: false });
+                }
+            }
+        };
+
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [currentIndex, samples.length, labelData.correction, currentSample, currentDetection, updateCorrection, goToPrevious, goToNext, handleSaveAndNext]);
 
     const getRelativePosition = useCallback((clientX: number, clientY: number) => {
         if (!imageContainerRef.current) return null;
@@ -330,7 +386,7 @@ export const LabelingPage = () => {
         );
     }
 
-    if (unlabeledSamples.length === 0) {
+    if (samples.length === 0) {
         return (
             <div className="space-y-6">
                 <div className="flex items-center gap-3">
@@ -343,13 +399,13 @@ export const LabelingPage = () => {
                     <h1 className="text-xl font-medium text-foreground">Data Labeling</h1>
                 </div>
                 <div className="flex flex-col items-center justify-center py-16 text-center">
-                    <div className="w-16 h-16 bg-success/20 rounded-full flex items-center justify-center mb-4">
-                        <svg className="w-8 h-8 text-success" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                    <div className="w-16 h-16 bg-surface-dim rounded-full flex items-center justify-center mb-4">
+                        <svg className="w-8 h-8 text-muted" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
                         </svg>
                     </div>
-                    <p className="text-foreground font-medium">All images labeled!</p>
-                    <p className="text-sm text-muted mt-1">No unlabeled images remaining</p>
+                    <p className="text-foreground font-medium">No images</p>
+                    <p className="text-sm text-muted mt-1">Upload images to get started</p>
                 </div>
             </div>
         );
@@ -371,9 +427,19 @@ export const LabelingPage = () => {
                     </button>
                     <h1 className="text-xl font-medium text-foreground">Data Labeling</h1>
                 </div>
-                <span className="text-sm text-secondary">
-                    {currentIndex + 1} / {unlabeledSamples.length}
-                </span>
+                <div className="flex items-center gap-2">
+                    {getStatusLabels(currentSample.status).map(label => (
+                        <span
+                            key={label}
+                            className={`px-2 py-0.5 text-xs font-medium rounded-full ${statusColors[label]}`}
+                        >
+                            {statusLabels[label]}
+                        </span>
+                    ))}
+                    <span className="text-sm text-secondary ml-1">
+                        {currentIndex + 1} / {samples.length}
+                    </span>
+                </div>
             </div>
 
             {/* Main content */}
@@ -383,7 +449,7 @@ export const LabelingPage = () => {
                     <button
                         onClick={goToPrevious}
                         disabled={currentIndex === 0}
-                        className="p-2 rounded-lg bg-surface-dim text-foreground hover:bg-primary hover:text-white disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                        className="p-2 rounded-lg bg-surface-dim text-foreground enabled:hover:bg-primary enabled:hover:text-white disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
                     >
                         <ChevronLeftIcon />
                     </button>
@@ -439,8 +505,8 @@ export const LabelingPage = () => {
 
                     <button
                         onClick={goToNext}
-                        disabled={currentIndex === unlabeledSamples.length - 1}
-                        className="p-2 rounded-lg bg-surface-dim text-foreground hover:bg-primary hover:text-white disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                        disabled={currentIndex === samples.length - 1}
+                        className="p-2 rounded-lg bg-surface-dim text-foreground enabled:hover:bg-primary enabled:hover:text-white disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
                     >
                         <ChevronRightIcon />
                     </button>
@@ -448,17 +514,17 @@ export const LabelingPage = () => {
 
                 {/* Keyboard hints */}
                 <p className="text-xs text-muted text-center">
-                    Use <kbd className="px-1.5 py-0.5 bg-surface-dim rounded text-[10px]">←</kbd> <kbd className="px-1.5 py-0.5 bg-surface-dim rounded text-[10px]">→</kbd> to navigate, <kbd className="px-1.5 py-0.5 bg-surface-dim rounded text-[10px]">S</kbd> to save
+                    <kbd className="px-1.5 py-0.5 bg-surface-dim rounded text-[10px]">←</kbd> <kbd className="px-1.5 py-0.5 bg-surface-dim rounded text-[10px]">→</kbd> navigate · <kbd className="px-1.5 py-0.5 bg-surface-dim rounded text-[10px]">D</kbd> draw · <kbd className="px-1.5 py-0.5 bg-surface-dim rounded text-[10px]">1</kbd><kbd className="px-1.5 py-0.5 bg-surface-dim rounded text-[10px]">2</kbd> board · <kbd className="px-1.5 py-0.5 bg-surface-dim rounded text-[10px]">3</kbd><kbd className="px-1.5 py-0.5 bg-surface-dim rounded text-[10px]">4</kbd> visible · <kbd className="px-1.5 py-0.5 bg-surface-dim rounded text-[10px]">S</kbd> save
                 </p>
 
                 {/* Action button */}
                 {isDrawingBox ? (
                     <Button onClick={() => setIsDrawingBox(false)} variant="secondary" className="w-full">
-                        Cancel Drawing
+                        Cancel Drawing (D)
                     </Button>
                 ) : (
                     <Button onClick={() => setIsDrawingBox(true)} variant="secondary" className="w-full">
-                        Draw Bounding Box
+                        Draw Bounding Box (D)
                     </Button>
                 )}
 
@@ -473,53 +539,51 @@ export const LabelingPage = () => {
                 )}
 
                 {/* Label toggles */}
-                {labelData.correction && (
-                    <div className="bg-surface rounded-lg border border-border p-4 space-y-3">
-                        <div className="flex items-center justify-between gap-4">
-                            <span className="text-sm text-secondary">Board detected</span>
-                            <div className="flex rounded-lg overflow-hidden border border-border shrink-0">
-                                <button
-                                    onClick={() => { if (!currentDetection?.hasBoardDetected) toggleBoardDetected(); }}
-                                    className={`px-3 py-1 text-sm font-medium transition-colors ${
-                                        currentDetection?.hasBoardDetected ? 'bg-success text-white' : 'bg-surface hover:bg-surface-dim text-secondary'
-                                    }`}
-                                >
-                                    Yes
-                                </button>
-                                <button
-                                    onClick={() => { if (currentDetection?.hasBoardDetected) toggleBoardDetected(); }}
-                                    className={`px-3 py-1 text-sm font-medium transition-colors ${
-                                        !currentDetection?.hasBoardDetected ? 'bg-error text-white' : 'bg-surface hover:bg-surface-dim text-secondary'
-                                    }`}
-                                >
-                                    No
-                                </button>
-                            </div>
-                        </div>
-
-                        <div className="flex items-center justify-between gap-4">
-                            <span className="text-sm text-secondary">Entire board visible</span>
-                            <div className={`flex rounded-lg overflow-hidden border border-border shrink-0 ${!currentDetection?.hasBoardDetected ? 'opacity-50 pointer-events-none' : ''}`}>
-                                <button
-                                    onClick={() => { if (!currentDetection?.isEntireBoardVisible) toggleEntireBoardVisible(); }}
-                                    className={`px-3 py-1 text-sm font-medium transition-colors ${
-                                        currentDetection?.isEntireBoardVisible ? 'bg-success text-white' : 'bg-surface hover:bg-surface-dim text-secondary'
-                                    }`}
-                                >
-                                    Yes
-                                </button>
-                                <button
-                                    onClick={() => { if (currentDetection?.isEntireBoardVisible) toggleEntireBoardVisible(); }}
-                                    className={`px-3 py-1 text-sm font-medium transition-colors ${
-                                        currentDetection?.hasBoardDetected && !currentDetection?.isEntireBoardVisible ? 'bg-error text-white' : 'bg-surface hover:bg-surface-dim text-secondary'
-                                    }`}
-                                >
-                                    No
-                                </button>
-                            </div>
+                <div className="bg-surface rounded-lg border border-border p-4 space-y-3">
+                    <div className="flex items-center justify-between gap-4">
+                        <span className="text-sm text-secondary">Board detected</span>
+                        <div className="flex rounded-lg overflow-hidden border border-border shrink-0">
+                            <button
+                                onClick={() => { if (!currentDetection?.hasBoardDetected) toggleBoardDetected(); }}
+                                className={`px-3 py-1 text-sm font-medium transition-colors ${
+                                    currentDetection?.hasBoardDetected === true ? 'bg-success text-white' : 'bg-surface hover:bg-surface-dim text-secondary'
+                                }`}
+                            >
+                                Yes (1)
+                            </button>
+                            <button
+                                onClick={() => { if (currentDetection?.hasBoardDetected !== false) updateCorrection({ hasBoardDetected: false, isEntireBoardVisible: false, boundingBox: null }); }}
+                                className={`px-3 py-1 text-sm font-medium transition-colors ${
+                                    currentDetection?.hasBoardDetected === false ? 'bg-error text-white' : 'bg-surface hover:bg-surface-dim text-secondary'
+                                }`}
+                            >
+                                No (2)
+                            </button>
                         </div>
                     </div>
-                )}
+
+                    <div className="flex items-center justify-between gap-4">
+                        <span className="text-sm text-secondary">Entire board visible</span>
+                        <div className={`flex rounded-lg overflow-hidden border border-border shrink-0 ${!currentDetection?.hasBoardDetected ? 'opacity-50 pointer-events-none' : ''}`}>
+                            <button
+                                onClick={() => { if (!currentDetection?.isEntireBoardVisible) toggleEntireBoardVisible(); }}
+                                className={`px-3 py-1 text-sm font-medium transition-colors ${
+                                    currentDetection?.isEntireBoardVisible === true ? 'bg-success text-white' : 'bg-surface hover:bg-surface-dim text-secondary'
+                                }`}
+                            >
+                                Yes (3)
+                            </button>
+                            <button
+                                onClick={() => { if (currentDetection?.isEntireBoardVisible !== false) updateCorrection({ isEntireBoardVisible: false }); }}
+                                className={`px-3 py-1 text-sm font-medium transition-colors ${
+                                    currentDetection?.hasBoardDetected && currentDetection?.isEntireBoardVisible === false ? 'bg-error text-white' : 'bg-surface hover:bg-surface-dim text-secondary'
+                                }`}
+                            >
+                                No (4)
+                            </button>
+                        </div>
+                    </div>
+                </div>
             </div>
         </div>
     );

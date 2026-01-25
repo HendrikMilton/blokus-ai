@@ -3,16 +3,18 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { http, API_URL } from '../../../api/config';
 import { Button } from '../../../components/ui/Button';
+import type { SampleStatusFlags, SampleStatusDisplay } from '@blokus-ai/shared';
+import { getStatusLabels } from '@blokus-ai/shared';
+import { statusColors, statusLabels, isUnlabeled } from '../../../lib/status';
 
-type SampleStatus = 'unlabeled' | 'labeled' | 'verified';
-type FilterStatus = SampleStatus | 'all';
+type FilterStatus = SampleStatusDisplay | 'all';
 
-const validFilters: FilterStatus[] = ['all', 'unlabeled', 'labeled', 'verified'];
+const validFilters: FilterStatus[] = ['all', 'unlabeled', 'ai-labeled', 'human-labeled', 'verified'];
 
 interface Sample {
     id: string;
     filename: string;
-    status: SampleStatus;
+    status: SampleStatusFlags;
     created_at: string;
     imageUrl?: string;
     thumbnailUrl?: string;
@@ -28,12 +30,6 @@ interface PresignResponse {
     key: string;
     imageUrl: string;
 }
-
-const statusColors: Record<SampleStatus, string> = {
-    unlabeled: 'bg-warning/20 text-warning',
-    labeled: 'bg-primary/20 text-primary',
-    verified: 'bg-success/20 text-success',
-};
 
 const PlusIcon = () => (
     <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -52,6 +48,15 @@ const TagIcon = () => (
         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z" />
     </svg>
 );
+
+const matchesFilter = (status: SampleStatusFlags, filter: FilterStatus): boolean => {
+    if (filter === 'all') return true;
+    if (filter === 'unlabeled') return isUnlabeled(status);
+    if (filter === 'ai-labeled') return status.aiLabeled;
+    if (filter === 'human-labeled') return status.humanLabeled;
+    if (filter === 'verified') return status.verified;
+    return true;
+};
 
 export const ImagesPage = () => {
     const navigate = useNavigate();
@@ -133,15 +138,14 @@ export const ImagesPage = () => {
         }
     };
 
-    const filteredSamples = filter === 'all'
-        ? samples
-        : samples.filter(s => s.status === filter);
+    const filteredSamples = samples.filter(s => matchesFilter(s.status, filter));
 
     const counts = {
         all: samples.length,
-        unlabeled: samples.filter(s => s.status === 'unlabeled').length,
-        labeled: samples.filter(s => s.status === 'labeled').length,
-        verified: samples.filter(s => s.status === 'verified').length,
+        unlabeled: samples.filter(s => isUnlabeled(s.status)).length,
+        'ai-labeled': samples.filter(s => s.status.aiLabeled).length,
+        'human-labeled': samples.filter(s => s.status.humanLabeled).length,
+        verified: samples.filter(s => s.status.verified).length,
     };
 
     const formatDate = (dateString: string) => {
@@ -196,20 +200,20 @@ export const ImagesPage = () => {
             </div>
 
             {/* Filter Tabs */}
-            <div className="flex gap-1">
-                {(['all', 'unlabeled', 'labeled', 'verified'] as const).map((status) => (
+            <div className="flex flex-wrap gap-1">
+                {validFilters.map((filterOption) => (
                     <button
-                        key={status}
-                        onClick={() => setFilter(status)}
+                        key={filterOption}
+                        onClick={() => setFilter(filterOption)}
                         className={`
-                            px-2.5 py-1 text-xs font-medium rounded-full transition-colors capitalize
-                            ${filter === status
+                            px-2.5 py-1 text-xs font-medium rounded-full transition-colors
+                            ${filter === filterOption
                         ? 'bg-primary text-white'
                         : 'bg-surface-dim text-secondary hover:text-foreground'
                     }
                         `}
                     >
-                        {status} {counts[status] > 0 && `(${counts[status]})`}
+                        {filterOption === 'all' ? 'All' : statusLabels[filterOption as SampleStatusDisplay]} {counts[filterOption] > 0 && `(${counts[filterOption]})`}
                     </button>
                 ))}
             </div>
@@ -239,35 +243,46 @@ export const ImagesPage = () => {
                 </div>
             ) : (
                 <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
-                    {filteredSamples.map((sample) => (
-                        <button
-                            key={sample.id}
-                            onClick={() => navigate(`/admin/images/${sample.id}`)}
-                            className="bg-surface rounded-lg border border-border overflow-hidden text-left transition-shadow hover:shadow-gcp-hover focus:outline-none focus:ring-2 focus:ring-primary/30"
-                        >
-                            <div className="aspect-square bg-surface-dim">
-                                <img
-                                    src={sample.thumbnailUrl || sample.imageUrl || `${API_URL}/api/ml/samples/${sample.id}/image`}
-                                    alt={`Sample ${sample.id}`}
-                                    className="w-full h-full object-cover"
-                                    loading="lazy"
-                                />
-                            </div>
-                            <div className="p-2">
-                                <div className="flex items-center justify-between gap-2">
-                                    <span className="text-xs text-muted truncate font-mono">
-                                        {sample.id.slice(0, 8)}
-                                    </span>
-                                    <span className={`px-1.5 py-0.5 text-[10px] font-medium rounded-full capitalize ${statusColors[sample.status]}`}>
-                                        {sample.status}
-                                    </span>
+                    {filteredSamples.map((sample) => {
+                        const allLabels = getStatusLabels(sample.status);
+
+                        return (
+                            <button
+                                key={sample.id}
+                                onClick={() => navigate(`/admin/images/${sample.id}`)}
+                                className="bg-surface rounded-lg border border-border overflow-hidden text-left transition-shadow hover:shadow-gcp-hover focus:outline-none focus:ring-2 focus:ring-primary/30"
+                            >
+                                <div className="aspect-square bg-surface-dim">
+                                    <img
+                                        src={sample.thumbnailUrl || sample.imageUrl || `${API_URL}/api/ml/samples/${sample.id}/image`}
+                                        alt={`Sample ${sample.id}`}
+                                        className="w-full h-full object-cover"
+                                        loading="lazy"
+                                    />
                                 </div>
-                                <p className="text-[11px] text-secondary mt-0.5">
-                                    {formatDate(sample.created_at)}
-                                </p>
-                            </div>
-                        </button>
-                    ))}
+                                <div className="p-2">
+                                    <div className="flex items-center justify-between gap-2">
+                                        <span className="text-xs text-muted truncate font-mono">
+                                            {sample.id.slice(0, 8)}
+                                        </span>
+                                        <div className="flex gap-0.5">
+                                            {allLabels.map(label => (
+                                                <span
+                                                    key={label}
+                                                    className={`px-1.5 py-0.5 text-[10px] font-medium rounded-full ${statusColors[label]}`}
+                                                >
+                                                    {statusLabels[label]}
+                                                </span>
+                                            ))}
+                                        </div>
+                                    </div>
+                                    <p className="text-[11px] text-secondary mt-0.5">
+                                        {formatDate(sample.created_at)}
+                                    </p>
+                                </div>
+                            </button>
+                        );
+                    })}
                 </div>
             )}
         </div>

@@ -4,13 +4,14 @@ import toast from 'react-hot-toast';
 import { http, API_URL } from '../../../../api/config';
 import { Button } from '../../../../components/ui/Button';
 import { Select } from '../../../../components/ui/Select';
-import type { BoundingBox, BoardDetection, DetectResponse, DetectorModel } from '@blokus-ai/shared';
-import { DETECTOR_MODELS } from '@blokus-ai/shared';
+import type { BoundingBox, BoardDetection, DetectResponse, DetectorModel, SampleStatusFlags } from '@blokus-ai/shared';
+import { DETECTOR_MODELS, getStatusLabels } from '@blokus-ai/shared';
+import { statusColors, statusLabels } from '../../../../lib/status';
 
 interface Sample {
     id: string;
     filename: string;
-    status: 'unlabeled' | 'labeled' | 'verified';
+    status: SampleStatusFlags;
     created_at: string;
 }
 
@@ -40,12 +41,6 @@ const RefreshIcon = () => (
         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
     </svg>
 );
-
-const statusColors: Record<string, string> = {
-    unlabeled: 'bg-warning/20 text-warning',
-    labeled: 'bg-primary/20 text-primary',
-    verified: 'bg-success/20 text-success',
-};
 
 export const ImageDetailPage = () => {
     const { id } = useParams<{ id: string }>();
@@ -106,7 +101,7 @@ export const ImageDetailPage = () => {
                 correction: null,
                 isModified: false,
             });
-            setSample(prev => prev ? { ...prev, status: 'labeled' } : null);
+            setSample(prev => prev ? { ...prev, status: { ...prev.status, aiLabeled: true } } : null);
             const timeStr = result.processing_time_ms.toFixed(0);
             toast.success(`Detection complete (${timeStr}ms)`);
         } catch {
@@ -127,7 +122,7 @@ export const ImageDetailPage = () => {
                 correction: null,
                 isModified: false,
             });
-            setSample(prev => prev ? { ...prev, status: 'unlabeled' } : null);
+            setSample(prev => prev ? { ...prev, status: { aiLabeled: false, humanLabeled: false, verified: false } } : null);
             toast.success('Detection deleted');
         } catch {
             toast.error('Failed to delete detection');
@@ -362,7 +357,7 @@ export const ImageDetailPage = () => {
         }
         try {
             await http.post(`/api/ml/detect/${id}/verify`, {});
-            setSample(prev => prev ? { ...prev, status: 'verified' } : null);
+            setSample(prev => prev ? { ...prev, status: { ...prev.status, verified: true } } : null);
             toast.success('Image verified');
         } catch {
             toast.error('Failed to verify image');
@@ -375,7 +370,7 @@ export const ImageDetailPage = () => {
         }
         try {
             await http.delete(`/api/ml/detect/${id}/verify`);
-            setSample(prev => prev ? { ...prev, status: 'labeled' } : null);
+            setSample(prev => prev ? { ...prev, status: { ...prev.status, verified: false } } : null);
             toast.success('Verification removed');
         } catch {
             toast.error('Failed to remove verification');
@@ -454,9 +449,14 @@ export const ImageDetailPage = () => {
                         <BackIcon />
                     </button>
                     <h1 className="text-lg sm:text-xl font-medium text-foreground font-mono">{sample.id.slice(0, 8)}</h1>
-                    <span className={`px-2 py-0.5 text-xs font-medium rounded-full capitalize ${statusColors[sample.status]}`}>
-                        {sample.status}
-                    </span>
+                    {getStatusLabels(sample.status).map(label => (
+                        <span
+                            key={label}
+                            className={`px-2 py-0.5 text-xs font-medium rounded-full ${statusColors[label]}`}
+                        >
+                            {statusLabels[label]}
+                        </span>
+                    ))}
                     {labelData.isModified && (
                         <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-warning/20 text-warning">
                             Unsaved
@@ -592,7 +592,7 @@ export const ImageDetailPage = () => {
                     </Button>
                 )}
                 {hasPrediction && (
-                    sample.status === 'verified' ? (
+                    sample.status.verified ? (
                         <Button
                             onClick={handleUnverify}
                             variant="secondary"

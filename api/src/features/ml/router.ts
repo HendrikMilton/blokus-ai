@@ -4,7 +4,8 @@ import { asyncHandler } from '../../lib/async-handler';
 import { mlHttp } from '../../lib/http';
 import type { DetectResponse } from '@blokus-ai/shared';
 import { BadRequestError, NotFoundError } from '../../error';
-import { getBoardDetectionBySampleId, upsertBoardDetection, getLabeledSampleIds, deleteBoardDetection, saveBoardDetectionCorrection, CorrectionData, getVerifiedSampleIds, setVerificationStatus, isDetectionVerified, saveManualLabel, ManualLabelData } from './database';
+import { getBoardDetectionBySampleId, upsertBoardDetection, deleteBoardDetection, saveBoardDetectionCorrection, CorrectionData, setVerificationStatus, saveManualLabel, ManualLabelData, getSampleStatusFlags, getSampleStatusFlagsById } from './database';
+import type { SampleStatusFlags } from '@blokus-ai/shared';
 import { listSamples, getSample, getUploadPresignedUrl, getCloudFrontUrl, getThumbnailUrl, generateThumbnail } from './s3';
 
 export const mlRouter = Router();
@@ -47,22 +48,19 @@ mlRouter.post('/upload', asyncHandler(async (req, res) => {
     res.json(data);
 }));
 
+const defaultStatusFlags: SampleStatusFlags = {
+    aiLabeled: false,
+    humanLabeled: false,
+    verified: false,
+};
+
 // GET /api/ml/samples - List all samples from S3
 mlRouter.get('/samples', asyncHandler(async (_req, res) => {
     const s3Samples = await listSamples();
-
-    const [labeledIds, verifiedIds] = await Promise.all([
-        getLabeledSampleIds(),
-        getVerifiedSampleIds(),
-    ]);
+    const statusMap = await getSampleStatusFlags();
 
     const samples = s3Samples.map(s => {
-        let status = 'unlabeled';
-        if (verifiedIds.has(s.id)) {
-            status = 'verified';
-        } else if (labeledIds.has(s.id)) {
-            status = 'labeled';
-        }
+        const status = statusMap.get(s.id) || defaultStatusFlags;
 
         return {
             id: s.id,
@@ -86,17 +84,7 @@ mlRouter.get('/samples/:id', asyncHandler(async (req, res) => {
         throw new NotFoundError('Sample not found');
     }
 
-    const [detection, verified] = await Promise.all([
-        getBoardDetectionBySampleId(id),
-        isDetectionVerified(id),
-    ]);
-
-    let status = 'unlabeled';
-    if (verified) {
-        status = 'verified';
-    } else if (detection) {
-        status = 'labeled';
-    }
+    const status = await getSampleStatusFlagsById(id) || defaultStatusFlags;
 
     res.json({
         id: s3Sample.id,
