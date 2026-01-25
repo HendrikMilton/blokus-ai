@@ -17,9 +17,10 @@ echo "Starting API..."
 bun run --cwd api dev &
 API_PID=$!
 
-# Start frontend dev server (TUNNEL_MODE disables proxy - ingress handles routing)
+# Start frontend dev server
+# Proxy stays enabled for local access - ingress routes /api directly for tunnel access
 echo "Starting frontend..."
-TUNNEL_MODE=1 bun run --cwd frontend dev &
+bun run --cwd frontend dev &
 FRONTEND_PID=$!
 
 # Wait for frontend to start

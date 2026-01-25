@@ -7,6 +7,12 @@ import { AdminPage } from './pages/admin/AdminPage';
 import { ImagesPage } from './pages/admin/images/ImagesPage';
 import { ImageDetailPage } from './pages/admin/images/[id]/ImageDetailPage';
 import { LabelingPage } from './pages/admin/images/label/LabelingPage';
+import { AdminProvider } from './contexts/AdminContext';
+
+// Wrapper for admin pages that provides AdminContext
+const withAdmin = (element: ReactElement) => (
+    <AdminProvider>{element}</AdminProvider>
+);
 
 export interface RouteConfig {
     path: string;
@@ -37,27 +43,27 @@ export const routes: RouteConfig[] = [
     },
     {
         path: '/admin',
-        element: <AdminPage />,
+        element: withAdmin(<AdminPage />),
         layout: true,
     },
     {
         path: '/admin/images',
-        element: <ImagesPage />,
+        element: withAdmin(<ImagesPage />),
         layout: true,
     },
     {
         path: '/admin/images/label',
-        element: <LabelingPage />,
+        element: withAdmin(<LabelingPage />),
         layout: true,
     },
     {
         path: '/admin/images/label/:id',
-        element: <LabelingPage />,
+        element: withAdmin(<LabelingPage />),
         layout: true,
     },
     {
         path: '/admin/images/:id',
-        element: <ImageDetailPage />,
+        element: withAdmin(<ImageDetailPage />),
         layout: true,
     },
 ];

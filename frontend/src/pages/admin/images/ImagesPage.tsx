@@ -1,18 +1,18 @@
-import { useRef, useState, useEffect, useCallback } from 'react';
+import { useRef, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { http, API_URL } from '../../../api/config';
 import { ML_API } from '../../../api/ml';
 import { Button } from '../../../components/ui/Button';
 import { Select } from '../../../components/ui/Select';
-import type { SampleStatusFlags, TrainingRun, DetectionRun } from '@blokus-ai/shared';
 import { getStatusLabels } from '@blokus-ai/shared';
 import { statusColors, statusLabels } from '../../../lib/status';
-import { TrainedModelsTable, TrainingProgress } from './TrainedModelsTable';
-import { DetectionRunsTable, DetectionProgress } from './DetectionRunsTable';
+import { TrainedModelsTable } from './TrainedModelsTable';
+import { DetectionRunsTable } from './DetectionRunsTable';
 import { RunDetectionModal } from './RunDetectionModal';
 import { TestModelTab } from './TestModelTab';
 import { ConfirmModal } from '../../../components/ui/ConfirmModal';
+import { useAdmin } from '../../../contexts/AdminContext';
 import { useSocketEvent } from '../../../hooks/useSocketEvent';
 
 type Tab = 'images' | 'models' | 'detections' | 'test';
@@ -33,30 +33,6 @@ const sortLabels: Record<SortOption, string> = {
     'lowest-iou': 'Lowest IoU',
     'lowest-confidence': 'Lowest Confidence',
 };
-
-interface Sample {
-    id: string;
-    filename: string;
-    status: SampleStatusFlags;
-    ai: {
-        hasBoardDetected: boolean;
-        isEntireBoardVisible: boolean;
-        confidence: number;
-        classifierConfidence: number | null;
-    } | null;
-    human: {
-        hasBoardDetected: boolean;
-        isEntireBoardVisible: boolean;
-    } | null;
-    iou: number | null;
-    created_at: string;
-    imageUrl?: string;
-    thumbnailUrl?: string;
-}
-
-interface SamplesResponse {
-    samples: Sample[];
-}
 
 interface PresignResponse {
     id: string;
@@ -164,19 +140,30 @@ export const ImagesPage = () => {
     const navigate = useNavigate();
     const [searchParams, setSearchParams] = useSearchParams();
     const fileInputRef = useRef<HTMLInputElement>(null);
+
+    // Get data from context
+    const {
+        samples,
+        isLoadingSamples: isLoading,
+        fetchSamples,
+        addSample,
+        removeSamples,
+        trainingRuns,
+        isLoadingTrainingRuns: isLoadingRuns,
+        trainingProgress,
+        addTrainingRun,
+        removeTrainingRun,
+        detectionRuns,
+        isLoadingDetectionRuns: isLoadingDetections,
+        detectionProgress,
+        addDetectionRun,
+        removeDetectionRun,
+    } = useAdmin();
+
+    // Local UI state
     const [isUploading, setIsUploading] = useState(false);
     const [uploadProgress, setUploadProgress] = useState({ completed: 0, total: 0 });
-    const [isLoading, setIsLoading] = useState(true);
-    const [samples, setSamples] = useState<Sample[]>([]);
     const [isTraining, setIsTraining] = useState(false);
-    const [trainingRuns, setTrainingRuns] = useState<TrainingRun[]>([]);
-    const [isLoadingRuns, setIsLoadingRuns] = useState(false);
-    const [trainingProgress, setTrainingProgress] = useState<Record<string, TrainingProgress>>({});
-
-    // Detection runs state
-    const [detectionRuns, setDetectionRuns] = useState<DetectionRun[]>([]);
-    const [isLoadingDetections, setIsLoadingDetections] = useState(false);
-    const [detectionProgress, setDetectionProgress] = useState<Record<string, DetectionProgress>>({});
     const [isRunningDetection, setIsRunningDetection] = useState(false);
     const [showDetectionModal, setShowDetectionModal] = useState(false);
 
@@ -228,62 +215,6 @@ export const ImagesPage = () => {
         }
         setSearchParams(searchParams);
     };
-
-    const loadSamples = useCallback(async () => {
-        try {
-            const data = await http.get<SamplesResponse>('/api/ml/samples');
-            setSamples(data.samples || []);
-        } catch {
-            // Error toast shown by http client
-        } finally {
-            setIsLoading(false);
-        }
-    }, []);
-
-    const loadTrainingRuns = useCallback(async () => {
-        setIsLoadingRuns(true);
-        try {
-            const runs = await ML_API.getTrainingRuns();
-            setTrainingRuns(runs);
-        } catch {
-            // Error toast shown by http client
-        } finally {
-            setIsLoadingRuns(false);
-        }
-    }, []);
-
-    const loadDetectionRuns = useCallback(async () => {
-        setIsLoadingDetections(true);
-        try {
-            const runs = await ML_API.getDetectionRuns();
-            setDetectionRuns(runs);
-        } catch {
-            // Error toast shown by http client
-        } finally {
-            setIsLoadingDetections(false);
-        }
-    }, []);
-
-    useEffect(() => {
-        loadSamples();
-    }, [loadSamples]);
-
-    useEffect(() => {
-        if (tab === 'models') {
-            loadTrainingRuns();
-        } else if (tab === 'detections') {
-            loadDetectionRuns();
-            // Also load training runs for the modal dropdown
-            if (trainingRuns.length === 0) {
-                loadTrainingRuns();
-            }
-        } else if (tab === 'test') {
-            // Load training runs for model selection
-            if (trainingRuns.length === 0) {
-                loadTrainingRuns();
-            }
-        }
-    }, [tab, loadTrainingRuns, loadDetectionRuns, trainingRuns.length]);
 
     const handleUploadClick = () => {
         fileInputRef.current?.click();
@@ -364,8 +295,7 @@ export const ImagesPage = () => {
         setIsTraining(true);
         try {
             const run = await ML_API.startTraining();
-            // Add the new run to the list immediately
-            setTrainingRuns(prev => [run, ...prev]);
+            addTrainingRun(run);
             toast.success('Training started');
         } catch {
             toast.error('Failed to start training');
@@ -377,8 +307,7 @@ export const ImagesPage = () => {
         setIsRunningDetection(true);
         try {
             const run = await ML_API.startBulkDetection(modelId, includeExistingAiLabeled);
-            // Add the new run to the list immediately
-            setDetectionRuns(prev => [run, ...prev]);
+            addDetectionRun(run);
             setShowDetectionModal(false);
             toast.success('Detection started');
         } catch {
@@ -417,7 +346,7 @@ export const ImagesPage = () => {
         try {
             await http.delete('/api/ml/samples', { ids: Array.from(selectedIds) });
             toast.success(`Deleted ${selectedIds.size} image${selectedIds.size > 1 ? 's' : ''}`);
-            setSamples(prev => prev.filter(s => !selectedIds.has(s.id)));
+            removeSamples(Array.from(selectedIds));
             setSelectedIds(new Set());
             setShowDeleteModal(false);
         } catch {
@@ -427,92 +356,29 @@ export const ImagesPage = () => {
         }
     };
 
-    // Listen for training events via WebSocket
-    useSocketEvent('training-run-progress', (data) => {
-        console.log('[DEBUG] Received training-run-progress event:', data);
-        setTrainingProgress(prev => {
-            const existing = prev[data.runId];
-            return {
-                ...prev,
-                [data.runId]: {
-                    // Preserve detection metrics when classifier phase starts
-                    detectionAccuracy: data.phase === 'detection' ? data.accuracy : existing?.detectionAccuracy,
-                    detectionLoss: data.phase === 'detection' ? data.loss : existing?.detectionLoss,
-                    // Current phase info
-                    phase: data.phase,
-                    epoch: data.epoch,
-                    totalEpochs: data.totalEpochs,
-                    loss: data.loss,
-                    accuracy: data.accuracy,
-                },
-            };
-        });
-    }, []);
-
-    useSocketEvent('training-run-completed', (data) => {
-        setTrainingRuns(prev => prev.map(r => r.id === data.run.id ? data.run : r));
-        setTrainingProgress(prev => {
-            const { [data.run.id]: _removed, ...rest } = prev;
-            void _removed;
-            return rest;
-        });
+    // Socket event handlers for toast notifications (state is managed by AdminContext)
+    useSocketEvent('training-run-completed', () => {
         setIsTraining(false);
         toast.success('Training completed successfully');
     }, []);
 
     useSocketEvent('training-run-failed', (data) => {
-        setTrainingRuns(prev => prev.map(r => r.id === data.run.id ? data.run : r));
-        setTrainingProgress(prev => {
-            const { [data.run.id]: _removed, ...rest } = prev;
-            void _removed;
-            return rest;
-        });
         setIsTraining(false);
         toast.error(data.run.errorMessage || 'Training failed');
     }, []);
 
-    useSocketEvent('training-run-deleted', (data) => {
-        setTrainingRuns(prev => prev.filter(r => r.id !== data.runId));
-    }, []);
-
-    // Listen for detection events via WebSocket
-    useSocketEvent('detection-run-progress', (data) => {
-        setDetectionProgress(prev => ({
-            ...prev,
-            [data.runId]: {
-                processedCount: data.processedCount,
-                totalCount: data.totalCount,
-                successCount: data.successCount,
-                failedCount: data.failedCount,
-            },
-        }));
-    }, []);
-
-    useSocketEvent('detection-run-completed', (data) => {
-        setDetectionRuns(prev => prev.map(r => r.id === data.run.id ? data.run : r));
-        setDetectionProgress(prev => {
-            const { [data.run.id]: _removed, ...rest } = prev;
-            void _removed;
-            return rest;
-        });
+    useSocketEvent('detection-run-completed', () => {
         toast.success('Detection completed successfully');
     }, []);
 
     useSocketEvent('detection-run-failed', (data) => {
-        setDetectionRuns(prev => prev.map(r => r.id === data.run.id ? data.run : r));
-        setDetectionProgress(prev => {
-            const { [data.run.id]: _removed, ...rest } = prev;
-            void _removed;
-            return rest;
-        });
         toast.error(data.run.errorMessage || 'Detection failed');
     }, []);
 
-    useSocketEvent('detection-run-deleted', (data) => {
-        setDetectionRuns(prev => prev.filter(r => r.id !== data.runId));
+    useSocketEvent('detection-run-deleted', () => {
         // Reload samples to reflect cleared AI labels
-        loadSamples();
-    }, [loadSamples]);
+        fetchSamples(true);
+    }, [fetchSamples]);
 
     const filteredSamples = sortSamples(
         samples.filter(s => matchesPreset(s, preset)),
@@ -854,7 +720,7 @@ export const ImagesPage = () => {
                     runs={trainingRuns}
                     loading={isLoadingRuns}
                     progress={trainingProgress}
-                    onDelete={(id) => setTrainingRuns(prev => prev.filter(r => r.id !== id))}
+                    onDelete={removeTrainingRun}
                 />
             ) : tab === 'detections' ? (
                 <DetectionRunsTable
@@ -862,8 +728,8 @@ export const ImagesPage = () => {
                     loading={isLoadingDetections}
                     progress={detectionProgress}
                     onDelete={(id) => {
-                        setDetectionRuns(prev => prev.filter(r => r.id !== id));
-                        loadSamples(); // Reload to reflect cleared AI labels
+                        removeDetectionRun(id);
+                        fetchSamples(true); // Reload to reflect cleared AI labels
                     }}
                 />
             ) : (

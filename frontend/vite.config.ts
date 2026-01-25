@@ -83,27 +83,24 @@ export default defineConfig({
             interval: 100,
         },
         allowedHosts: ['.trycloudflare.com', '.ngrok-free.app', '.ngrok.io', '.loca.lt', '.hycapital.io'],
-        // Proxy only needed for local dev - tunnel ingress handles /api and /socket.io directly
-        proxy: process.env.TUNNEL_MODE
-            ? {}
-            : {
-                  '/api': {
-                      target: 'http://127.0.0.1:3009',
-                      changeOrigin: true,
-                      secure: false,
-                  },
-                  '/ping': {
-                      target: 'http://127.0.0.1:3009',
-                      changeOrigin: true,
-                      secure: false,
-                  },
-                  '/socket.io': {
-                      target: 'http://127.0.0.1:3009',
-                      changeOrigin: true,
-                      secure: false,
-                      ws: true,
-                  },
-              },
+        proxy: {
+            '/api': {
+                target: 'http://127.0.0.1:3009',
+                changeOrigin: true,
+                secure: false,
+            },
+            '/ping': {
+                target: 'http://127.0.0.1:3009',
+                changeOrigin: true,
+                secure: false,
+            },
+            '/socket.io': {
+                target: 'http://127.0.0.1:3009',
+                changeOrigin: true,
+                secure: false,
+                ws: true,
+            },
+        },
     },
     build: {
         chunkSizeWarningLimit: 1000,
