@@ -6,6 +6,7 @@ import { ResultsPage } from './pages/results/ResultsPage';
 import { AdminPage } from './pages/admin/AdminPage';
 import { ImagesPage } from './pages/admin/images/ImagesPage';
 import { ImageDetailPage } from './pages/admin/images/[id]/ImageDetailPage';
+import { LabelingPage } from './pages/admin/images/label/LabelingPage';
 
 export interface RouteConfig {
     path: string;
@@ -42,6 +43,11 @@ export const routes: RouteConfig[] = [
     {
         path: '/admin/images',
         element: <ImagesPage />,
+        layout: true,
+    },
+    {
+        path: '/admin/images/label',
+        element: <LabelingPage />,
         layout: true,
     },
     {

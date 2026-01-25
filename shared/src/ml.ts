@@ -127,6 +127,12 @@ export interface TrainResponse {
 // Board Detection types
 // ============================================================================
 
+export type DetectorModel = 'yolo';
+
+export const DETECTOR_MODELS: { value: DetectorModel; label: string }[] = [
+    { value: 'yolo', label: 'YOLO 26' },
+];
+
 export interface BoundingBox {
     x: number;      // left edge (0-1)
     y: number;      // top edge (0-1)

@@ -17,6 +17,11 @@ interface Config {
     // ML Service
     ML_SERVICE_URL: string;
 
+    // AWS S3
+    AWS_S3_BUCKET: string;
+    AWS_REGION: string;
+    CLOUDFRONT_URL: string;
+
     // Telegram (optional - for error notifications)
     TELEGRAM_BOT_TOKEN: string;
     TELEGRAM_CHAT_ID: string;
@@ -35,6 +40,10 @@ const defaults: Config = {
     FRONTEND_URL: 'http://localhost:5174',
 
     ML_SERVICE_URL: 'http://localhost:8017',
+
+    AWS_S3_BUCKET: 'blokus-ai-images',
+    AWS_REGION: 'eu-central-1',
+    CLOUDFRONT_URL: 'https://d26azxov2byjpl.cloudfront.net',
 
     TELEGRAM_BOT_TOKEN: '',
     TELEGRAM_CHAT_ID: '',

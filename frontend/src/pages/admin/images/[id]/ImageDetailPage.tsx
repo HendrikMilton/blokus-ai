@@ -3,7 +3,9 @@ import { useParams, useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { http, API_URL } from '../../../../api/config';
 import { Button } from '../../../../components/ui/Button';
-import type { BoundingBox, BoardDetection, DetectResponse } from '@blokus-ai/shared';
+import { Select } from '../../../../components/ui/Select';
+import type { BoundingBox, BoardDetection, DetectResponse, DetectorModel } from '@blokus-ai/shared';
+import { DETECTOR_MODELS } from '@blokus-ai/shared';
 
 interface Sample {
     id: string;
@@ -62,6 +64,7 @@ export const ImageDetailPage = () => {
     const [dragStartBox, setDragStartBox] = useState<BoundingBox | null>(null);
     const [dragStartPos, setDragStartPos] = useState<{ x: number; y: number } | null>(null);
     const [isSaving, setIsSaving] = useState(false);
+    const [detectorModel, setDetectorModel] = useState<DetectorModel>('yolo');
     const imageContainerRef = useRef<HTMLDivElement>(null);
 
     // Get the current detection values (correction overrides prediction)
@@ -97,7 +100,7 @@ export const ImageDetailPage = () => {
         }
         setIsRunningDetection(true);
         try {
-            const result = await http.post<DetectResponse>(`/api/ml/detect/${id}`, {});
+            const result = await http.post<DetectResponse>(`/api/ml/detect/${id}`, { model: detectorModel });
             setLabelData({
                 prediction: result.detection,
                 correction: null,
@@ -550,16 +553,29 @@ export const ImageDetailPage = () => {
                 </p>
             )}
 
-            {/* Action buttons */}
-            <div className="grid grid-cols-2 gap-2">
+            {/* Model selector and action buttons */}
+            <div className="flex items-end gap-2">
+                <div className="flex-1">
+                    <Select
+                        label="Detection Model"
+                        value={detectorModel}
+                        options={DETECTOR_MODELS}
+                        onChange={(val) => setDetectorModel(val as DetectorModel)}
+                    />
+                </div>
                 <Button
                     onClick={handleRunDetection}
                     loading={isRunningDetection}
                     leftIcon={hasPrediction ? <RefreshIcon /> : <PlayIcon />}
                     variant="secondary"
+                    className="shrink-0"
                 >
                     {hasPrediction ? 'Re-run' : 'Detect'}
                 </Button>
+            </div>
+
+            {/* Action buttons */}
+            <div className="grid grid-cols-2 gap-2">
                 {isDrawingBox ? (
                     <Button
                         onClick={() => setIsDrawingBox(false)}

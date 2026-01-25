@@ -1,26 +1,31 @@
 import time
-from pathlib import Path
+from typing import Literal
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 
-from .detector import detect_board
+from app.lib.s3 import download_sample_image
+
+from .detector_yolo import detect_board_yolo
 from .schemas import DetectResponse
 
 router = APIRouter()
 
-DATA_DIR = Path(__file__).parent.parent.parent.parent / "data" / "images"
+DetectorModel = Literal["yolo"]
 
 
 @router.post("/{sample_id}", response_model=DetectResponse)
-async def run_detection(sample_id: str):
+async def run_detection(
+    sample_id: str,
+    model: DetectorModel = Query(default="yolo"),
+):
     """Run board detection on a sample image."""
-    filepath = DATA_DIR / f"{sample_id}.png"
-
-    if not filepath.exists():
-        raise HTTPException(status_code=404, detail="Sample not found")
+    try:
+        filepath = download_sample_image(sample_id)
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=f"Sample not found: {e}")
 
     start_time = time.perf_counter()
-    detection = detect_board(filepath)
+    detection = detect_board_yolo(filepath)
     elapsed_ms = (time.perf_counter() - start_time) * 1000
 
     return DetectResponse(
@@ -31,18 +36,21 @@ async def run_detection(sample_id: str):
 
 
 @router.get("/{sample_id}", response_model=DetectResponse)
-async def get_detection(sample_id: str):
+async def get_detection(
+    sample_id: str,
+    model: DetectorModel = Query(default="yolo"),
+):
     """
     Get detection result for a sample.
     Currently runs detection on-demand. Future: return cached result.
     """
-    filepath = DATA_DIR / f"{sample_id}.png"
-
-    if not filepath.exists():
-        raise HTTPException(status_code=404, detail="Sample not found")
+    try:
+        filepath = download_sample_image(sample_id)
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=f"Sample not found: {e}")
 
     start_time = time.perf_counter()
-    detection = detect_board(filepath)
+    detection = detect_board_yolo(filepath)
     elapsed_ms = (time.perf_counter() - start_time) * 1000
 
     return DetectResponse(

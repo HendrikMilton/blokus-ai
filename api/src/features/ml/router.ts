@@ -1,119 +1,126 @@
 import { Router } from 'express';
+import { randomUUID } from 'crypto';
 import { asyncHandler } from '../../lib/async-handler';
-import { mlHttp, HttpError } from '../../lib/http';
-import { config } from '../../config';
+import { mlHttp } from '../../lib/http';
 import type { DetectResponse } from '@blokus-ai/shared';
-import { getBoardDetectionBySampleId, upsertBoardDetection, insertBoardDetection, getLabeledSampleIds, deleteBoardDetection, saveBoardDetectionCorrection, CorrectionData, getVerifiedSampleIds, setVerificationStatus, isDetectionVerified } from './database';
+import { BadRequestError, NotFoundError } from '../../error';
+import { getBoardDetectionBySampleId, upsertBoardDetection, getLabeledSampleIds, deleteBoardDetection, saveBoardDetectionCorrection, CorrectionData, getVerifiedSampleIds, setVerificationStatus, isDetectionVerified, saveManualLabel, ManualLabelData } from './database';
+import { listSamples, getSample, getUploadPresignedUrl, getCloudFrontUrl, getThumbnailUrl, generateThumbnail } from './s3';
 
 export const mlRouter = Router();
 
-const handleMlError = (error: unknown, res: import('express').Response) => {
-    if (error instanceof HttpError) {
-        res.status(error.status).json({ error: error.body?.message || error.body?.detail || 'ML service error' });
-    } else {
-        res.status(503).json({ error: 'ML service unavailable' });
-    }
-};
+// POST /api/ml/upload/presign - Get presigned URL for direct S3 upload
+mlRouter.post('/upload/presign', asyncHandler(async (_req, res) => {
+    const id = randomUUID();
+    const { url, key } = await getUploadPresignedUrl(id);
 
-// POST /api/ml/upload - Upload board image
+    res.json({
+        id,
+        uploadUrl: url,
+        key,
+        imageUrl: getCloudFrontUrl(id),
+        thumbnailUrl: getThumbnailUrl(id),
+    });
+}));
+
+// POST /api/ml/upload/complete - Called after S3 upload to generate thumbnail
+mlRouter.post('/upload/complete', asyncHandler(async (req, res) => {
+    const { id } = req.body;
+
+    if (!id) {
+        throw new BadRequestError('id is required');
+    }
+
+    await generateThumbnail(id);
+    res.json({ success: true, thumbnailUrl: getThumbnailUrl(id) });
+}));
+
+// POST /api/ml/upload - Upload board image (legacy, through API)
 mlRouter.post('/upload', asyncHandler(async (req, res) => {
     const { image } = req.body;
 
     if (!image) {
-        res.status(400).json({ error: 'Image is required' });
-        return;
+        throw new BadRequestError('Image is required');
     }
 
-    try {
-        const data = await mlHttp.post('/upload/', { image });
-        res.json(data);
-    } catch (error) {
-        handleMlError(error, res);
-    }
+    const data = await mlHttp.post('/upload/', { image });
+    res.json(data);
 }));
 
-// GET /api/ml/samples - List all samples
+// GET /api/ml/samples - List all samples from S3
 mlRouter.get('/samples', asyncHandler(async (_req, res) => {
-    try {
-        const data = await mlHttp.get<{ samples: { id: string; status: string }[] }>('/samples/');
+    const s3Samples = await listSamples();
 
-        // Update status based on detection results
-        const [labeledIds, verifiedIds] = await Promise.all([
-            getLabeledSampleIds(),
-            getVerifiedSampleIds(),
-        ]);
-        for (const sample of data.samples) {
-            if (verifiedIds.has(sample.id)) {
-                sample.status = 'verified';
-            } else if (labeledIds.has(sample.id)) {
-                sample.status = 'labeled';
-            }
+    const [labeledIds, verifiedIds] = await Promise.all([
+        getLabeledSampleIds(),
+        getVerifiedSampleIds(),
+    ]);
+
+    const samples = s3Samples.map(s => {
+        let status = 'unlabeled';
+        if (verifiedIds.has(s.id)) {
+            status = 'verified';
+        } else if (labeledIds.has(s.id)) {
+            status = 'labeled';
         }
 
-        res.json(data);
-    } catch (error) {
-        handleMlError(error, res);
-    }
+        return {
+            id: s.id,
+            filename: `${s.id}.png`,
+            status,
+            created_at: s.lastModified.toISOString(),
+            imageUrl: getCloudFrontUrl(s.id),
+            thumbnailUrl: getThumbnailUrl(s.id),
+        };
+    });
+
+    res.json({ samples });
 }));
 
 // GET /api/ml/samples/:id - Get single sample
 mlRouter.get('/samples/:id', asyncHandler(async (req, res) => {
     const { id } = req.params;
 
-    try {
-        const data = await mlHttp.get<{ id: string; filename: string; status: string; created_at: string }>(`/samples/${id}`);
-
-        // Check detection and verification status
-        const [detection, verified] = await Promise.all([
-            getBoardDetectionBySampleId(id),
-            isDetectionVerified(id),
-        ]);
-        if (verified) {
-            data.status = 'verified';
-        } else if (detection) {
-            data.status = 'labeled';
-        }
-
-        res.json(data);
-    } catch (error) {
-        handleMlError(error, res);
+    const s3Sample = await getSample(id);
+    if (!s3Sample) {
+        throw new NotFoundError('Sample not found');
     }
+
+    const [detection, verified] = await Promise.all([
+        getBoardDetectionBySampleId(id),
+        isDetectionVerified(id),
+    ]);
+
+    let status = 'unlabeled';
+    if (verified) {
+        status = 'verified';
+    } else if (detection) {
+        status = 'labeled';
+    }
+
+    res.json({
+        id: s3Sample.id,
+        filename: `${s3Sample.id}.png`,
+        status,
+        created_at: s3Sample.lastModified.toISOString(),
+        imageUrl: getCloudFrontUrl(s3Sample.id),
+    });
 }));
 
-// GET /api/ml/samples/:id/image - Get sample image
+// GET /api/ml/samples/:id/image - Redirect to CloudFront
 mlRouter.get('/samples/:id/image', asyncHandler(async (req, res) => {
     const { id } = req.params;
-
-    try {
-        const response = await fetch(`${config.ML_SERVICE_URL}/samples/${id}/image`);
-
-        if (!response.ok) {
-            res.status(response.status).json({ error: 'Image not found' });
-            return;
-        }
-
-        const contentType = response.headers.get('content-type') || 'image/png';
-        res.setHeader('Content-Type', contentType);
-        res.setHeader('Cache-Control', 'public, max-age=31536000');
-
-        const buffer = await response.arrayBuffer();
-        res.send(Buffer.from(buffer));
-    } catch {
-        res.status(503).json({ error: 'ML service unavailable' });
-    }
+    res.redirect(301, getCloudFrontUrl(id));
 }));
 
 // POST /api/ml/detect/:id - Run board detection and store result
 mlRouter.post('/detect/:id', asyncHandler(async (req, res) => {
     const { id } = req.params;
+    const { model = 'yolo' } = req.body;
 
-    try {
-        const data = await mlHttp.post<DetectResponse>(`/detect/${id}`, {});
-        await upsertBoardDetection(data);
-        res.json(data);
-    } catch (error) {
-        handleMlError(error, res);
-    }
+    const data = await mlHttp.post<DetectResponse>(`/detect/${id}?model=${model}`, {});
+    await upsertBoardDetection(data);
+    res.json(data);
 }));
 
 // GET /api/ml/detect/:id - Get cached detection result only
@@ -139,8 +146,7 @@ mlRouter.patch('/detect/:id/correction', asyncHandler(async (req, res) => {
 
     const updated = await saveBoardDetectionCorrection(id, correction);
     if (!updated) {
-        res.status(404).json({ error: 'Detection not found' });
-        return;
+        throw new NotFoundError('Detection not found');
     }
     res.json({ success: true });
 }));
@@ -151,8 +157,7 @@ mlRouter.post('/detect/:id/verify', asyncHandler(async (req, res) => {
 
     const updated = await setVerificationStatus(id, true);
     if (!updated) {
-        res.status(404).json({ error: 'Detection not found' });
-        return;
+        throw new NotFoundError('Detection not found');
     }
     res.json({ success: true });
 }));
@@ -163,8 +168,16 @@ mlRouter.delete('/detect/:id/verify', asyncHandler(async (req, res) => {
 
     const updated = await setVerificationStatus(id, false);
     if (!updated) {
-        res.status(404).json({ error: 'Detection not found' });
-        return;
+        throw new NotFoundError('Detection not found');
     }
+    res.json({ success: true });
+}));
+
+// POST /api/ml/samples/:id/label - Save manual label (for data labeling without ML detection)
+mlRouter.post('/samples/:id/label', asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const label = req.body as ManualLabelData;
+
+    await saveManualLabel(id, label);
     res.json({ success: true });
 }));

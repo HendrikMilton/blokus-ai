@@ -1,0 +1,135 @@
+import { S3Client, PutObjectCommand, ListObjectsV2Command, HeadObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import { config } from '../../config';
+import sharp from 'sharp';
+
+const s3Client = new S3Client({ region: config.AWS_REGION });
+
+const BUCKET = config.AWS_S3_BUCKET;
+const ORIGINALS_PREFIX = 'originals/';
+const THUMBNAILS_PREFIX = 'thumbnails/';
+
+export interface S3Sample {
+    id: string;
+    key: string;
+    lastModified: Date;
+    size: number;
+}
+
+export async function listSamples(): Promise<S3Sample[]> {
+    const command = new ListObjectsV2Command({
+        Bucket: BUCKET,
+        Prefix: ORIGINALS_PREFIX,
+    });
+
+    const response = await s3Client.send(command);
+    const samples: S3Sample[] = [];
+
+    for (const obj of response.Contents || []) {
+        if (!obj.Key || !obj.Key.endsWith('.png')) continue;
+
+        const filename = obj.Key.replace(ORIGINALS_PREFIX, '');
+        const id = filename.replace('.png', '');
+
+        samples.push({
+            id,
+            key: obj.Key,
+            lastModified: obj.LastModified || new Date(),
+            size: obj.Size || 0,
+        });
+    }
+
+    // Sort by lastModified descending
+    samples.sort((a, b) => b.lastModified.getTime() - a.lastModified.getTime());
+
+    return samples;
+}
+
+export async function getSample(id: string): Promise<S3Sample | null> {
+    const key = `${ORIGINALS_PREFIX}${id}.png`;
+
+    try {
+        const command = new HeadObjectCommand({
+            Bucket: BUCKET,
+            Key: key,
+        });
+
+        const response = await s3Client.send(command);
+
+        return {
+            id,
+            key,
+            lastModified: response.LastModified || new Date(),
+            size: response.ContentLength || 0,
+        };
+    } catch {
+        return null;
+    }
+}
+
+export async function getUploadPresignedUrl(id: string): Promise<{ url: string; key: string }> {
+    const key = `${ORIGINALS_PREFIX}${id}.png`;
+
+    const command = new PutObjectCommand({
+        Bucket: BUCKET,
+        Key: key,
+        ContentType: 'image/png',
+    });
+
+    const url = await getSignedUrl(s3Client, command, { expiresIn: 3600 });
+
+    return { url, key };
+}
+
+export function getCloudFrontUrl(id: string): string {
+    return `${config.CLOUDFRONT_URL}/${ORIGINALS_PREFIX}${id}.png`;
+}
+
+export function getThumbnailUrl(id: string): string {
+    return `${config.CLOUDFRONT_URL}/${THUMBNAILS_PREFIX}${id}.jpg`;
+}
+
+export async function generateThumbnail(id: string): Promise<void> {
+    const originalKey = `${ORIGINALS_PREFIX}${id}.png`;
+    const thumbnailKey = `${THUMBNAILS_PREFIX}${id}.jpg`;
+
+    // Download original from S3
+    const getCommand = new GetObjectCommand({
+        Bucket: BUCKET,
+        Key: originalKey,
+    });
+
+    const response = await s3Client.send(getCommand);
+    const originalBuffer = Buffer.from(await response.Body!.transformToByteArray());
+
+    // Resize to max 800px width, convert to JPEG for smaller size
+    const thumbnailBuffer = await sharp(originalBuffer)
+        .resize(800, 800, { fit: 'inside', withoutEnlargement: true })
+        .jpeg({ quality: 80 })
+        .toBuffer();
+
+    // Upload thumbnail
+    const putCommand = new PutObjectCommand({
+        Bucket: BUCKET,
+        Key: thumbnailKey,
+        Body: thumbnailBuffer,
+        ContentType: 'image/jpeg',
+    });
+
+    await s3Client.send(putCommand);
+}
+
+export async function thumbnailExists(id: string): Promise<boolean> {
+    const key = `${THUMBNAILS_PREFIX}${id}.jpg`;
+
+    try {
+        const command = new HeadObjectCommand({
+            Bucket: BUCKET,
+            Key: key,
+        });
+        await s3Client.send(command);
+        return true;
+    } catch {
+        return false;
+    }
+}

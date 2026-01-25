@@ -117,8 +117,8 @@ export const Select = ({
                                         setSearch('');
                                     }}
                                     className={`
-                                        w-full px-3 py-2 text-sm text-left hover:bg-surface-dim
-                                        ${option.value === value ? 'bg-surface-dim' : ''}
+                                        w-full px-3 py-2 text-sm text-left text-foreground hover:bg-surface-dim
+                                        ${option.value === value ? 'bg-surface-dim text-primary' : ''}
                                     `}
                                 >
                                     {option.label}

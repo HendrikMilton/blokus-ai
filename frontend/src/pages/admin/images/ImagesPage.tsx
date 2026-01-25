@@ -14,15 +14,19 @@ interface Sample {
     filename: string;
     status: SampleStatus;
     created_at: string;
+    imageUrl?: string;
+    thumbnailUrl?: string;
 }
 
 interface SamplesResponse {
     samples: Sample[];
 }
 
-interface UploadResponse {
+interface PresignResponse {
     id: string;
-    filename: string;
+    uploadUrl: string;
+    key: string;
+    imageUrl: string;
 }
 
 const statusColors: Record<SampleStatus, string> = {
@@ -40,6 +44,12 @@ const PlusIcon = () => (
 const BackIcon = () => (
     <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+    </svg>
+);
+
+const TagIcon = () => (
+    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z" />
     </svg>
 );
 
@@ -92,22 +102,29 @@ export const ImagesPage = () => {
         setIsUploading(true);
 
         try {
-            const base64 = await new Promise<string>((resolve, reject) => {
-                const reader = new FileReader();
-                reader.onload = () => {
-                    const result = reader.result as string;
-                    const base64Data = result.split(',')[1];
-                    resolve(base64Data);
-                };
-                reader.onerror = reject;
-                reader.readAsDataURL(file);
+            // Get presigned URL from API
+            const presign = await http.post<PresignResponse>('/api/ml/upload/presign', {});
+
+            // Upload directly to S3
+            const response = await fetch(presign.uploadUrl, {
+                method: 'PUT',
+                body: file,
+                headers: {
+                    'Content-Type': 'image/png',
+                },
             });
 
-            await http.post<UploadResponse>('/api/ml/upload', { image: base64 });
+            if (!response.ok) {
+                throw new Error('Upload failed');
+            }
+
+            // Generate thumbnail
+            await http.post('/api/ml/upload/complete', { id: presign.id });
+
             toast.success('Image uploaded');
             loadSamples();
         } catch {
-            // Error toast shown by http client
+            toast.error('Upload failed');
         } finally {
             setIsUploading(false);
             if (fileInputRef.current) {
@@ -140,7 +157,7 @@ export const ImagesPage = () => {
     return (
         <div className="space-y-6">
             {/* Header */}
-            <div className="flex items-center justify-between">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
                 <div className="flex items-center gap-3">
                     <Link
                         to="/admin"
@@ -160,13 +177,22 @@ export const ImagesPage = () => {
                     onChange={handleFileChange}
                     className="hidden"
                 />
-                <Button
-                    onClick={handleUploadClick}
-                    loading={isUploading}
-                    leftIcon={<PlusIcon />}
-                >
-                    Upload
-                </Button>
+                <div className="flex gap-2">
+                    <Button
+                        onClick={() => navigate('/admin/images/label')}
+                        variant="secondary"
+                        leftIcon={<TagIcon />}
+                    >
+                        Data labeling mode
+                    </Button>
+                    <Button
+                        onClick={handleUploadClick}
+                        loading={isUploading}
+                        leftIcon={<PlusIcon />}
+                    >
+                        Upload
+                    </Button>
+                </div>
             </div>
 
             {/* Filter Tabs */}
@@ -221,7 +247,7 @@ export const ImagesPage = () => {
                         >
                             <div className="aspect-square bg-surface-dim">
                                 <img
-                                    src={`${API_URL}/api/ml/samples/${sample.id}/image`}
+                                    src={sample.thumbnailUrl || sample.imageUrl || `${API_URL}/api/ml/samples/${sample.id}/image`}
                                     alt={`Sample ${sample.id}`}
                                     className="w-full h-full object-cover"
                                     loading="lazy"

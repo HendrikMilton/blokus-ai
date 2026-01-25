@@ -162,3 +162,41 @@ export const setVerificationStatus = async (
         });
     return updated > 0;
 };
+
+export interface ManualLabelData {
+    hasBoardDetected: boolean;
+    isEntireBoardVisible: boolean;
+    boundingBox: { x: number; y: number; width: number; height: number } | null;
+}
+
+export const saveManualLabel = async (
+    sampleId: string,
+    label: ManualLabelData,
+    trx: Knex.Transaction | Knex = knex
+): Promise<void> => {
+    await trx('board_detections')
+        .insert({
+            sample_id: sampleId,
+            // No ML prediction - set these to match corrected values
+            has_board_detected: label.hasBoardDetected,
+            is_entire_board_visible: label.isEntireBoardVisible,
+            confidence: 1.0, // Manual = 100% confidence
+            bbox_x: label.boundingBox?.x ?? null,
+            bbox_y: label.boundingBox?.y ?? null,
+            bbox_width: label.boundingBox?.width ?? null,
+            bbox_height: label.boundingBox?.height ?? null,
+            processing_time_ms: 0,
+            // Also set as corrected since it's human-verified
+            corrected_has_board: label.hasBoardDetected,
+            corrected_is_entire_visible: label.isEntireBoardVisible,
+            corrected_bbox_x: label.boundingBox?.x ?? null,
+            corrected_bbox_y: label.boundingBox?.y ?? null,
+            corrected_bbox_width: label.boundingBox?.width ?? null,
+            corrected_bbox_height: label.boundingBox?.height ?? null,
+            corrected_at: knex.fn.now(),
+            verified_at: knex.fn.now(),
+            updated_at: knex.fn.now(),
+        })
+        .onConflict('sample_id')
+        .merge();
+};
