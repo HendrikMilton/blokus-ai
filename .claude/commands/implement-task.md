@@ -107,6 +107,11 @@ After plan is approved, implement the changes.
 - Add shared types to `shared/src/`
 - Rebuild shared after changes: `cd shared && bun run build`
 
+**Database Migrations:**
+- Create new migration: `bun run --cwd api migrate:make <migration_name>`
+- Migrations run automatically on API startup - no need to run migrate command manually
+- Migration files go in `api/src/migrations/`
+
 ### Track Progress
 
 Use `TodoWrite` to track implementation:

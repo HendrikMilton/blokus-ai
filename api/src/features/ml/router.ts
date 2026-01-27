@@ -4,7 +4,7 @@ import { asyncHandler } from '../../lib/async-handler';
 import { mlHttp } from '../../lib/http';
 import type { DetectResponse } from '@blokus-ai/shared';
 import { BadRequestError, NotFoundError } from '../../error';
-import { getBoardDetectionWithCorrectionBySampleId, upsertBoardDetection, deleteBoardDetection, deleteBoardDetections, saveBoardDetectionCorrection, CorrectionData, setVerificationStatus, saveManualLabel, ManualLabelData, getSampleStatusFlags, getSampleStatusFlagsById, getSampleDetectionInfoMap, createTrainingRun, updateTrainingRun, listTrainingRuns, getTrainingRun, deleteTrainingRun, getHumanLabeledImageCount, getTrainingData, getClassifierTrainingData, createDetectionRun, updateDetectionRun, listDetectionRuns, getDetectionRun, deleteDetectionRun, clearAllAiLabels, getSampleIdsForBulkDetection, calculateAverageIoU } from './database';
+import { getBoardDetectionWithCorrectionBySampleId, upsertModelDetection, deleteBoardDetection, deleteBoardDetections, saveBoardDetectionCorrection, CorrectionData, setVerificationStatus, saveManualLabel, ManualLabelData, getSampleStatusFlagsById, getSampleDetectionInfoMap, createTrainingRun, updateTrainingRun, listTrainingRuns, getTrainingRun, deleteTrainingRun, getHumanLabeledImageCount, getTrainingData, getClassifierTrainingData, createDetectionRun, updateDetectionRun, listDetectionRuns, getDetectionRun, deleteDetectionRun, getSampleIdsForBulkDetection, calculateAverageIoU } from './database';
 import type { SampleStatusFlags } from '@blokus-ai/shared';
 import { listSamples, getSample, getUploadPresignedUrl, getCloudFrontUrl, getThumbnailUrl, generateThumbnail, deleteSamples } from './s3';
 import { emitEvent } from '../../lib/socket';
@@ -80,9 +80,12 @@ const defaultStatusFlags: SampleStatusFlags = {
 };
 
 // GET /api/ml/samples - List all samples from S3
-mlRouter.get('/samples', asyncHandler(async (_req, res) => {
+// Optional query param: ?modelId= to filter AI detections by model
+mlRouter.get('/samples', asyncHandler(async (req, res) => {
+    const modelId = req.query.modelId as string | undefined;
+
     const s3Samples = await listSamples();
-    const detectionInfoMap = await getSampleDetectionInfoMap();
+    const detectionInfoMap = await getSampleDetectionInfoMap(modelId || null);
 
     const samples = s3Samples.map(s => {
         const info = detectionInfoMap.get(s.id);
@@ -174,10 +177,16 @@ mlRouter.post('/detect/:id', asyncHandler(async (req, res) => {
     const { id } = req.params;
     const { modelId } = req.body;
 
-    // Build query params - if modelId is provided, use it for trained model detection
-    const queryParams = modelId ? `?model_id=${modelId}` : '';
+    if (!modelId) {
+        throw new BadRequestError('modelId is required');
+    }
+
+    // Run detection with the specified model
+    const queryParams = `?model_id=${modelId}`;
     const data = await mlHttp.post<DetectResponse>(`/detect/${id}${queryParams}`, {});
-    await upsertBoardDetection(data);
+
+    // Store in model_detections table
+    await upsertModelDetection(data, modelId);
     res.json(data);
 }));
 
@@ -255,8 +264,11 @@ mlRouter.post('/samples/:id/label', asyncHandler(async (req, res) => {
 // ============================================================================
 
 // GET /api/ml/training-data - Get human-labeled samples for training
-mlRouter.get('/training-data', asyncHandler(async (_req, res) => {
-    const samples = await getTrainingData();
+// Optional query param: ?sampleIds=id1,id2,id3 to filter by specific samples
+mlRouter.get('/training-data', asyncHandler(async (req, res) => {
+    const sampleIdsParam = req.query.sampleIds as string | undefined;
+    const sampleIds = sampleIdsParam ? sampleIdsParam.split(',') : undefined;
+    const samples = await getTrainingData(sampleIds);
     res.json({ samples });
 }));
 
@@ -267,11 +279,17 @@ mlRouter.get('/classifier-training-data', asyncHandler(async (_req, res) => {
 }));
 
 // POST /api/ml/train - Start a new training run
-mlRouter.post('/train', asyncHandler(async (_req, res) => {
+mlRouter.post('/train', asyncHandler(async (req, res) => {
+    const { sampleIds } = req.body as { sampleIds?: string[] };
+
     // Get count of human-labeled images (used for training)
-    const imageCount = await getHumanLabeledImageCount();
+    // If sampleIds provided, only count those that are human-labeled
+    const imageCount = await getHumanLabeledImageCount(sampleIds);
 
     if (imageCount === 0) {
+        if (sampleIds && sampleIds.length > 0) {
+            throw new BadRequestError('None of the selected images have human labels');
+        }
         throw new BadRequestError('No human-labeled images available for training');
     }
 
@@ -302,7 +320,7 @@ mlRouter.post('/train', asyncHandler(async (_req, res) => {
                 classifier_accuracy?: number;
                 classifier_loss?: number;
             }
-            const result = await mlHttp.post<TrainResult>('/train/', { run_id: run.id });
+            const result = await mlHttp.post<TrainResult>('/train/', { run_id: run.id, sample_ids: sampleIds });
 
             const durationMs = Date.now() - startTime;
             const completedRun = await updateTrainingRun(run.id, {
@@ -395,17 +413,17 @@ mlRouter.delete('/training-runs/:id', asyncHandler(async (req, res) => {
         log.warn(`Failed to delete model files for run ${id}: ${err}`);
     }
 
-    // Clear all AI labels (detection runs will be cascade-deleted, but we need to clear labels too)
-    const clearedCount = await clearAllAiLabels();
+    // model_detections are cascade-deleted when training_run is deleted
+    // detection_runs are also cascade-deleted
 
-    // Delete from database (cascade deletes detection_runs)
+    // Delete from database (cascade deletes model_detections and detection_runs)
     await deleteTrainingRun(id);
 
     // Notify all clients
     emitEvent('training-run-deleted', { runId: id });
 
-    log.info(`Deleted training run ${id}, cleared ${clearedCount} AI labels`);
-    res.json({ success: true, clearedAiLabels: clearedCount });
+    log.info(`Deleted training run ${id}`);
+    res.json({ success: true });
 }));
 
 // ============================================================================
@@ -437,9 +455,9 @@ mlRouter.post('/detection-runs', asyncHandler(async (req, res) => {
     const allSampleIds = s3Samples.map(s => s.id);
     log.info(`[DEBUG] Found ${allSampleIds.length} samples in S3, includeExistingAiLabeled=${includeExistingAiLabeled}`);
 
-    // Get eligible sample IDs (optionally excluding samples with existing AI detections)
-    const { sampleIds, existingDetectionCount } = await getSampleIdsForBulkDetection(allSampleIds, includeExistingAiLabeled);
-    log.info(`[DEBUG] Found ${sampleIds.length} eligible samples (${existingDetectionCount} already have AI detections, ${includeExistingAiLabeled ? 'included' : 'excluded'})`);
+    // Get eligible sample IDs (optionally excluding samples with existing AI detections for this model)
+    const { sampleIds, existingDetectionCount } = await getSampleIdsForBulkDetection(allSampleIds, modelId, includeExistingAiLabeled);
+    log.info(`[DEBUG] Found ${sampleIds.length} eligible samples (${existingDetectionCount} already have AI detections for this model, ${includeExistingAiLabeled ? 'included' : 'excluded'})`);
 
     if (sampleIds.length === 0) {
         if (!includeExistingAiLabeled && existingDetectionCount > 0) {
@@ -539,8 +557,14 @@ mlRouter.post('/detection-runs/:id/complete', asyncHandler(async (req, res) => {
     const { id } = req.params;
     const { successCount, failedCount, durationMs } = req.body;
 
-    // Calculate average IoU after detection completes
-    const avgIou = await calculateAverageIoU();
+    // Get the detection run to find the model ID
+    const detectionRun = await getDetectionRun(id);
+    if (!detectionRun) {
+        throw new NotFoundError('Detection run not found');
+    }
+
+    // Calculate average IoU after detection completes (for this model)
+    const avgIou = await calculateAverageIoU(detectionRun.modelId);
 
     const completedRun = await updateDetectionRun(id, {
         status: 'completed',
@@ -551,18 +575,15 @@ mlRouter.post('/detection-runs/:id/complete', asyncHandler(async (req, res) => {
         avgIou: avgIou ?? undefined,
     });
 
-    if (!completedRun) {
-        throw new NotFoundError('Detection run not found');
-    }
-
     // Emit completion event
-    emitEvent('detection-run-completed', { run: completedRun });
+    emitEvent('detection-run-completed', { run: completedRun! });
     log.info(`Detection run ${id} completed`, { successCount, failedCount, durationMs, avgIou });
 
     res.json({ success: true });
 }));
 
-// DELETE /api/ml/detection-runs/:id - Delete a detection run and clear associated AI labels
+// DELETE /api/ml/detection-runs/:id - Delete a detection run
+// Note: Model detections remain in model_detections table (associated with the training_run/model)
 mlRouter.delete('/detection-runs/:id', asyncHandler(async (req, res) => {
     const { id } = req.params;
 
@@ -571,29 +592,32 @@ mlRouter.delete('/detection-runs/:id', asyncHandler(async (req, res) => {
         throw new NotFoundError('Detection run not found');
     }
 
-    // Clear all AI labels from board_detections (resets to placeholder values)
-    const clearedCount = await clearAllAiLabels();
-
     // Delete the detection run record
+    // Note: This doesn't delete model_detections - they're associated with the model, not the run
     await deleteDetectionRun(id);
 
     // Notify all clients
     emitEvent('detection-run-deleted', { runId: id });
 
-    log.info(`Deleted detection run ${id}, cleared ${clearedCount} AI labels`);
-    res.json({ success: true, clearedAiLabels: clearedCount });
+    log.info(`Deleted detection run ${id}`);
+    res.json({ success: true });
 }));
 
 // POST /api/ml/detect/:id/result - Store single detection result (internal, used by ML service)
 mlRouter.post('/detect/:id/result', asyncHandler(async (req, res) => {
     const { id } = req.params;
+    const { modelId } = req.query;
     const detection = req.body as DetectResponse;
+
+    if (!modelId || typeof modelId !== 'string') {
+        throw new BadRequestError('modelId query param is required');
+    }
 
     // Ensure the sample_id matches
     if (detection.sample_id !== id) {
         detection.sample_id = id;
     }
 
-    await upsertBoardDetection(detection);
+    await upsertModelDetection(detection, modelId);
     res.json({ success: true });
 }));

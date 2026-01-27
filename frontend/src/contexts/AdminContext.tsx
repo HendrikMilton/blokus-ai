@@ -35,6 +35,9 @@ export const [AdminProvider, useAdmin] = makeContext(() => {
     const [isLoadingSamples, setIsLoadingSamples] = useState(true);
     const [hasFetchedSamples, setHasFetchedSamples] = useState(false);
 
+    // Selected model for viewing detections (null = latest)
+    const [selectedModelId, setSelectedModelId] = useState<string | null>(null);
+
     // Training runs state
     const [trainingRuns, setTrainingRuns] = useState<TrainingRun[]>([]);
     const [isLoadingTrainingRuns, setIsLoadingTrainingRuns] = useState(false);
@@ -47,13 +50,18 @@ export const [AdminProvider, useAdmin] = makeContext(() => {
     const [hasFetchedDetectionRuns, setHasFetchedDetectionRuns] = useState(false);
     const [detectionProgress, setDetectionProgress] = useState<Record<string, DetectionProgress>>({});
 
-    // Fetch samples
-    const fetchSamples = useCallback(async (forceFetch = false) => {
-        if (hasFetchedSamples && !forceFetch) return;
+    // Fetch samples with optional model filter
+    const fetchSamples = useCallback(async (forceFetch = false, modelId?: string | null) => {
+        if (hasFetchedSamples && !forceFetch) {
+            return;
+        }
 
         setIsLoadingSamples(true);
         try {
-            const data = await http.get<SamplesResponse>('/api/ml/samples');
+            const url = modelId
+                ? `/api/ml/samples?modelId=${modelId}`
+                : '/api/ml/samples';
+            const data = await http.get<SamplesResponse>(url);
             setSamples(data.samples || []);
             setHasFetchedSamples(true);
         } catch {
@@ -65,7 +73,9 @@ export const [AdminProvider, useAdmin] = makeContext(() => {
 
     // Fetch training runs
     const fetchTrainingRuns = useCallback(async (forceFetch = false) => {
-        if (hasFetchedTrainingRuns && !forceFetch) return;
+        if (hasFetchedTrainingRuns && !forceFetch) {
+            return;
+        }
 
         setIsLoadingTrainingRuns(true);
         try {
@@ -81,7 +91,9 @@ export const [AdminProvider, useAdmin] = makeContext(() => {
 
     // Fetch detection runs
     const fetchDetectionRuns = useCallback(async (forceFetch = false) => {
-        if (hasFetchedDetectionRuns && !forceFetch) return;
+        if (hasFetchedDetectionRuns && !forceFetch) {
+            return;
+        }
 
         setIsLoadingDetectionRuns(true);
         try {
@@ -170,9 +182,9 @@ export const [AdminProvider, useAdmin] = makeContext(() => {
             const { [data.run.id]: _, ...rest } = prev;
             return rest;
         });
-        // Refresh samples to get updated detection results
-        fetchSamples(true);
-    }, [fetchSamples]);
+        // Refresh samples to get updated detection results for the current model
+        fetchSamples(true, selectedModelId);
+    }, [fetchSamples, selectedModelId]);
 
     useSocketEvent('detection-run-failed', (data) => {
         setDetectionRuns(prev => prev.map(r => r.id === data.run.id ? data.run : r));
@@ -225,6 +237,10 @@ export const [AdminProvider, useAdmin] = makeContext(() => {
         updateSample,
         removeSample,
         removeSamples,
+
+        // Selected model for viewing detections
+        selectedModelId,
+        setSelectedModelId,
 
         // Training runs
         trainingRuns,

@@ -36,7 +36,9 @@ const calculateIoU = (box1: BoundingBox, box2: BoundingBox): number => {
     const box2Area = box2.width * box2.height;
     const unionArea = box1Area + box2Area - intersectionArea;
 
-    if (unionArea === 0) return 0;
+    if (unionArea === 0) {
+        return 0;
+    }
     return intersectionArea / unionArea;
 };
 
@@ -163,7 +165,9 @@ export const ImageDetailPage = () => {
     }, []);
 
     const runDetection = useCallback(async () => {
-        if (!id || !selectedModelId) return;
+        if (!id || !selectedModelId) {
+            return;
+        }
 
         setIsDetecting(true);
         try {

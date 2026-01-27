@@ -112,7 +112,7 @@ export const LabelingPage = () => {
             }
         };
         loadSamples();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
     }, []); // Only run once on mount
 
     // Load existing label when sample changes

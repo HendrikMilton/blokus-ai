@@ -6,14 +6,20 @@ let io: SocketServer | null = null;
 
 // CORS origin checker for socket.io (matches Express CORS config)
 const checkOrigin = (origin: string | undefined): boolean => {
-    if (!origin) return true;
-    if (origin === process.env.FRONTEND_URL) return true;
+    if (!origin) {
+        return true;
+    }
+    if (origin === process.env.FRONTEND_URL) {
+        return true;
+    }
     if (process.env.NODE_ENV === 'dev') {
         const isIPOrigin = /^https?:\/\/\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(:\d+)?$/.test(origin);
         const isLocalhost = origin.includes('localhost') || origin.includes('127.0.0.1');
         const isCloudflare = origin.includes('trycloudflare.com');
         const isHycapital = origin.includes('hycapital.io');
-        if (isIPOrigin || isLocalhost || isCloudflare || isHycapital) return true;
+        if (isIPOrigin || isLocalhost || isCloudflare || isHycapital) {
+            return true;
+        }
     }
     return false;
 };

@@ -94,7 +94,7 @@ export const TestModelTab = ({ trainingRuns }: Props) => {
         if (stream) {
             startCamera();
         }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
     }, [facingMode]);
 
     // Connect stream to video element when both are available
@@ -117,7 +117,9 @@ export const TestModelTab = ({ trainingRuns }: Props) => {
     }, [stream]);
 
     const captureAndDetect = useCallback(async () => {
-        if (!videoRef.current || !canvasRef.current) return;
+        if (!videoRef.current || !canvasRef.current) {
+            return;
+        }
 
         const video = videoRef.current;
         const canvas = canvasRef.current;
@@ -128,7 +130,9 @@ export const TestModelTab = ({ trainingRuns }: Props) => {
 
         // Draw video frame to canvas
         const ctx = canvas.getContext('2d');
-        if (!ctx) return;
+        if (!ctx) {
+            return;
+        }
         ctx.drawImage(video, 0, 0);
 
         // Get base64 image

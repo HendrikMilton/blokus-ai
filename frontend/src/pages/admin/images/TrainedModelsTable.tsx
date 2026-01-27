@@ -155,7 +155,9 @@ const getColumns = (
                 const value = liveProgress.phase === 'detection'
                     ? liveProgress.accuracy
                     : liveProgress.detectionAccuracy;
-                if (value) return formatPercent(value);
+                if (value) {
+                    return formatPercent(value);
+                }
             }
             return formatPercent(row.accuracy);
         },
@@ -170,7 +172,9 @@ const getColumns = (
                 const value = liveProgress.phase === 'detection'
                     ? liveProgress.loss
                     : liveProgress.detectionLoss;
-                if (value) return formatLoss(value);
+                if (value) {
+                    return formatLoss(value);
+                }
             }
             return formatLoss(row.loss);
         },

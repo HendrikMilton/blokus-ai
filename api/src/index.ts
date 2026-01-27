@@ -19,7 +19,7 @@ const app = express();
 const httpServer = createServer(app);
 
 // Trust proxy for rate limiting behind nginx
-// app.set('trust proxy', 1);
+app.set('trust proxy', 1);
 
 // Initialize database and run migrations on startup
 const initDatabaseAndMigrate = async () => {
@@ -71,7 +71,7 @@ const corsOrigin = (origin: string | undefined, callback: (err: Error | null, al
 };
 
 // Middleware
-// app.use(limiter);
+app.use(limiter);
 app.use(compression());
 app.use(expressLogger);
 app.use(express.json({ limit: '10mb' }));

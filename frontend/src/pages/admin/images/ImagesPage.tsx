@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useRef, useState, useEffect, useMemo } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { http, API_URL } from '../../../api/config';
@@ -85,54 +85,66 @@ const DetectIcon = () => (
 
 const matchesPreset = (sample: Sample, preset: FilterPreset): boolean => {
     switch (preset) {
-        case 'all':
-            return true;
-        case 'unlabeled':
-            return !sample.status.humanLabeled;
-        case 'false-positives':
-            // AI says board, human says no board
-            return sample.ai?.hasBoardDetected === true && sample.human?.hasBoardDetected === false;
-        case 'false-negatives':
-            // AI says no board, human says board
-            return sample.ai?.hasBoardDetected === false && sample.human?.hasBoardDetected === true;
-        case 'low-iou':
-            // Both have bboxes but IoU < 80%
-            return sample.iou !== null && sample.iou < 0.8;
-        case 'disagreements':
-            // AI and human disagree on board detection
-            return sample.ai !== null && sample.human !== null &&
+    case 'all':
+        return true;
+    case 'unlabeled':
+        return !sample.status.humanLabeled;
+    case 'false-positives':
+        // AI says board, human says no board
+        return sample.ai?.hasBoardDetected === true && sample.human?.hasBoardDetected === false;
+    case 'false-negatives':
+        // AI says no board, human says board
+        return sample.ai?.hasBoardDetected === false && sample.human?.hasBoardDetected === true;
+    case 'low-iou':
+        // Both have bboxes but IoU < 80%
+        return sample.iou !== null && sample.iou < 0.8;
+    case 'disagreements':
+        // AI and human disagree on board detection
+        return sample.ai !== null && sample.human !== null &&
                 sample.ai.hasBoardDetected !== sample.human.hasBoardDetected;
-        default:
-            return true;
+    default:
+        return true;
     }
 };
 
 const sortSamples = (samples: Sample[], sort: SortOption): Sample[] => {
     const sorted = [...samples];
     switch (sort) {
-        case 'lowest-iou':
-            return sorted.sort((a, b) => {
-                // Nulls go to the end
-                if (a.iou === null && b.iou === null) return 0;
-                if (a.iou === null) return 1;
-                if (b.iou === null) return -1;
-                return a.iou - b.iou;
-            });
-        case 'lowest-confidence':
-            return sorted.sort((a, b) => {
-                const aConf = a.ai?.confidence ?? null;
-                const bConf = b.ai?.confidence ?? null;
-                // Nulls and 0% go to the end
-                const aIsEmpty = aConf === null || aConf === 0;
-                const bIsEmpty = bConf === null || bConf === 0;
-                if (aIsEmpty && bIsEmpty) return 0;
-                if (aIsEmpty) return 1;
-                if (bIsEmpty) return -1;
-                return aConf - bConf;
-            });
-        case 'default':
-        default:
-            return sorted;
+    case 'lowest-iou':
+        return sorted.sort((a, b) => {
+            // Nulls go to the end
+            if (a.iou === null && b.iou === null) {
+                return 0;
+            }
+            if (a.iou === null) {
+                return 1;
+            }
+            if (b.iou === null) {
+                return -1;
+            }
+            return a.iou - b.iou;
+        });
+    case 'lowest-confidence':
+        return sorted.sort((a, b) => {
+            const aConf = a.ai?.confidence ?? null;
+            const bConf = b.ai?.confidence ?? null;
+            // Nulls and 0% go to the end
+            const aIsEmpty = aConf === null || aConf === 0;
+            const bIsEmpty = bConf === null || bConf === 0;
+            if (aIsEmpty && bIsEmpty) {
+                return 0;
+            }
+            if (aIsEmpty) {
+                return 1;
+            }
+            if (bIsEmpty) {
+                return -1;
+            }
+            return aConf - bConf;
+        });
+    case 'default':
+    default:
+        return sorted;
     }
 };
 
@@ -146,8 +158,9 @@ export const ImagesPage = () => {
         samples,
         isLoadingSamples: isLoading,
         fetchSamples,
-        addSample,
         removeSamples,
+        selectedModelId,
+        setSelectedModelId,
         trainingRuns,
         isLoadingTrainingRuns: isLoadingRuns,
         trainingProgress,
@@ -169,6 +182,7 @@ export const ImagesPage = () => {
 
     // Selection state
     const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+    const [lastClickedIndex, setLastClickedIndex] = useState<number | null>(null);
     const [isDeleting, setIsDeleting] = useState(false);
     const [showDeleteModal, setShowDeleteModal] = useState(false);
 
@@ -292,9 +306,12 @@ export const ImagesPage = () => {
     };
 
     const handleTrain = async () => {
+        if (selectedIds.size === 0) {
+            return;
+        }
         setIsTraining(true);
         try {
-            const run = await ML_API.startTraining();
+            const run = await ML_API.startTraining(Array.from(selectedIds));
             addTrainingRun(run);
             toast.success('Training started');
         } catch {
@@ -317,16 +334,47 @@ export const ImagesPage = () => {
         }
     };
 
-    const toggleSelect = (id: string) => {
-        setSelectedIds(prev => {
-            const next = new Set(prev);
-            if (next.has(id)) {
-                next.delete(id);
-            } else {
-                next.add(id);
-            }
-            return next;
-        });
+    const toggleSelect = (id: string, shiftKey: boolean = false, ctrlKey: boolean = false) => {
+        const currentIndex = filteredSamples.findIndex(s => s.id === id);
+
+        if (shiftKey && lastClickedIndex !== null && currentIndex !== -1) {
+            // Shift+click: select range
+            const start = Math.min(lastClickedIndex, currentIndex);
+            const end = Math.max(lastClickedIndex, currentIndex);
+            const rangeIds = filteredSamples.slice(start, end + 1).map(s => s.id);
+
+            setSelectedIds(prev => {
+                const next = new Set(prev);
+                for (const rangeId of rangeIds) {
+                    next.add(rangeId);
+                }
+                return next;
+            });
+        } else if (ctrlKey) {
+            // Ctrl+click: toggle single item without clearing others, update lastClickedIndex
+            setSelectedIds(prev => {
+                const next = new Set(prev);
+                if (next.has(id)) {
+                    next.delete(id);
+                } else {
+                    next.add(id);
+                }
+                return next;
+            });
+            setLastClickedIndex(currentIndex);
+        } else {
+            // Normal click: toggle single item
+            setSelectedIds(prev => {
+                const next = new Set(prev);
+                if (next.has(id)) {
+                    next.delete(id);
+                } else {
+                    next.add(id);
+                }
+                return next;
+            });
+            setLastClickedIndex(currentIndex);
+        }
     };
 
     const selectAll = () => {
@@ -377,8 +425,19 @@ export const ImagesPage = () => {
 
     useSocketEvent('detection-run-deleted', () => {
         // Reload samples to reflect cleared AI labels
-        fetchSamples(true);
-    }, [fetchSamples]);
+        fetchSamples(true, selectedModelId);
+    }, [fetchSamples, selectedModelId]);
+
+    // Refetch samples when selected model changes
+    useEffect(() => {
+        fetchSamples(true, selectedModelId);
+    }, [selectedModelId]);  
+
+    // Get completed models for the dropdown
+    const completedModels = useMemo(() =>
+        trainingRuns.filter(r => r.status === 'completed'),
+    [trainingRuns]
+    );
 
     const filteredSamples = sortSamples(
         samples.filter(s => matchesPreset(s, preset)),
@@ -441,11 +500,13 @@ export const ImagesPage = () => {
                 <Button
                     onClick={handleTrain}
                     loading={isTraining}
+                    disabled={selectedIds.size === 0}
                     leftIcon={<TrainIcon />}
                     size="sm"
                     className="justify-center"
+                    title={selectedIds.size === 0 ? 'Select images to train on' : `Train on ${selectedIds.size} selected images`}
                 >
-                    Train
+                    Train{selectedIds.size > 0 ? ` (${selectedIds.size})` : ''}
                 </Button>
                 {tab === 'images' && (
                     <Button
@@ -560,7 +621,7 @@ export const ImagesPage = () => {
                         </div>
                     )}
 
-                    {/* Filter and Sort Dropdowns */}
+                    {/* Filter, Sort, and Model Dropdowns */}
                     <div className="flex flex-wrap items-center gap-3">
                         <Select
                             label="Filter"
@@ -576,6 +637,21 @@ export const ImagesPage = () => {
                             options={Object.entries(sortLabels).map(([value, label]) => ({ value, label }))}
                             className="w-40"
                         />
+                        {completedModels.length > 0 && (
+                            <Select
+                                label="Model"
+                                value={selectedModelId || ''}
+                                onChange={(v) => setSelectedModelId(v || null)}
+                                options={[
+                                    { value: '', label: 'Latest' },
+                                    ...completedModels.map(run => ({
+                                        value: run.id,
+                                        label: `${formatDate(run.createdAt)} (${run.imageCount} imgs)`,
+                                    })),
+                                ]}
+                                className="w-48"
+                            />
+                        )}
                         <span className="text-xs text-muted self-end pb-2">
                             {filteredSamples.length} of {samples.length} images
                         </span>
@@ -623,7 +699,7 @@ export const ImagesPage = () => {
                                         <button
                                             onClick={(e) => {
                                                 e.stopPropagation();
-                                                toggleSelect(sample.id);
+                                                toggleSelect(sample.id, e.shiftKey, e.ctrlKey || e.metaKey);
                                             }}
                                             className={`absolute top-2 left-2 z-10 w-6 h-6 rounded-md border-2 flex items-center justify-center transition-all ${
                                                 isSelected
@@ -710,7 +786,7 @@ export const ImagesPage = () => {
                                                                         {sample.iou !== null && (
                                                                             <span className={
                                                                                 sample.iou >= 0.75 ? ' text-success' :
-                                                                                sample.iou >= 0.5 ? ' text-warning' : ' text-error'
+                                                                                    sample.iou >= 0.5 ? ' text-warning' : ' text-error'
                                                                             }> IoU: {Math.round(sample.iou * 100)}%</span>
                                                                         )}
                                                                     </span>

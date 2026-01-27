@@ -29,8 +29,8 @@ export const ML_API = {
         return http.post<AnalyzeBoardResponse>(mlAnalyzeBoardPath, request);
     },
 
-    startTraining: async (): Promise<TrainingRun> => {
-        return http.post<TrainingRun>('/api/ml/train', {});
+    startTraining: async (sampleIds?: string[]): Promise<TrainingRun> => {
+        return http.post<TrainingRun>('/api/ml/train', { sampleIds });
     },
 
     getTrainingRuns: async (): Promise<TrainingRun[]> => {
