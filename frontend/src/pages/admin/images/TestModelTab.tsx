@@ -2,7 +2,7 @@ import { useState, useRef, useCallback, useEffect } from 'react';
 import { Camera, RefreshCw } from 'lucide-react';
 import { Button } from '../../../components/ui/Button';
 import { Select } from '../../../components/ui/Select';
-import { ML_API, TestDetectResponse } from '../../../api/ml';
+import { ML_API, TestDetectResponse, PerspectiveCorrectionMethod } from '../../../api/ml';
 import type { TrainingRun, BoundingBox, ModelPipeline } from '@blokus-ai/shared';
 
 interface Props {
@@ -178,6 +178,29 @@ export const TestModelTab = ({ trainingRuns, pipelines }: Props) => {
         );
     };
 
+    const renderCorrectionMethod = (title: string, method: PerspectiveCorrectionMethod) => {
+        return (
+            <div className="relative bg-surface-dim rounded-lg overflow-hidden">
+                <div className={`absolute top-2 left-2 z-10 text-xs px-2 py-1 rounded ${
+                    method.success ? 'bg-success/80 text-white' : 'bg-error/80 text-white'
+                }`}>
+                    {title} {method.success ? '✓' : '✗'}
+                </div>
+                {method.image ? (
+                    <img
+                        src={`data:image/jpeg;base64,${method.image}`}
+                        alt={title}
+                        className="w-full aspect-square object-contain"
+                    />
+                ) : (
+                    <div className="w-full aspect-square flex items-center justify-center text-muted text-sm">
+                        No image
+                    </div>
+                )}
+            </div>
+        );
+    };
+
     return (
         <div className="space-y-4">
             {/* Model Selection */}
@@ -210,50 +233,69 @@ export const TestModelTab = ({ trainingRuns, pipelines }: Props) => {
             </div>
 
             {/* Camera / Image Display */}
-            <div className="relative bg-surface-dim rounded-lg overflow-hidden" style={{ maxWidth: '640px' }}>
-                {!stream && !capturedImage ? (
-                    // Start camera prompt
-                    <div className="aspect-video flex flex-col items-center justify-center gap-4 p-8">
-                        <div className="w-16 h-16 bg-surface rounded-full flex items-center justify-center">
-                            <Camera className="w-5 h-5" />
+            <div className="space-y-4">
+                {/* Original image with detection */}
+                <div className="relative bg-surface-dim rounded-lg overflow-hidden" style={{ maxWidth: '640px' }}>
+                    {!stream && !capturedImage ? (
+                        // Start camera prompt
+                        <div className="aspect-video flex flex-col items-center justify-center gap-4 p-8">
+                            <div className="w-16 h-16 bg-surface rounded-full flex items-center justify-center">
+                                <Camera className="w-5 h-5" />
+                            </div>
+                            <p className="text-secondary text-center">
+                                Open camera to test board detection
+                            </p>
+                            <Button onClick={startCamera} leftIcon={<Camera className="w-5 h-5" />}>
+                                Open Camera
+                            </Button>
                         </div>
-                        <p className="text-secondary text-center">
-                            Open camera to test board detection
-                        </p>
-                        <Button onClick={startCamera} leftIcon={<Camera className="w-5 h-5" />}>
-                            Open Camera
-                        </Button>
-                    </div>
-                ) : capturedImage ? (
-                    // Show captured image with detection overlay
-                    <div className="relative">
-                        <img
-                            src={capturedImage}
-                            alt="Captured"
+                    ) : capturedImage ? (
+                        // Show captured image with detection overlay
+                        <div className="relative">
+                            <div className="absolute top-2 left-2 bg-black/60 text-white text-xs px-2 py-1 rounded z-10">
+                                Original + Detection
+                            </div>
+                            <img
+                                src={capturedImage}
+                                alt="Captured"
+                                className="w-full h-auto"
+                            />
+                            {detection?.detection.boundingBox && renderBoundingBox(detection.detection.boundingBox)}
+                            {detection && !detection.detection.hasBoardDetected && (
+                                <div className="absolute inset-0 flex items-center justify-center bg-black/50">
+                                    <div className="bg-error text-white px-4 py-2 rounded-lg">
+                                        No board detected
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    ) : (
+                        // Live camera feed
+                        <video
+                            ref={videoRef}
+                            autoPlay
+                            playsInline
+                            muted
                             className="w-full h-auto"
                         />
-                        {detection?.detection.boundingBox && renderBoundingBox(detection.detection.boundingBox)}
-                        {detection && !detection.detection.hasBoardDetected && (
-                            <div className="absolute inset-0 flex items-center justify-center bg-black/50">
-                                <div className="bg-error text-white px-4 py-2 rounded-lg">
-                                    No board detected
-                                </div>
-                            </div>
-                        )}
-                    </div>
-                ) : (
-                    // Live camera feed
-                    <video
-                        ref={videoRef}
-                        autoPlay
-                        playsInline
-                        muted
-                        className="w-full h-auto"
-                    />
-                )}
+                    )}
 
-                {/* Hidden canvas for capture */}
-                <canvas ref={canvasRef} className="hidden" />
+                    {/* Hidden canvas for capture */}
+                    <canvas ref={canvasRef} className="hidden" />
+                </div>
+
+                {/* Perspective Correction */}
+                {detection?.perspectiveCorrections && (
+                    <div className="space-y-3">
+                        <h3 className="font-medium text-foreground">Perspective Correction</h3>
+                        <div className="grid grid-cols-2 gap-4" style={{ maxWidth: '820px' }}>
+                            {renderCorrectionMethod('Hough Lines (Extreme)', detection.perspectiveCorrections.hough_lines_extreme)}
+                            {renderCorrectionMethod('Hough Lines (Merged)', detection.perspectiveCorrections.hough_lines_merged)}
+                            {renderCorrectionMethod('Color Segmentation', detection.perspectiveCorrections.color_segmentation)}
+                            {renderCorrectionMethod('Contour Detection', detection.perspectiveCorrections.contour_detection)}
+                        </div>
+                    </div>
+                )}
             </div>
 
             {/* Error display */}

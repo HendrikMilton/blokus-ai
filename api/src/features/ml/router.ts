@@ -758,6 +758,25 @@ mlRouter.delete('/detection-runs/:id', asyncHandler(async (req, res) => {
     res.json({ success: true });
 }));
 
+// POST /api/ml/detect/:id/perspective - Run perspective correction on a sample
+mlRouter.post('/detect/:id/perspective', asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const { bbox } = req.body as { bbox: { x: number; y: number; width: number; height: number } };
+
+    if (!bbox) {
+        throw new BadRequestError('bbox is required');
+    }
+
+    const response = await mlHttp.post(`/detect/${id}/perspective`, {
+        bbox_x: bbox.x,
+        bbox_y: bbox.y,
+        bbox_width: bbox.width,
+        bbox_height: bbox.height,
+    });
+
+    res.json(response);
+}));
+
 // POST /api/ml/detect/:id/result - Store single detection result (internal, used by ML service)
 mlRouter.post('/detect/:id/result', asyncHandler(async (req, res) => {
     const { id } = req.params;

@@ -12,6 +12,7 @@ from pydantic import BaseModel
 from app.lib.s3 import download_sample_image
 
 from .detector_yolo import detect_board_yolo, detect_board_with_trained_model
+from .perspective import correct_perspective, correct_perspective_all_methods
 from .schemas import DetectResponse, BoardDetection
 
 # API URL for callbacks
@@ -254,9 +255,25 @@ class TestDetectRequest(BaseModel):
     model_id: Optional[str] = None
 
 
+class PerspectiveCorrectionMethod(BaseModel):
+    method: str
+    image: Optional[str] = None  # base64 encoded
+    success: bool
+    corners: Optional[list] = None
+
+
+class PerspectiveCorrections(BaseModel):
+    hough_lines_merged: PerspectiveCorrectionMethod
+    hough_lines_extreme: PerspectiveCorrectionMethod
+    color_segmentation: PerspectiveCorrectionMethod
+    contour_detection: PerspectiveCorrectionMethod
+
+
 class TestDetectResponse(BaseModel):
     detection: BoardDetection
     processing_time_ms: float
+    correctedBoardImage: Optional[str] = None  # base64 encoded corrected board image (best method)
+    perspectiveCorrections: Optional[PerspectiveCorrections] = None  # all methods for comparison
 
 
 @router.post("/test", response_model=TestDetectResponse)
@@ -289,11 +306,51 @@ async def test_detect(request: TestDetectRequest):
         else:
             detection = detect_board_yolo(temp_path)
 
+        # Apply perspective correction if board was detected
+        corrected_image = None
+        perspective_corrections = None
+
+        if detection.hasBoardDetected and detection.boundingBox:
+            # Get all correction methods for comparison
+            all_results = correct_perspective_all_methods(temp_path, detection.boundingBox)
+
+            perspective_corrections = PerspectiveCorrections(
+                hough_lines_merged=PerspectiveCorrectionMethod(
+                    method=all_results.hough_lines_merged.method,
+                    image=all_results.hough_lines_merged.image,
+                    success=all_results.hough_lines_merged.success,
+                    corners=all_results.hough_lines_merged.corners,
+                ),
+                hough_lines_extreme=PerspectiveCorrectionMethod(
+                    method=all_results.hough_lines_extreme.method,
+                    image=all_results.hough_lines_extreme.image,
+                    success=all_results.hough_lines_extreme.success,
+                    corners=all_results.hough_lines_extreme.corners,
+                ),
+                color_segmentation=PerspectiveCorrectionMethod(
+                    method=all_results.color_segmentation.method,
+                    image=all_results.color_segmentation.image,
+                    success=all_results.color_segmentation.success,
+                    corners=all_results.color_segmentation.corners,
+                ),
+                contour_detection=PerspectiveCorrectionMethod(
+                    method=all_results.contour_detection.method,
+                    image=all_results.contour_detection.image,
+                    success=all_results.contour_detection.success,
+                    corners=all_results.contour_detection.corners,
+                ),
+            )
+
+            # Use the best successful result
+            corrected_image = correct_perspective(temp_path, detection.boundingBox)
+
         elapsed_ms = (time.perf_counter() - start_time) * 1000
 
         return TestDetectResponse(
             detection=detection,
             processing_time_ms=round(elapsed_ms, 2),
+            correctedBoardImage=corrected_image,
+            perspectiveCorrections=perspective_corrections,
         )
     finally:
         # Clean up temp file
@@ -365,4 +422,73 @@ async def get_detection(
         sample_id=sample_id,
         detection=detection,
         processing_time_ms=round(elapsed_ms, 2),
+    )
+
+
+# ============================================================================
+# Perspective Correction for Stored Samples
+# ============================================================================
+
+
+class PerspectiveCorrectionRequest(BaseModel):
+    bbox_x: float
+    bbox_y: float
+    bbox_width: float
+    bbox_height: float
+
+
+class PerspectiveCorrectionResponse(BaseModel):
+    hough_lines_merged: PerspectiveCorrectionMethod
+    hough_lines_extreme: PerspectiveCorrectionMethod
+    color_segmentation: PerspectiveCorrectionMethod
+    contour_detection: PerspectiveCorrectionMethod
+
+
+@router.post("/{sample_id}/perspective", response_model=PerspectiveCorrectionResponse)
+async def correct_sample_perspective(sample_id: str, request: PerspectiveCorrectionRequest):
+    """
+    Apply perspective correction to a stored sample using the provided bounding box.
+    """
+    try:
+        filepath = download_sample_image(sample_id)
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=f"Sample not found: {e}")
+
+    # Create BoundingBox from request
+    from .schemas import BoundingBox
+    bbox = BoundingBox(
+        x=request.bbox_x,
+        y=request.bbox_y,
+        width=request.bbox_width,
+        height=request.bbox_height,
+    )
+
+    # Get correction result
+    all_results = correct_perspective_all_methods(filepath, bbox)
+
+    return PerspectiveCorrectionResponse(
+        hough_lines_merged=PerspectiveCorrectionMethod(
+            method=all_results.hough_lines_merged.method,
+            image=all_results.hough_lines_merged.image,
+            success=all_results.hough_lines_merged.success,
+            corners=all_results.hough_lines_merged.corners,
+        ),
+        hough_lines_extreme=PerspectiveCorrectionMethod(
+            method=all_results.hough_lines_extreme.method,
+            image=all_results.hough_lines_extreme.image,
+            success=all_results.hough_lines_extreme.success,
+            corners=all_results.hough_lines_extreme.corners,
+        ),
+        color_segmentation=PerspectiveCorrectionMethod(
+            method=all_results.color_segmentation.method,
+            image=all_results.color_segmentation.image,
+            success=all_results.color_segmentation.success,
+            corners=all_results.color_segmentation.corners,
+        ),
+        contour_detection=PerspectiveCorrectionMethod(
+            method=all_results.contour_detection.method,
+            image=all_results.contour_detection.image,
+            success=all_results.contour_detection.success,
+            corners=all_results.contour_detection.corners,
+        ),
     )

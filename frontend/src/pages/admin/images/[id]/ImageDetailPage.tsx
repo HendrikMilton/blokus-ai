@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
-import { ChevronLeft, ChevronRight, Pencil, Play } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Pencil, Play, Grid3X3 } from 'lucide-react';
 import { http, API_URL } from '../../../../api/config';
+import { ML_API, PerspectiveCorrections, PerspectiveCorrectionMethod } from '../../../../api/ml';
 import { Button } from '../../../../components/ui/Button';
 import { Select } from '../../../../components/ui/Select';
 import type { BoundingBox, DetectResponseWithCorrection, SampleStatusFlags, ModelPipeline } from '@blokus-ai/shared';
@@ -70,6 +71,8 @@ export const ImageDetailPage = () => {
     const [pipelines, setPipelines] = useState<ModelPipeline[]>([]);
     const [isDetecting, setIsDetecting] = useState(false);
     const [previewDetection, setPreviewDetection] = useState<DetectResponseWithCorrection['detection'] | null>(null);
+    const [perspectiveCorrections, setPerspectiveCorrections] = useState<PerspectiveCorrections | null>(null);
+    const [isCorrectingPerspective, setIsCorrectingPerspective] = useState(false);
 
     // Model selection from URL or default to latest
     const modelIdFromUrl = searchParams.get('model');
@@ -199,10 +202,33 @@ export const ImageDetailPage = () => {
         }
     }, [id, selectedModelId]);
 
+    const runPerspectiveCorrection = useCallback(async () => {
+        if (!id) {
+            return;
+        }
+
+        // Use human bbox if available, otherwise AI bbox
+        const bbox = detection?.correction?.boundingBox || detection?.detection?.boundingBox;
+        if (!bbox) {
+            return;
+        }
+
+        setIsCorrectingPerspective(true);
+        try {
+            const result = await ML_API.correctPerspective(id, bbox);
+            setPerspectiveCorrections(result);
+        } catch {
+            // Error toast shown by http client
+        } finally {
+            setIsCorrectingPerspective(false);
+        }
+    }, [id, detection]);
+
     useEffect(() => {
         const loadSample = async () => {
-            // Clear preview when navigating to a different sample
+            // Clear preview and perspective corrections when navigating to a different sample
             setPreviewDetection(null);
+            setPerspectiveCorrections(null);
             try {
                 const data = await http.get<Sample>(`/api/ml/samples/${id}`);
                 setSample(data);
@@ -255,6 +281,29 @@ export const ImageDetailPage = () => {
 
     const formatBbox = (bbox: BoundingBox) => {
         return `x: ${(bbox.x * 100).toFixed(1)}%, y: ${(bbox.y * 100).toFixed(1)}%, w: ${(bbox.width * 100).toFixed(1)}%, h: ${(bbox.height * 100).toFixed(1)}%`;
+    };
+
+    const renderCorrectionMethod = (title: string, method: PerspectiveCorrectionMethod) => {
+        return (
+            <div className="relative bg-surface-dim rounded-lg overflow-hidden">
+                <div className={`absolute top-2 left-2 z-10 text-xs px-2 py-1 rounded ${
+                    method.success ? 'bg-success/80 text-white' : 'bg-error/80 text-white'
+                }`}>
+                    {title} {method.success ? '✓' : '✗'}
+                </div>
+                {method.image ? (
+                    <img
+                        src={`data:image/jpeg;base64,${method.image}`}
+                        alt={title}
+                        className="w-full aspect-square object-contain"
+                    />
+                ) : (
+                    <div className="w-full aspect-square flex items-center justify-center text-muted text-sm">
+                        No image
+                    </div>
+                )}
+            </div>
+        );
     };
 
     if (isLoading) {
@@ -612,6 +661,36 @@ export const ImageDetailPage = () => {
                     <div className="bg-surface rounded-lg border border-border p-6 text-center">
                         <p className="text-secondary">No labels yet</p>
                         <p className="text-sm text-muted mt-1">Use labeling mode to add labels to this image</p>
+                    </div>
+                )}
+
+                {/* Perspective Correction */}
+                {(detection?.correction?.boundingBox || detection?.detection?.boundingBox) && (
+                    <div className="bg-surface rounded-lg border border-border p-4">
+                        <div className="flex items-center justify-between gap-3 mb-3">
+                            <h2 className="text-sm font-medium text-foreground">Perspective Correction</h2>
+                            <Button
+                                onClick={runPerspectiveCorrection}
+                                disabled={isCorrectingPerspective}
+                                loading={isCorrectingPerspective}
+                                leftIcon={<Grid3X3 className="w-4 h-4" />}
+                                size="sm"
+                            >
+                                {isCorrectingPerspective ? 'Correcting...' : 'Correct Perspective'}
+                            </Button>
+                        </div>
+                        <p className="text-xs text-muted mb-3">
+                            Using {detection?.correction?.boundingBox ? 'human' : 'AI'} bounding box
+                        </p>
+
+                        {perspectiveCorrections && (
+                            <div className="grid grid-cols-2 gap-4" style={{ maxWidth: '820px' }}>
+                                {renderCorrectionMethod('Hough Lines (Extreme)', perspectiveCorrections.hough_lines_extreme)}
+                                {renderCorrectionMethod('Hough Lines (Merged)', perspectiveCorrections.hough_lines_merged)}
+                                {renderCorrectionMethod('Color Segmentation', perspectiveCorrections.color_segmentation)}
+                                {renderCorrectionMethod('Contour Detection', perspectiveCorrections.contour_detection)}
+                            </div>
+                        )}
                     </div>
                 )}
 

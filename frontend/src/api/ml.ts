@@ -14,9 +14,25 @@ import {
     ModelPipeline,
 } from '@blokus-ai/shared';
 
+export interface PerspectiveCorrectionMethod {
+    method: string;
+    image?: string;  // base64 encoded
+    success: boolean;
+    corners?: number[][];
+}
+
+export interface PerspectiveCorrections {
+    hough_lines_merged: PerspectiveCorrectionMethod;
+    hough_lines_extreme: PerspectiveCorrectionMethod;
+    color_segmentation: PerspectiveCorrectionMethod;
+    contour_detection: PerspectiveCorrectionMethod;
+}
+
 export interface TestDetectResponse {
     detection: BoardDetection;
     processing_time_ms: number;
+    correctedBoardImage?: string;  // base64 encoded corrected board image (best method)
+    perspectiveCorrections?: PerspectiveCorrections;  // all methods for comparison
 }
 
 export const ML_API = {
@@ -78,5 +94,10 @@ export const ML_API = {
 
     deletePipeline: async (id: string): Promise<void> => {
         await http.delete(`/api/ml/pipelines/${id}`);
+    },
+
+    // Perspective correction for stored samples
+    correctPerspective: async (sampleId: string, bbox: { x: number; y: number; width: number; height: number }): Promise<PerspectiveCorrections> => {
+        return http.post<PerspectiveCorrections>(`/api/ml/detect/${sampleId}/perspective`, { bbox });
     },
 };
