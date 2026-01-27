@@ -1,11 +1,14 @@
 import { useRef, useState, useEffect, useMemo } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
+import { Plus, ChevronLeft, ChevronRight, Tag, Lightbulb, Trash2, Search, Image, LayoutGrid, List } from 'lucide-react';
+import { cn } from '../../../utils/cn';
 import { http, API_URL } from '../../../api/config';
 import { ML_API } from '../../../api/ml';
 import { Button } from '../../../components/ui/Button';
 import { Select } from '../../../components/ui/Select';
-import { getStatusLabels } from '@blokus-ai/shared';
+import { Table, Column, SortState } from '../../../components/ui/Table';
+import { getStatusLabels, Sample } from '@blokus-ai/shared';
 import { statusColors, statusLabels } from '../../../lib/status';
 import { TrainedModelsTable } from './TrainedModelsTable';
 import { DetectionRunsTable } from './DetectionRunsTable';
@@ -18,6 +21,7 @@ import { useSocketEvent } from '../../../hooks/useSocketEvent';
 type Tab = 'images' | 'models' | 'detections' | 'test';
 type FilterPreset = 'all' | 'unlabeled' | 'false-positives' | 'false-negatives' | 'low-iou' | 'disagreements';
 type SortOption = 'default' | 'lowest-iou' | 'lowest-confidence';
+type ViewType = 'grid' | 'list';
 
 const filterPresetLabels: Record<FilterPreset, string> = {
     'all': 'All',
@@ -41,47 +45,6 @@ interface PresignResponse {
     imageUrl: string;
 }
 
-const PlusIcon = () => (
-    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-    </svg>
-);
-
-const BackIcon = () => (
-    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-    </svg>
-);
-
-const TagIcon = () => (
-    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z" />
-    </svg>
-);
-
-const TrainIcon = () => (
-    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
-    </svg>
-);
-
-const TrashIcon = () => (
-    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-    </svg>
-);
-
-const CheckIcon = () => (
-    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-    </svg>
-);
-
-const DetectIcon = () => (
-    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-    </svg>
-);
 
 const matchesPreset = (sample: Sample, preset: FilterPreset): boolean => {
     switch (preset) {
@@ -186,6 +149,10 @@ export const ImagesPage = () => {
     const [isDeleting, setIsDeleting] = useState(false);
     const [showDeleteModal, setShowDeleteModal] = useState(false);
 
+    // Pagination state
+    const [currentPage, setCurrentPage] = useState(1);
+    const pageSize = 50;
+
     // Get tab from URL or default to 'images'
     const urlTab = searchParams.get('tab') as Tab | null;
     const tab: Tab = urlTab === 'models' ? 'models' : urlTab === 'detections' ? 'detections' : urlTab === 'test' ? 'test' : 'images';
@@ -228,6 +195,40 @@ export const ImagesPage = () => {
             searchParams.set('sort', newSort);
         }
         setSearchParams(searchParams);
+    };
+
+    // Get view type from URL or default to 'grid'
+    const urlView = searchParams.get('view') as ViewType | null;
+    const viewType: ViewType = urlView === 'list' ? 'list' : 'grid';
+
+    const setViewType = (newView: ViewType) => {
+        if (newView === 'grid') {
+            searchParams.delete('view');
+        } else {
+            searchParams.set('view', newView);
+        }
+        setSearchParams(searchParams);
+    };
+
+    // List view sorting state
+    const [listSortState, setListSortState] = useState<SortState>({ column: 'created_at', direction: 'desc' });
+
+    const handleListSort = (columnKey: string) => {
+        setListSortState(prev => {
+            if (prev.column !== columnKey) {
+                // New column: start with desc
+                return { column: columnKey, direction: 'desc' };
+            }
+            // Same column: cycle desc → asc → null
+            if (prev.direction === 'desc') {
+                return { column: columnKey, direction: 'asc' };
+            }
+            if (prev.direction === 'asc') {
+                return { column: null, direction: null };
+            }
+            // null → desc
+            return { column: columnKey, direction: 'desc' };
+        });
     };
 
     const handleUploadClick = () => {
@@ -334,11 +335,11 @@ export const ImagesPage = () => {
         }
     };
 
-    const toggleSelect = (id: string, shiftKey: boolean = false, ctrlKey: boolean = false) => {
+    const handleSelect = (id: string, shiftKey: boolean = false) => {
         const currentIndex = filteredSamples.findIndex(s => s.id === id);
 
         if (shiftKey && lastClickedIndex !== null && currentIndex !== -1) {
-            // Shift+click: select range
+            // Shift+click: select range (add to existing selection)
             const start = Math.min(lastClickedIndex, currentIndex);
             const end = Math.max(lastClickedIndex, currentIndex);
             const rangeIds = filteredSamples.slice(start, end + 1).map(s => s.id);
@@ -350,31 +351,16 @@ export const ImagesPage = () => {
                 }
                 return next;
             });
-        } else if (ctrlKey) {
-            // Ctrl+click: toggle single item without clearing others, update lastClickedIndex
-            setSelectedIds(prev => {
-                const next = new Set(prev);
-                if (next.has(id)) {
-                    next.delete(id);
-                } else {
-                    next.add(id);
-                }
-                return next;
-            });
-            setLastClickedIndex(currentIndex);
         } else {
-            // Normal click: toggle single item
-            setSelectedIds(prev => {
-                const next = new Set(prev);
-                if (next.has(id)) {
-                    next.delete(id);
-                } else {
-                    next.add(id);
-                }
-                return next;
-            });
+            // Normal click: select single item (clear others)
+            setSelectedIds(new Set([id]));
             setLastClickedIndex(currentIndex);
         }
+    };
+
+    const handleDoubleClick = (id: string) => {
+        // Open in new tab on double-click
+        window.open(`/admin/images/${id}`, '_blank');
     };
 
     const selectAll = () => {
@@ -444,6 +430,54 @@ export const ImagesPage = () => {
         sort
     );
 
+    // Reset page when filters change
+    useEffect(() => {
+        setCurrentPage(1);
+    }, [preset, sort, samples.length]);
+
+    // Paginate grid view samples
+    const paginatedGridSamples = useMemo(() => {
+        const startIndex = (currentPage - 1) * pageSize;
+        return filteredSamples.slice(startIndex, startIndex + pageSize);
+    }, [filteredSamples, currentPage, pageSize]);
+
+    // Sort samples for list view
+    const listSortedSamples = useMemo(() => {
+        if (viewType !== 'list' || !listSortState.column) {
+            return filteredSamples;
+        }
+        const getStatusPriority = (s: Sample) => {
+            if (s.status.humanLabeled) {
+                return 2;
+            }
+            if (s.status.aiLabeled) {
+                return 1;
+            }
+            return 0;
+        };
+        return [...filteredSamples].sort((a, b) => {
+            let comparison = 0;
+            switch (listSortState.column) {
+            case 'id':
+                comparison = a.id.localeCompare(b.id);
+                break;
+            case 'created_at':
+                comparison = new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+                break;
+            case 'iou':
+                comparison = (a.iou ?? -1) - (b.iou ?? -1);
+                break;
+            case 'confidence':
+                comparison = (a.ai?.confidence ?? -1) - (b.ai?.confidence ?? -1);
+                break;
+            case 'status':
+                comparison = getStatusPriority(a) - getStatusPriority(b);
+                break;
+            }
+            return listSortState.direction === 'asc' ? comparison : -comparison;
+        });
+    }, [filteredSamples, viewType, listSortState]);
+
     const formatDate = (dateString: string) => {
         const date = new Date(dateString);
         return date.toLocaleDateString(undefined, {
@@ -454,6 +488,77 @@ export const ImagesPage = () => {
         });
     };
 
+    // List view columns
+    const listColumns: Column<Sample>[] = [
+        {
+            key: 'thumbnail',
+            header: '',
+            width: '64px',
+            render: (sample) => (
+                <img
+                    src={sample.thumbnailUrl || sample.imageUrl || `${API_URL}/api/ml/samples/${sample.id}/image`}
+                    alt={`Sample ${sample.id}`}
+                    className="w-12 h-12 object-cover rounded"
+                    loading="lazy"
+                />
+            ),
+        },
+        {
+            key: 'id',
+            header: 'ID',
+            sortable: true,
+            width: '100px',
+            render: (sample) => <span className="font-mono text-muted">{sample.id.slice(0, 8)}</span>,
+        },
+        {
+            key: 'status',
+            header: 'Status',
+            sortable: true,
+            noTruncate: true,
+            render: (sample) => {
+                const allLabels = getStatusLabels(sample.status);
+                return (
+                    <div className="flex gap-1">
+                        {allLabels.map(label => (
+                            <span key={label} className={`px-1.5 py-0.5 text-xs rounded ${statusColors[label]}`}>
+                                {statusLabels[label]}
+                            </span>
+                        ))}
+                    </div>
+                );
+            },
+        },
+        {
+            key: 'confidence',
+            header: 'Confidence',
+            sortable: true,
+            width: '100px',
+            render: (sample) => sample.ai ? `${Math.round(sample.ai.confidence * 100)}%` : '—',
+        },
+        {
+            key: 'iou',
+            header: 'IoU',
+            sortable: true,
+            width: '80px',
+            render: (sample) => sample.iou !== null ? (
+                <span className={
+                    sample.iou >= 0.75 ? 'text-success' :
+                        sample.iou >= 0.5 ? 'text-warning' : 'text-error'
+                }>
+                    {Math.round(sample.iou * 100)}%
+                </span>
+            ) : '—',
+        },
+        {
+            key: 'created_at',
+            header: 'Created',
+            sortable: true,
+            width: '140px',
+            className: 'text-muted',
+            render: (sample) => formatDate(sample.created_at),
+        },
+    ];
+
     return (
         <div className="space-y-4">
             {/* Header */}
@@ -462,7 +567,7 @@ export const ImagesPage = () => {
                     to="/admin"
                     className="p-1.5 -ml-1.5 rounded-lg hover:bg-surface-dim transition-colors text-secondary hover:text-foreground"
                 >
-                    <BackIcon />
+                    <ChevronLeft className="w-4 h-4" />
                 </Link>
                 <h1 className="text-xl font-medium text-foreground">Training</h1>
             </div>
@@ -480,7 +585,7 @@ export const ImagesPage = () => {
                 <Button
                     onClick={() => navigate('/admin/images/label')}
                     variant="secondary"
-                    leftIcon={<TagIcon />}
+                    leftIcon={<Tag className="w-4 h-4" />}
                     size="sm"
                     className="justify-center"
                 >
@@ -490,7 +595,7 @@ export const ImagesPage = () => {
                 <Button
                     onClick={() => setShowDetectionModal(true)}
                     variant="secondary"
-                    leftIcon={<DetectIcon />}
+                    leftIcon={<Search className="w-4 h-4" />}
                     size="sm"
                     className="justify-center"
                 >
@@ -501,7 +606,7 @@ export const ImagesPage = () => {
                     onClick={handleTrain}
                     loading={isTraining}
                     disabled={selectedIds.size === 0}
-                    leftIcon={<TrainIcon />}
+                    leftIcon={<Lightbulb className="w-4 h-4" />}
                     size="sm"
                     className="justify-center"
                     title={selectedIds.size === 0 ? 'Select images to train on' : `Train on ${selectedIds.size} selected images`}
@@ -512,7 +617,7 @@ export const ImagesPage = () => {
                     <Button
                         onClick={handleUploadClick}
                         loading={isUploading}
-                        leftIcon={<PlusIcon />}
+                        leftIcon={<Plus className="w-4 h-4" />}
                         size="sm"
                         className="justify-center"
                     >
@@ -590,39 +695,8 @@ export const ImagesPage = () => {
 
             {tab === 'images' ? (
                 <>
-                    {/* Selection bar */}
-                    {selectedIds.size > 0 && (
-                        <div className="flex items-center justify-between gap-2 p-2 bg-primary/10 border border-primary/20 rounded-lg">
-                            <div className="flex items-center gap-2">
-                                <span className="text-sm font-medium text-primary">
-                                    {selectedIds.size} selected
-                                </span>
-                                <button
-                                    onClick={selectAll}
-                                    className="text-xs text-primary hover:underline"
-                                >
-                                    Select all ({filteredSamples.length})
-                                </button>
-                                <button
-                                    onClick={clearSelection}
-                                    className="text-xs text-secondary hover:underline"
-                                >
-                                    Clear
-                                </button>
-                            </div>
-                            <Button
-                                onClick={() => setShowDeleteModal(true)}
-                                variant="danger"
-                                size="sm"
-                                leftIcon={<TrashIcon />}
-                            >
-                                Delete
-                            </Button>
-                        </div>
-                    )}
-
-                    {/* Filter, Sort, and Model Dropdowns */}
-                    <div className="flex flex-wrap items-center gap-3">
+                    {/* Filter, Sort, Model Dropdowns, Selection and View Toggle */}
+                    <div className="flex flex-wrap items-end gap-3">
                         <Select
                             label="Filter"
                             value={preset}
@@ -630,13 +704,15 @@ export const ImagesPage = () => {
                             options={Object.entries(filterPresetLabels).map(([value, label]) => ({ value, label }))}
                             className="w-40"
                         />
-                        <Select
-                            label="Sort"
-                            value={sort}
-                            onChange={(v) => setSort(v as SortOption)}
-                            options={Object.entries(sortLabels).map(([value, label]) => ({ value, label }))}
-                            className="w-40"
-                        />
+                        {viewType === 'grid' && (
+                            <Select
+                                label="Sort"
+                                value={sort}
+                                onChange={(v) => setSort(v as SortOption)}
+                                options={Object.entries(sortLabels).map(([value, label]) => ({ value, label }))}
+                                className="w-40"
+                            />
+                        )}
                         {completedModels.length > 0 && (
                             <Select
                                 label="Model"
@@ -652,168 +728,295 @@ export const ImagesPage = () => {
                                 className="w-48"
                             />
                         )}
-                        <span className="text-xs text-muted self-end pb-2">
+                        {/* Spacer to push right side elements */}
+                        <div className="flex-1" />
+                        {/* Selection info and actions */}
+                        {selectedIds.size > 0 && (
+                            <>
+                                <div className="flex items-center gap-2">
+                                    <span className="text-sm font-medium text-primary">
+                                        {selectedIds.size} selected
+                                    </span>
+                                    <button
+                                        onClick={selectAll}
+                                        className="text-xs text-primary hover:underline"
+                                    >
+                                        Select all ({filteredSamples.length})
+                                    </button>
+                                    <button
+                                        onClick={clearSelection}
+                                        className="text-xs text-secondary hover:underline"
+                                    >
+                                        Clear
+                                    </button>
+                                </div>
+                                <Button
+                                    onClick={() => setShowDeleteModal(true)}
+                                    variant="danger"
+                                    size="sm"
+                                    leftIcon={<Trash2 className="w-4 h-4" />}
+                                >
+                                    Delete
+                                </Button>
+                                <div className="h-8 w-px bg-border" />
+                            </>
+                        )}
+                        <span className="text-xs text-muted">
                             {filteredSamples.length} of {samples.length} images
                         </span>
+                        {/* View Toggle */}
+                        <div className="flex items-center border border-border rounded-md overflow-hidden">
+                            <button
+                                onClick={() => setViewType('list')}
+                                className={`p-2 transition-colors ${viewType === 'list' ? 'bg-surface-dim text-foreground' : 'text-muted hover:text-foreground hover:bg-surface-dim/50'}`}
+                                title="List view"
+                            >
+                                <List className="w-4 h-4" />
+                            </button>
+                            <button
+                                onClick={() => setViewType('grid')}
+                                className={`p-2 transition-colors ${viewType === 'grid' ? 'bg-surface-dim text-foreground' : 'text-muted hover:text-foreground hover:bg-surface-dim/50'}`}
+                                title="Grid view"
+                            >
+                                <LayoutGrid className="w-4 h-4" />
+                            </button>
+                        </div>
                     </div>
 
-                    {/* Grid */}
+                    {/* Images Grid/List */}
                     {isLoading ? (
-                        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
-                            {[...Array(10)].map((_, i) => (
-                                <div key={i} className="bg-surface rounded-lg border border-border overflow-hidden">
-                                    <div className="aspect-square bg-surface-dim animate-pulse" />
-                                    <div className="p-2 space-y-1.5">
-                                        <div className="h-3 bg-surface-dim rounded animate-pulse w-2/3" />
-                                        <div className="h-2.5 bg-surface-dim rounded animate-pulse w-1/3" />
+                        viewType === 'grid' ? (
+                            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
+                                {[...Array(10)].map((_, i) => (
+                                    <div key={i} className="bg-surface rounded-lg border border-border overflow-hidden">
+                                        <div className="aspect-square bg-surface-dim animate-pulse" />
+                                        <div className="p-2 space-y-1.5">
+                                            <div className="h-3 bg-surface-dim rounded animate-pulse w-2/3" />
+                                            <div className="h-2.5 bg-surface-dim rounded animate-pulse w-1/3" />
+                                        </div>
                                     </div>
+                                ))}
+                            </div>
+                        ) : (
+                            <div className="bg-surface rounded-lg border border-border overflow-hidden">
+                                <div className="animate-pulse p-4 space-y-3">
+                                    {[...Array(10)].map((_, i) => (
+                                        <div key={i} className="h-12 bg-surface-dim rounded" />
+                                    ))}
                                 </div>
-                            ))}
-                        </div>
+                            </div>
+                        )
                     ) : filteredSamples.length === 0 ? (
                         <div className="flex flex-col items-center justify-center py-16 text-center">
                             <div className="w-16 h-16 bg-surface-dim rounded-full flex items-center justify-center mb-4">
-                                <svg className="w-8 h-8 text-muted" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                                </svg>
+                                <Image className="w-8 h-8 text-muted" />
                             </div>
                             <p className="text-secondary font-medium">No images found</p>
                             <p className="text-sm text-muted mt-1">Upload board images to get started</p>
                         </div>
+                    ) : viewType === 'list' ? (
+                        /* List View */
+                        <Table<Sample>
+                            columns={listColumns}
+                            data={listSortedSamples}
+                            getRowKey={(sample) => sample.id}
+                            sortState={listSortState}
+                            onSort={handleListSort}
+                            selectable
+                            selectedKeys={selectedIds}
+                            onSelectionChange={(key, shiftKey) => handleSelect(key as string, shiftKey)}
+                            onRowDoubleClick={(sample) => handleDoubleClick(sample.id)}
+                            emptyMessage="No images found"
+                            paginated
+                            currentPage={currentPage}
+                            pageSize={pageSize}
+                            totalItems={filteredSamples.length}
+                            onPageChange={setCurrentPage}
+                        />
                     ) : (
+                        /* Grid View */
                         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
-                            {filteredSamples.map((sample) => {
+                            {paginatedGridSamples.map((sample) => {
                                 const allLabels = getStatusLabels(sample.status);
                                 const isSelected = selectedIds.has(sample.id);
 
                                 return (
                                     <div
                                         key={sample.id}
-                                        className={`relative bg-surface rounded-lg border overflow-hidden text-left transition-all ${
+                                        onClick={(e) => handleSelect(sample.id, e.shiftKey)}
+                                        onDoubleClick={() => handleDoubleClick(sample.id)}
+                                        className={`relative bg-surface rounded-lg border overflow-hidden text-left transition-all cursor-pointer select-none ${
                                             isSelected
-                                                ? 'border-primary ring-2 ring-primary/30'
-                                                : 'border-border hover:shadow-gcp-hover'
+                                                ? 'border-primary ring-2 ring-primary/30 bg-primary/5 hover:bg-primary/10'
+                                                : 'border-border hover:bg-surface-dim'
                                         }`}
                                     >
-                                        {/* Selection checkbox */}
-                                        <button
-                                            onClick={(e) => {
-                                                e.stopPropagation();
-                                                toggleSelect(sample.id, e.shiftKey, e.ctrlKey || e.metaKey);
-                                            }}
-                                            className={`absolute top-2 left-2 z-10 w-6 h-6 rounded-md border-2 flex items-center justify-center transition-all ${
-                                                isSelected
-                                                    ? 'bg-primary border-primary text-white'
-                                                    : 'bg-black/40 border-white/60 text-transparent hover:border-white hover:bg-black/60'
-                                            }`}
-                                        >
-                                            <CheckIcon />
-                                        </button>
-
-                                        {/* Clickable card content */}
-                                        <button
-                                            onClick={() => navigate(`/admin/images/${sample.id}`)}
-                                            className="w-full text-left focus:outline-none"
-                                        >
-                                            <div className="relative">
-                                                <img
-                                                    src={sample.thumbnailUrl || sample.imageUrl || `${API_URL}/api/ml/samples/${sample.id}/image`}
-                                                    alt={`Sample ${sample.id}`}
-                                                    className="w-full h-auto"
-                                                    loading="lazy"
+                                        <div className="relative">
+                                            <img
+                                                src={sample.thumbnailUrl || sample.imageUrl || `${API_URL}/api/ml/samples/${sample.id}/image`}
+                                                alt={`Sample ${sample.id}`}
+                                                className="w-full h-auto"
+                                                loading="lazy"
+                                                draggable={false}
+                                            />
+                                            {/* AI bounding box (dashed, primary) */}
+                                            {sample.ai?.boundingBox && (
+                                                <div
+                                                    className="absolute border border-primary border-dashed pointer-events-none"
+                                                    style={{
+                                                        left: `${sample.ai.boundingBox.x * 100}%`,
+                                                        top: `${sample.ai.boundingBox.y * 100}%`,
+                                                        width: `${sample.ai.boundingBox.width * 100}%`,
+                                                        height: `${sample.ai.boundingBox.height * 100}%`,
+                                                    }}
                                                 />
-                                                {/* AI bounding box (dashed, primary) */}
-                                                {sample.ai?.boundingBox && (
-                                                    <div
-                                                        className="absolute border border-primary border-dashed pointer-events-none"
-                                                        style={{
-                                                            left: `${sample.ai.boundingBox.x * 100}%`,
-                                                            top: `${sample.ai.boundingBox.y * 100}%`,
-                                                            width: `${sample.ai.boundingBox.width * 100}%`,
-                                                            height: `${sample.ai.boundingBox.height * 100}%`,
-                                                        }}
-                                                    />
-                                                )}
-                                                {/* Human bounding box (solid, info/blue) */}
-                                                {sample.human?.boundingBox && (
-                                                    <div
-                                                        className="absolute border border-info pointer-events-none"
-                                                        style={{
-                                                            left: `${sample.human.boundingBox.x * 100}%`,
-                                                            top: `${sample.human.boundingBox.y * 100}%`,
-                                                            width: `${sample.human.boundingBox.width * 100}%`,
-                                                            height: `${sample.human.boundingBox.height * 100}%`,
-                                                        }}
-                                                    />
-                                                )}
-                                            </div>
-                                            <div className="px-2 py-1.5 text-xs">
-                                                {/* Header: ID + badges */}
-                                                <div className="flex items-center justify-between gap-1 mb-1">
-                                                    <span className="text-muted font-mono">{sample.id.slice(0, 8)}</span>
-                                                    <div className="flex gap-0.5">
-                                                        {allLabels.map(label => (
-                                                            <span key={label} className={`px-1.5 py-0.5 text-[10px] rounded ${statusColors[label]}`}>
-                                                                {statusLabels[label]}
-                                                            </span>
-                                                        ))}
-                                                    </div>
+                                            )}
+                                            {/* Human bounding box (solid, info/blue) */}
+                                            {sample.human?.boundingBox && (
+                                                <div
+                                                    className="absolute border border-info pointer-events-none"
+                                                    style={{
+                                                        left: `${sample.human.boundingBox.x * 100}%`,
+                                                        top: `${sample.human.boundingBox.y * 100}%`,
+                                                        width: `${sample.human.boundingBox.width * 100}%`,
+                                                        height: `${sample.human.boundingBox.height * 100}%`,
+                                                    }}
+                                                />
+                                            )}
+                                        </div>
+                                        <div className="px-2 py-1.5 text-xs">
+                                            {/* Header: ID + badges */}
+                                            <div className="flex items-center justify-between gap-1 mb-1">
+                                                <span className="text-muted font-mono">{sample.id.slice(0, 8)}</span>
+                                                <div className="flex gap-0.5">
+                                                    {allLabels.map(label => (
+                                                        <span key={label} className={`px-1.5 py-0.5 text-[10px] rounded ${statusColors[label]}`}>
+                                                            {statusLabels[label]}
+                                                        </span>
+                                                    ))}
                                                 </div>
-
-                                                {/* Detection table with metrics */}
-                                                <table>
-                                                    <thead>
-                                                        <tr className="text-muted">
-                                                            <th className="text-left font-medium pr-2"></th>
-                                                            <th className="text-left font-medium pr-1.5">H</th>
-                                                            <th className="text-left font-medium pr-3">AI</th>
-                                                            <th className="text-left font-medium text-secondary"></th>
-                                                        </tr>
-                                                    </thead>
-                                                    <tbody>
-                                                        <tr>
-                                                            <td className="text-muted pr-2">Board</td>
-                                                            <td className={`pr-1.5 ${sample.human ? (sample.human.hasBoardDetected ? 'text-success' : 'text-error') : 'text-muted'}`}>
-                                                                {sample.human ? (sample.human.hasBoardDetected ? 'Y' : 'N') : '—'}
-                                                            </td>
-                                                            <td className={`pr-3 ${sample.ai ? (sample.ai.hasBoardDetected ? 'text-success' : 'text-error') : 'text-muted'}`}>
-                                                                {sample.ai ? (sample.ai.hasBoardDetected ? 'Y' : 'N') : '—'}
-                                                            </td>
-                                                            <td className="text-secondary">
-                                                                {sample.ai && (
-                                                                    <span>
-                                                                        Confidence: {Math.round(sample.ai.confidence * 100)}%
-                                                                        {sample.iou !== null && (
-                                                                            <span className={
-                                                                                sample.iou >= 0.75 ? ' text-success' :
-                                                                                    sample.iou >= 0.5 ? ' text-warning' : ' text-error'
-                                                                            }> IoU: {Math.round(sample.iou * 100)}%</span>
-                                                                        )}
-                                                                    </span>
-                                                                )}
-                                                            </td>
-                                                        </tr>
-                                                        <tr>
-                                                            <td className="text-muted pr-2">Entire</td>
-                                                            <td className={`pr-1.5 ${sample.human ? (sample.human.isEntireBoardVisible ? 'text-success' : 'text-error') : 'text-muted'}`}>
-                                                                {sample.human ? (sample.human.isEntireBoardVisible ? 'Y' : 'N') : '—'}
-                                                            </td>
-                                                            <td className={`pr-3 ${sample.ai ? (sample.ai.isEntireBoardVisible ? 'text-success' : 'text-error') : 'text-muted'}`}>
-                                                                {sample.ai ? (sample.ai.isEntireBoardVisible ? 'Y' : 'N') : '—'}
-                                                            </td>
-                                                            <td className="text-secondary">
-                                                                {sample.ai?.classifierConfidence !== null && sample.ai?.classifierConfidence !== undefined && (
-                                                                    <span>Classifier: {Math.round(sample.ai.classifierConfidence * 100)}%</span>
-                                                                )}
-                                                            </td>
-                                                        </tr>
-                                                    </tbody>
-                                                </table>
                                             </div>
-                                        </button>
+
+                                            {/* Detection table with metrics */}
+                                            <table>
+                                                <thead>
+                                                    <tr className="text-muted">
+                                                        <th className="text-left font-medium pr-2"></th>
+                                                        <th className="text-left font-medium pr-1.5">H</th>
+                                                        <th className="text-left font-medium pr-3">AI</th>
+                                                        <th className="text-left font-medium text-secondary"></th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    <tr>
+                                                        <td className="text-muted pr-2">Board</td>
+                                                        <td className={`pr-1.5 ${sample.human ? (sample.human.hasBoardDetected ? 'text-success' : 'text-error') : 'text-muted'}`}>
+                                                            {sample.human ? (sample.human.hasBoardDetected ? 'Y' : 'N') : '—'}
+                                                        </td>
+                                                        <td className={`pr-3 ${sample.ai ? (sample.ai.hasBoardDetected ? 'text-success' : 'text-error') : 'text-muted'}`}>
+                                                            {sample.ai ? (sample.ai.hasBoardDetected ? 'Y' : 'N') : '—'}
+                                                        </td>
+                                                        <td className="text-secondary">
+                                                            {sample.ai && (
+                                                                <span>
+                                                                    Confidence: {Math.round(sample.ai.confidence * 100)}%
+                                                                    {sample.iou !== null && (
+                                                                        <span className={
+                                                                            sample.iou >= 0.75 ? ' text-success' :
+                                                                                sample.iou >= 0.5 ? ' text-warning' : ' text-error'
+                                                                        }> IoU: {Math.round(sample.iou * 100)}%</span>
+                                                                    )}
+                                                                </span>
+                                                            )}
+                                                        </td>
+                                                    </tr>
+                                                    <tr>
+                                                        <td className="text-muted pr-2">Entire</td>
+                                                        <td className={`pr-1.5 ${sample.human ? (sample.human.isEntireBoardVisible ? 'text-success' : 'text-error') : 'text-muted'}`}>
+                                                            {sample.human ? (sample.human.isEntireBoardVisible ? 'Y' : 'N') : '—'}
+                                                        </td>
+                                                        <td className={`pr-3 ${sample.ai ? (sample.ai.isEntireBoardVisible ? 'text-success' : 'text-error') : 'text-muted'}`}>
+                                                            {sample.ai ? (sample.ai.isEntireBoardVisible ? 'Y' : 'N') : '—'}
+                                                        </td>
+                                                        <td className="text-secondary">
+                                                            {sample.ai?.classifierConfidence !== null && sample.ai?.classifierConfidence !== undefined && (
+                                                                <span>Classifier: {Math.round(sample.ai.classifierConfidence * 100)}%</span>
+                                                            )}
+                                                        </td>
+                                                    </tr>
+                                                </tbody>
+                                            </table>
+                                        </div>
                                     </div>
                                 );
                             })}
+                        </div>
+                    )}
+
+                    {/* Grid Pagination */}
+                    {viewType === 'grid' && filteredSamples.length > pageSize && (
+                        <div className="flex items-center justify-between px-4 py-3 border border-border rounded-md bg-surface">
+                            <div className="text-xs text-secondary">
+                                {paginatedGridSamples.length === 0 ? 0 : ((currentPage - 1) * pageSize) + 1}–{Math.min(currentPage * pageSize, filteredSamples.length)} of {filteredSamples.length}
+                            </div>
+                            <div className="flex items-center gap-1">
+                                <button
+                                    onClick={() => setCurrentPage(currentPage - 1)}
+                                    disabled={currentPage === 1}
+                                    className={cn(
+                                        'p-1.5 rounded transition-colors text-secondary',
+                                        currentPage === 1
+                                            ? 'opacity-30 cursor-not-allowed'
+                                            : 'hover:bg-surface-dim hover:text-foreground'
+                                    )}
+                                >
+                                    <ChevronLeft className="w-4 h-4" />
+                                </button>
+                                <div className="flex items-center gap-0.5">
+                                    {(() => {
+                                        const totalPages = Math.ceil(filteredSamples.length / pageSize);
+                                        const pages = [];
+                                        const maxVisible = 5;
+
+                                        let startPage = Math.max(1, currentPage - Math.floor(maxVisible / 2));
+                                        const endPage = Math.min(totalPages, startPage + maxVisible - 1);
+
+                                        if (endPage - startPage < maxVisible - 1) {
+                                            startPage = Math.max(1, endPage - maxVisible + 1);
+                                        }
+
+                                        for (let i = startPage; i <= endPage; i++) {
+                                            pages.push(
+                                                <button
+                                                    key={i}
+                                                    onClick={() => setCurrentPage(i)}
+                                                    className={cn(
+                                                        'min-w-[28px] h-7 px-2 rounded text-xs font-medium transition-colors',
+                                                        i === currentPage
+                                                            ? 'bg-primary text-white'
+                                                            : 'text-secondary hover:bg-surface-dim hover:text-foreground'
+                                                    )}
+                                                >
+                                                    {i}
+                                                </button>
+                                            );
+                                        }
+                                        return pages;
+                                    })()}
+                                </div>
+                                <button
+                                    onClick={() => setCurrentPage(currentPage + 1)}
+                                    disabled={currentPage >= Math.ceil(filteredSamples.length / pageSize)}
+                                    className={cn(
+                                        'p-1.5 rounded transition-colors text-secondary',
+                                        currentPage >= Math.ceil(filteredSamples.length / pageSize)
+                                            ? 'opacity-30 cursor-not-allowed'
+                                            : 'hover:bg-surface-dim hover:text-foreground'
+                                    )}
+                                >
+                                    <ChevronRight className="w-4 h-4" />
+                                </button>
+                            </div>
                         </div>
                     )}
                 </>

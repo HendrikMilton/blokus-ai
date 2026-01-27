@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
+import { ChevronDown } from 'lucide-react';
 
 export interface SelectOption {
     value: string | number;
@@ -56,7 +57,7 @@ export const Select = ({
     }, []);
 
     return (
-        <div className={`w-full ${className}`} ref={containerRef}>
+        <div className={className || 'w-full'} ref={containerRef}>
             {label && (
                 <label className="block text-sm font-medium text-foreground mb-1">
                     {label}
@@ -78,14 +79,7 @@ export const Select = ({
                     <span className={selectedOption ? 'text-foreground' : 'text-muted'}>
                         {selectedOption?.label || placeholder}
                     </span>
-                    <svg
-                        className={`h-4 w-4 text-secondary transition-transform ${isOpen ? 'rotate-180' : ''}`}
-                        fill="none"
-                        stroke="currentColor"
-                        viewBox="0 0 24 24"
-                    >
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                    </svg>
+                    <ChevronDown className={`h-4 w-4 text-secondary transition-transform ${isOpen ? 'rotate-180' : ''}`} />
                 </button>
 
                 {isOpen && (

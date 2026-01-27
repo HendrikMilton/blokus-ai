@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import type { DetectionRun, DetectionRunStatus } from '@blokus-ai/shared';
+import { Trash2, Loader2 } from 'lucide-react';
 import { Table, Column } from '../../../components/ui/Table';
 import { ConfirmModal } from '../../../components/ui/ConfirmModal';
 import { http } from '../../../api/config';
@@ -19,12 +20,6 @@ interface Props {
     onDelete?: (id: string) => void;
 }
 
-const TrashIcon = () => (
-    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-    </svg>
-);
-
 const statusStyles: Record<DetectionRunStatus, string> = {
     pending: 'bg-surface-dim text-secondary',
     running: 'bg-info/20 text-info',
@@ -39,32 +34,9 @@ const statusLabels: Record<DetectionRunStatus, string> = {
     failed: 'Failed',
 };
 
-const SpinnerIcon = () => (
-    <svg
-        className="animate-spin h-3 w-3"
-        xmlns="http://www.w3.org/2000/svg"
-        fill="none"
-        viewBox="0 0 24 24"
-    >
-        <circle
-            className="opacity-25"
-            cx="12"
-            cy="12"
-            r="10"
-            stroke="currentColor"
-            strokeWidth="4"
-        />
-        <path
-            className="opacity-75"
-            fill="currentColor"
-            d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-        />
-    </svg>
-);
-
 const StatusChip = ({ status, progress }: { status: DetectionRunStatus; progress?: DetectionProgress }) => (
     <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 text-xs font-medium rounded-full ${statusStyles[status]}`}>
-        {status === 'running' && <SpinnerIcon />}
+        {status === 'running' && <Loader2 className="w-3 h-3 animate-spin" />}
         {status === 'running' && progress
             ? `${progress.processedCount}/${progress.totalCount}`
             : statusLabels[status]
@@ -183,7 +155,7 @@ const getColumns = (
                 className="p-1.5 text-secondary hover:text-error disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
                 title="Delete detection run"
             >
-                <TrashIcon />
+                <Trash2 className="w-4 h-4" />
             </button>
         ),
     },
@@ -218,7 +190,7 @@ export const DetectionRunsTable = ({ runs, loading, progress, onDelete }: Props)
             <Table<DetectionRun>
                 columns={columns}
                 data={runs}
-                keyField="id"
+                getRowKey={(row) => row.id}
                 loading={loading}
                 emptyMessage="No detection runs yet. Click 'Run AI Detection' to start your first detection run."
             />

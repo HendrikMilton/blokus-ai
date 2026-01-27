@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'react-hot-toast';
+import { ChevronLeft, CheckCircle } from 'lucide-react';
 import { useGame } from '../../contexts/GameContext';
 import { BoardOverlay } from '../../components/BoardOverlay';
 import { Button, Loading } from '../../components/ui';
@@ -47,9 +48,7 @@ export const BoardConfirmPage = () => {
                     onClick={handleRetake}
                     className="p-2 -ml-2 text-muted-foreground hover:text-foreground transition-colors"
                 >
-                    <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-                    </svg>
+                    <ChevronLeft className="w-6 h-6" />
                 </button>
                 <h1 className="text-lg font-semibold text-foreground">Confirm Board</h1>
                 <div
@@ -87,9 +86,7 @@ export const BoardConfirmPage = () => {
             {!state.isDetecting && state.boardState && (
                 <div className="px-4 py-3 bg-surface border-t border-border">
                     <div className="flex items-center justify-center gap-2 text-sm text-muted-foreground">
-                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                        </svg>
+                        <CheckCircle className="w-4 h-4" />
                         <span>Detected {pieceCount} placed cells</span>
                     </div>
                 </div>

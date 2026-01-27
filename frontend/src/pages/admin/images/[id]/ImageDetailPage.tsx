@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
+import { ChevronLeft, ChevronRight, Pencil, Play } from 'lucide-react';
 import { http, API_URL } from '../../../../api/config';
 import { Button } from '../../../../components/ui/Button';
 import { Select } from '../../../../components/ui/Select';
@@ -55,36 +56,6 @@ interface SampleListItem {
     id: string;
 }
 
-const BackIcon = () => (
-    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-    </svg>
-);
-
-const EditIcon = () => (
-    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-    </svg>
-);
-
-const ChevronLeftIcon = () => (
-    <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-    </svg>
-);
-
-const ChevronRightIcon = () => (
-    <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-    </svg>
-);
-
-const PlayIcon = () => (
-    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-    </svg>
-);
 
 export const ImageDetailPage = () => {
     const { id } = useParams<{ id: string }>();
@@ -246,7 +217,7 @@ export const ImageDetailPage = () => {
                         onClick={() => navigate(-1)}
                         className="p-1.5 -ml-1.5 rounded-lg hover:bg-surface-dim transition-colors text-secondary hover:text-foreground"
                     >
-                        <BackIcon />
+                        <ChevronLeft className="w-4 h-4" />
                     </button>
                     <h1 className="text-xl font-medium text-foreground">Image not found</h1>
                 </div>
@@ -264,7 +235,7 @@ export const ImageDetailPage = () => {
                             onClick={() => navigate(-1)}
                             className="p-1.5 -ml-1.5 rounded-lg hover:bg-surface-dim transition-colors text-secondary hover:text-foreground"
                         >
-                            <BackIcon />
+                            <ChevronLeft className="w-4 h-4" />
                         </button>
                         <h1 className="text-lg sm:text-xl font-medium text-foreground font-mono">{sample.id.slice(0, 8)}</h1>
                         {getStatusLabels(sample.status).map(label => (
@@ -289,7 +260,7 @@ export const ImageDetailPage = () => {
                             className="p-2 rounded-lg hover:bg-surface-dim transition-colors text-secondary hover:text-foreground disabled:opacity-30 disabled:cursor-not-allowed"
                             title="Previous image (←)"
                         >
-                            <ChevronLeftIcon />
+                            <ChevronLeft className="w-5 h-5" />
                         </button>
                         {sampleIds.length > 0 && (
                             <span className="text-xs text-muted min-w-[4rem] text-center">
@@ -302,12 +273,12 @@ export const ImageDetailPage = () => {
                             className="p-2 rounded-lg hover:bg-surface-dim transition-colors text-secondary hover:text-foreground disabled:opacity-30 disabled:cursor-not-allowed"
                             title="Next image (→)"
                         >
-                            <ChevronRightIcon />
+                            <ChevronRight className="w-5 h-5" />
                         </button>
                     </div>
                     <Button
                         onClick={() => navigate(`/admin/images/label/${sample.id}`)}
-                        leftIcon={<EditIcon />}
+                        leftIcon={<Pencil className="w-4 h-4" />}
                     >
                         Edit in labeling mode
                     </Button>
@@ -393,7 +364,7 @@ export const ImageDetailPage = () => {
                             <Button
                                 onClick={runDetection}
                                 disabled={isDetecting || !selectedModelId}
-                                leftIcon={<PlayIcon />}
+                                leftIcon={<Play className="w-4 h-4" />}
                             >
                                 {isDetecting ? 'Running...' : 'Detect'}
                             </Button>
