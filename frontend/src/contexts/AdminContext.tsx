@@ -35,8 +35,8 @@ export const [AdminProvider, useAdmin] = makeContext(() => {
     const [isLoadingSamples, setIsLoadingSamples] = useState(true);
     const [hasFetchedSamples, setHasFetchedSamples] = useState(false);
 
-    // Selected model for viewing detections (null = latest)
-    const [selectedModelId, setSelectedModelId] = useState<string | null>(null);
+    // Selected models for viewing detections (empty = latest/all)
+    const [selectedModelIds, setSelectedModelIds] = useState<string[]>([]);
 
     // Training runs state
     const [trainingRuns, setTrainingRuns] = useState<TrainingRun[]>([]);
@@ -182,9 +182,10 @@ export const [AdminProvider, useAdmin] = makeContext(() => {
             const { [data.run.id]: _, ...rest } = prev;
             return rest;
         });
-        // Refresh samples to get updated detection results for the current model
-        fetchSamples(true, selectedModelId);
-    }, [fetchSamples, selectedModelId]);
+        // Refresh samples to get updated detection results for the current model(s)
+        const modelId = selectedModelIds.length === 1 ? selectedModelIds[0] : null;
+        fetchSamples(true, modelId);
+    }, [fetchSamples, selectedModelIds]);
 
     useSocketEvent('detection-run-failed', (data) => {
         setDetectionRuns(prev => prev.map(r => r.id === data.run.id ? data.run : r));
@@ -238,9 +239,9 @@ export const [AdminProvider, useAdmin] = makeContext(() => {
         removeSample,
         removeSamples,
 
-        // Selected model for viewing detections
-        selectedModelId,
-        setSelectedModelId,
+        // Selected models for viewing detections
+        selectedModelIds,
+        setSelectedModelIds,
 
         // Training runs
         trainingRuns,

@@ -80,14 +80,17 @@ const defaultStatusFlags: SampleStatusFlags = {
 };
 
 // GET /api/ml/samples - List all samples from S3
-// Optional query param: ?modelId= to filter AI detections by model
+// Optional query params:
+//   ?modelId= to filter AI detections by model
+//   ?filter= to apply preset filter (unlabeled, false-positives, false-negatives, low-iou, disagreements)
 mlRouter.get('/samples', asyncHandler(async (req, res) => {
     const modelId = req.query.modelId as string | undefined;
+    const filter = req.query.filter as string | undefined;
 
     const s3Samples = await listSamples();
     const detectionInfoMap = await getSampleDetectionInfoMap(modelId || null);
 
-    const samples = s3Samples.map(s => {
+    let samples = s3Samples.map(s => {
         const info = detectionInfoMap.get(s.id);
 
         return {
@@ -102,6 +105,27 @@ mlRouter.get('/samples', asyncHandler(async (req, res) => {
             thumbnailUrl: getThumbnailUrl(s.id),
         };
     });
+
+    // Apply filter if specified
+    if (filter) {
+        samples = samples.filter(s => {
+            switch (filter) {
+            case 'unlabeled':
+                return !s.status.humanLabeled;
+            case 'false-positives':
+                return s.ai?.hasBoardDetected === true && s.human?.hasBoardDetected === false;
+            case 'false-negatives':
+                return s.ai?.hasBoardDetected === false && s.human?.hasBoardDetected === true;
+            case 'low-iou':
+                return s.iou !== null && s.iou < 0.8;
+            case 'disagreements':
+                return s.ai !== null && s.human !== null &&
+                    s.ai.hasBoardDetected !== s.human.hasBoardDetected;
+            default:
+                return true;
+            }
+        });
+    }
 
     res.json({ samples });
 }));

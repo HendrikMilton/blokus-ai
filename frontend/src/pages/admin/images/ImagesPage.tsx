@@ -8,6 +8,7 @@ import { ML_API } from '../../../api/ml';
 import { Button } from '../../../components/ui/Button';
 import { Input } from '../../../components/ui/Input';
 import { Select } from '../../../components/ui/Select';
+import { MultiSelect } from '../../../components/ui/MultiSelect';
 import { Table, Column, SortState } from '../../../components/ui/Table';
 import { getStatusLabels, Sample } from '@blokus-ai/shared';
 import { statusColors, statusLabels } from '../../../lib/status';
@@ -23,6 +24,7 @@ type Tab = 'images' | 'models' | 'detections' | 'test';
 type FilterPreset = 'all' | 'unlabeled' | 'false-positives' | 'false-negatives' | 'low-iou' | 'disagreements';
 type SortOption = 'default' | 'lowest-iou' | 'lowest-confidence';
 type ViewType = 'grid' | 'list';
+type MultiModelMode = 'intersection' | 'union';
 
 const filterPresetLabels: Record<FilterPreset, string> = {
     'all': 'All',
@@ -123,8 +125,8 @@ export const ImagesPage = () => {
         isLoadingSamples: isLoading,
         fetchSamples,
         removeSamples,
-        selectedModelId,
-        setSelectedModelId,
+        selectedModelIds,
+        setSelectedModelIds,
         trainingRuns,
         isLoadingTrainingRuns: isLoadingRuns,
         trainingProgress,
@@ -213,6 +215,13 @@ export const ImagesPage = () => {
 
     // Search state
     const [searchQuery, setSearchQuery] = useState('');
+
+    // Multi-model mode (intersection vs union)
+    const [multiModelMode, setMultiModelMode] = useState<MultiModelMode>('intersection');
+
+    // Multi-model samples cache
+    const [multiModelSamples, setMultiModelSamples] = useState<Map<string, Set<string>>>(new Map());
+    const [isLoadingMultiModel, setIsLoadingMultiModel] = useState(false);
 
     // List view sorting state
     const [listSortState, setListSortState] = useState<SortState>({ column: 'created_at', direction: 'desc' });
@@ -363,8 +372,8 @@ export const ImagesPage = () => {
     };
 
     const handleDoubleClick = (id: string) => {
-        // Open in new tab on double-click, passing current model selection
-        const modelParam = selectedModelId ? `?model=${selectedModelId}` : '';
+        // Open in new tab on double-click, passing first selected model
+        const modelParam = selectedModelIds.length > 0 ? `?model=${selectedModelIds[0]}` : '';
         window.open(`/admin/images/${id}${modelParam}`, '_blank');
     };
 
@@ -416,13 +425,44 @@ export const ImagesPage = () => {
 
     useSocketEvent('detection-run-deleted', () => {
         // Reload samples to reflect cleared AI labels
-        fetchSamples(true, selectedModelId);
-    }, [fetchSamples, selectedModelId]);
+        const modelId = selectedModelIds.length === 1 ? selectedModelIds[0] : null;
+        fetchSamples(true, modelId);
+    }, [fetchSamples, selectedModelIds]);
 
-    // Refetch samples when selected model changes
+    // Refetch samples when selected model changes (single model mode)
     useEffect(() => {
-        fetchSamples(true, selectedModelId);
-    }, [selectedModelId]);  
+        if (selectedModelIds.length <= 1) {
+            const modelId = selectedModelIds.length === 1 ? selectedModelIds[0] : null;
+            fetchSamples(true, modelId);
+        }
+    }, [selectedModelIds, fetchSamples]);
+
+    // Fetch samples for each model when multiple models selected
+    useEffect(() => {
+        if (selectedModelIds.length <= 1 || preset === 'all') {
+            setMultiModelSamples(new Map());
+            return;
+        }
+
+        const fetchMultiModelSamples = async () => {
+            setIsLoadingMultiModel(true);
+            const newMap = new Map<string, Set<string>>();
+
+            for (const modelId of selectedModelIds) {
+                try {
+                    const response = await http.get<{ samples: Sample[] }>(`/api/ml/samples?modelId=${modelId}&filter=${preset}`);
+                    newMap.set(modelId, new Set(response.samples.map(s => s.id)));
+                } catch {
+                    // Ignore errors
+                }
+            }
+
+            setMultiModelSamples(newMap);
+            setIsLoadingMultiModel(false);
+        };
+
+        fetchMultiModelSamples();
+    }, [selectedModelIds, preset]);
 
     // Get completed models for the dropdown
     const completedModels = useMemo(() =>
@@ -430,20 +470,38 @@ export const ImagesPage = () => {
     [trainingRuns]
     );
 
-    const filteredSamples = sortSamples(
-        samples.filter(s => {
-            // Apply preset filter
-            if (!matchesPreset(s, preset)) {
-                return false;
+    // Compute filtered samples based on multi-model mode
+    const filteredSamples = useMemo(() => {
+        let filtered = samples;
+
+        // Apply multi-model filtering when multiple models selected and not "all" filter
+        if (selectedModelIds.length > 1 && preset !== 'all' && multiModelSamples.size > 0) {
+            const sampleSets = Array.from(multiModelSamples.values());
+
+            if (multiModelMode === 'intersection') {
+                // Sample must be in ALL selected models
+                filtered = samples.filter(s => sampleSets.every(set => set.has(s.id)));
+            } else {
+                // Sample must be in ANY selected model
+                filtered = samples.filter(s => sampleSets.some(set => set.has(s.id)));
             }
-            // Apply search filter
-            if (searchQuery) {
-                return s.id.toLowerCase().includes(searchQuery.toLowerCase());
-            }
-            return true;
-        }),
-        sort
-    );
+        } else {
+            // Single model or "all" filter - use normal filtering
+            filtered = samples.filter(s => {
+                if (!matchesPreset(s, preset)) {
+                    return false;
+                }
+                return true;
+            });
+        }
+
+        // Apply search filter
+        if (searchQuery) {
+            filtered = filtered.filter(s => s.id.toLowerCase().includes(searchQuery.toLowerCase()));
+        }
+
+        return sortSamples(filtered, sort);
+    }, [samples, selectedModelIds, preset, multiModelMode, multiModelSamples, searchQuery, sort]);
 
     // Reset page when filters change
     useEffect(() => {
@@ -788,19 +846,50 @@ export const ImagesPage = () => {
                             />
                         )}
                         {completedModels.length > 0 && (
-                            <Select
-                                label="Model"
-                                value={selectedModelId || ''}
-                                onChange={(v) => setSelectedModelId(v || null)}
-                                options={[
-                                    { value: '', label: 'Latest' },
-                                    ...completedModels.map(run => ({
-                                        value: run.id,
-                                        label: `${formatDate(run.createdAt)} (${run.imageCount} imgs)`,
-                                    })),
-                                ]}
+                            <MultiSelect
+                                label="Models"
+                                options={completedModels.map(run => ({
+                                    value: run.id,
+                                    label: `${formatDate(run.createdAt)} (${run.imageCount} imgs)`,
+                                }))}
+                                selected={selectedModelIds}
+                                onChange={setSelectedModelIds}
+                                placeholder="All models"
+                                allLabel="All models"
                                 className="w-64"
                             />
+                        )}
+                        {/* Intersection/Union toggle - show when multiple models selected and filter is not "all" */}
+                        {selectedModelIds.length > 1 && preset !== 'all' && (
+                            <div className="flex flex-col gap-1">
+                                <label className="block text-sm font-medium text-foreground mb-1">Mode</label>
+                                <div className="flex items-center border border-border rounded-md overflow-hidden h-9">
+                                    <button
+                                        onClick={() => setMultiModelMode('intersection')}
+                                        className={cn(
+                                            'px-3 h-full text-sm transition-colors',
+                                            multiModelMode === 'intersection'
+                                                ? 'bg-primary text-white'
+                                                : 'bg-surface text-secondary hover:text-foreground hover:bg-surface-dim'
+                                        )}
+                                        title="Show samples matching filter in ALL selected models"
+                                    >
+                                        All
+                                    </button>
+                                    <button
+                                        onClick={() => setMultiModelMode('union')}
+                                        className={cn(
+                                            'px-3 h-full text-sm transition-colors',
+                                            multiModelMode === 'union'
+                                                ? 'bg-primary text-white'
+                                                : 'bg-surface text-secondary hover:text-foreground hover:bg-surface-dim'
+                                        )}
+                                        title="Show samples matching filter in ANY selected model"
+                                    >
+                                        Any
+                                    </button>
+                                </div>
+                            </div>
                         )}
                         {/* Spacer to push right side elements */}
                         <div className="flex-1" />
@@ -836,7 +925,7 @@ export const ImagesPage = () => {
                             </>
                         )}
                         <span className="text-xs text-muted">
-                            {filteredSamples.length} of {samples.length} images
+                            {isLoadingMultiModel ? 'Loading...' : `${filteredSamples.length} of ${samples.length} images`}
                         </span>
                         {/* View Toggle */}
                         <div className="flex items-center border border-border rounded-md overflow-hidden">
