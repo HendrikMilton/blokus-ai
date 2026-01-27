@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { DetectionRun, DetectionRunStatus } from '@blokus-ai/shared';
+import type { DetectionRun, DetectionRunStatus, TrainingRun, ModelPipeline } from '@blokus-ai/shared';
 import { Trash2, Loader2 } from 'lucide-react';
 import { Table, Column } from '../../../components/ui/Table';
 import { ConfirmModal } from '../../../components/ui/ConfirmModal';
@@ -18,6 +18,8 @@ interface Props {
     loading: boolean;
     progress?: Record<string, DetectionProgress>; // keyed by run ID
     onDelete?: (id: string) => void;
+    trainingRuns?: TrainingRun[];
+    pipelines?: ModelPipeline[];
 }
 
 const statusStyles: Record<DetectionRunStatus, string> = {
@@ -79,12 +81,39 @@ const formatPercent = (value: number | null): string => {
 
 const getColumns = (
     progress?: Record<string, DetectionProgress>,
-    onDeleteClick?: (run: DetectionRun) => void
+    onDeleteClick?: (run: DetectionRun) => void,
+    trainingRunsMap?: Map<string, TrainingRun>,
+    pipelinesMap?: Map<string, ModelPipeline>
 ): Column<DetectionRun>[] => [
     {
         key: 'status',
         header: 'Status',
         render: (row) => <StatusChip status={row.status} progress={progress?.[row.id]} />,
+    },
+    {
+        key: 'model',
+        header: 'Model',
+        render: (row) => {
+            // Check if it's a pipeline
+            if (row.pipelineId) {
+                const pipeline = pipelinesMap?.get(row.pipelineId);
+                return (
+                    <span className="text-sm">
+                        🔗 {pipeline?.name || row.pipelineId.slice(0, 8)}
+                    </span>
+                );
+            }
+            // It's a training run
+            const trainingRun = trainingRunsMap?.get(row.modelId);
+            if (trainingRun) {
+                return (
+                    <span className="text-sm text-muted">
+                        {formatDate(trainingRun.createdAt)}
+                    </span>
+                );
+            }
+            return <span className="text-sm text-muted">{row.modelId.slice(0, 8)}</span>;
+        },
     },
     {
         key: 'totalCount',
@@ -171,9 +200,13 @@ const getColumns = (
     },
 ];
 
-export const DetectionRunsTable = ({ runs, loading, progress, onDelete }: Props) => {
+export const DetectionRunsTable = ({ runs, loading, progress, onDelete, trainingRuns, pipelines }: Props) => {
     const [deleteTarget, setDeleteTarget] = useState<DetectionRun | null>(null);
     const [isDeleting, setIsDeleting] = useState(false);
+
+    // Create lookup maps
+    const trainingRunsMap = new Map(trainingRuns?.map(r => [r.id, r]) || []);
+    const pipelinesMap = new Map(pipelines?.map(p => [p.id, p]) || []);
 
     const handleDelete = async () => {
         if (!deleteTarget) {
@@ -193,7 +226,7 @@ export const DetectionRunsTable = ({ runs, loading, progress, onDelete }: Props)
         }
     };
 
-    const columns = getColumns(progress, setDeleteTarget);
+    const columns = getColumns(progress, setDeleteTarget, trainingRunsMap, pipelinesMap);
 
     return (
         <>

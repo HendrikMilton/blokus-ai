@@ -15,7 +15,8 @@ export type SocketEvent =
     | 'detection-run-started'
     | 'detection-run-progress'
     | 'detection-run-completed'
-    | 'detection-run-failed';
+    | 'detection-run-failed'
+    | 'detection-run-deleted';
 
 // Event payload types
 export interface UserCreatedPayload {
@@ -76,8 +77,13 @@ export interface DetectionRunFailedPayload {
     run: DetectionRun;
 }
 
+export interface DetectionRunDeletedPayload {
+    runId: string;
+}
+
 // Discriminated union of all event payloads
-export type EventPayloads = {
+// Using Record<SocketEvent, ...> ensures all events have corresponding payloads
+export type EventPayloads = Record<SocketEvent, unknown> & {
     'user-created': UserCreatedPayload;
     'user-updated': UserUpdatedPayload;
     'user-deleted': UserDeletedPayload;
@@ -90,6 +96,7 @@ export type EventPayloads = {
     'detection-run-progress': DetectionRunProgressPayload;
     'detection-run-completed': DetectionRunCompletedPayload;
     'detection-run-failed': DetectionRunFailedPayload;
+    'detection-run-deleted': DetectionRunDeletedPayload;
 };
 
 // Room names

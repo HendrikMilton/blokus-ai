@@ -3,7 +3,7 @@ import { makeContext } from './config';
 import { http } from '../api/config';
 import { ML_API } from '../api/ml';
 import { useSocketEvent } from '../hooks/useSocketEvent';
-import type { TrainingRun, DetectionRun, Sample } from '@blokus-ai/shared';
+import type { TrainingRun, DetectionRun, Sample, ModelPipeline } from '@blokus-ai/shared';
 
 export type { Sample } from '@blokus-ai/shared';
 
@@ -49,6 +49,11 @@ export const [AdminProvider, useAdmin] = makeContext(() => {
     const [isLoadingDetectionRuns, setIsLoadingDetectionRuns] = useState(false);
     const [hasFetchedDetectionRuns, setHasFetchedDetectionRuns] = useState(false);
     const [detectionProgress, setDetectionProgress] = useState<Record<string, DetectionProgress>>({});
+
+    // Pipelines state
+    const [pipelines, setPipelines] = useState<ModelPipeline[]>([]);
+    const [isLoadingPipelines, setIsLoadingPipelines] = useState(false);
+    const [hasFetchedPipelines, setHasFetchedPipelines] = useState(false);
 
     // Fetch samples with optional model filter
     const fetchSamples = useCallback(async (forceFetch = false, modelId?: string | null) => {
@@ -107,12 +112,31 @@ export const [AdminProvider, useAdmin] = makeContext(() => {
         }
     }, [hasFetchedDetectionRuns]);
 
+    // Fetch pipelines
+    const fetchPipelines = useCallback(async (forceFetch = false) => {
+        if (hasFetchedPipelines && !forceFetch) {
+            return;
+        }
+
+        setIsLoadingPipelines(true);
+        try {
+            const pipelinesData = await ML_API.getPipelines();
+            setPipelines(pipelinesData);
+            setHasFetchedPipelines(true);
+        } catch {
+            // Error toast shown by http client
+        } finally {
+            setIsLoadingPipelines(false);
+        }
+    }, [hasFetchedPipelines]);
+
     // Load all data on mount
     useEffect(() => {
         fetchSamples();
         fetchTrainingRuns();
         fetchDetectionRuns();
-    }, [fetchSamples, fetchTrainingRuns, fetchDetectionRuns]);
+        fetchPipelines();
+    }, [fetchSamples, fetchTrainingRuns, fetchDetectionRuns, fetchPipelines]);
 
     // Socket listeners for training runs
     useSocketEvent('training-run-started', (data) => {
@@ -229,6 +253,18 @@ export const [AdminProvider, useAdmin] = makeContext(() => {
         setDetectionRuns(prev => prev.filter(r => r.id !== id));
     }, []);
 
+    const addPipeline = useCallback((pipeline: ModelPipeline) => {
+        setPipelines(prev => [pipeline, ...prev]);
+    }, []);
+
+    const updatePipelineState = useCallback((id: string, updates: Partial<ModelPipeline>) => {
+        setPipelines(prev => prev.map(p => p.id === id ? { ...p, ...updates } : p));
+    }, []);
+
+    const removePipeline = useCallback((id: string) => {
+        setPipelines(prev => prev.filter(p => p.id !== id));
+    }, []);
+
     return {
         // Samples
         samples,
@@ -258,5 +294,13 @@ export const [AdminProvider, useAdmin] = makeContext(() => {
         detectionProgress,
         addDetectionRun,
         removeDetectionRun,
+
+        // Pipelines
+        pipelines,
+        isLoadingPipelines,
+        fetchPipelines,
+        addPipeline,
+        updatePipelineState,
+        removePipeline,
     };
 });

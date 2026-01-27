@@ -11,6 +11,7 @@ import {
     TrainingRun,
     DetectionRun,
     BoardDetection,
+    ModelPipeline,
 } from '@blokus-ai/shared';
 
 export interface TestDetectResponse {
@@ -55,5 +56,27 @@ export const ML_API = {
     // Test detection with camera image
     testDetect: async (image: string, modelId?: string): Promise<TestDetectResponse> => {
         return http.post<TestDetectResponse>('/api/ml/detect/test', { image, modelId });
+    },
+
+    // Pipeline CRUD
+    getPipelines: async (): Promise<ModelPipeline[]> => {
+        const response = await http.get<{ pipelines: ModelPipeline[] }>('/api/ml/pipelines');
+        return response.pipelines;
+    },
+
+    getPipeline: async (id: string): Promise<ModelPipeline> => {
+        return http.get<ModelPipeline>(`/api/ml/pipelines/${id}`);
+    },
+
+    createPipeline: async (name: string, componentIds: string[]): Promise<ModelPipeline> => {
+        return http.post<ModelPipeline>('/api/ml/pipelines', { name, componentIds });
+    },
+
+    updatePipeline: async (id: string, data: { name?: string; componentIds?: string[] }): Promise<ModelPipeline> => {
+        return http.put<ModelPipeline>(`/api/ml/pipelines/${id}`, data);
+    },
+
+    deletePipeline: async (id: string): Promise<void> => {
+        await http.delete(`/api/ml/pipelines/${id}`);
     },
 };

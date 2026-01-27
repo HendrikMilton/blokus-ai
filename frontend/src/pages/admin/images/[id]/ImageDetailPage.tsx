@@ -4,7 +4,7 @@ import { ChevronLeft, ChevronRight, Pencil, Play } from 'lucide-react';
 import { http, API_URL } from '../../../../api/config';
 import { Button } from '../../../../components/ui/Button';
 import { Select } from '../../../../components/ui/Select';
-import type { BoundingBox, DetectResponseWithCorrection, SampleStatusFlags } from '@blokus-ai/shared';
+import type { BoundingBox, DetectResponseWithCorrection, SampleStatusFlags, ModelPipeline } from '@blokus-ai/shared';
 import { getStatusLabels } from '@blokus-ai/shared';
 import { statusColors, statusLabels } from '../../../../lib/status';
 
@@ -67,6 +67,7 @@ export const ImageDetailPage = () => {
     const [sampleIds, setSampleIds] = useState<string[]>([]);
     const [currentIndex, setCurrentIndex] = useState(-1);
     const [trainingRuns, setTrainingRuns] = useState<TrainingRun[]>([]);
+    const [pipelines, setPipelines] = useState<ModelPipeline[]>([]);
     const [isDetecting, setIsDetecting] = useState(false);
     const [previewDetection, setPreviewDetection] = useState<DetectResponseWithCorrection['detection'] | null>(null);
 
@@ -144,15 +145,18 @@ export const ImageDetailPage = () => {
         return () => window.removeEventListener('keydown', handleKeyDown);
     }, [goToPrevious, goToNext]);
 
-    // Load training runs for model selection
+    // Track if initial selection has been made
+    const [hasInitialSelection, setHasInitialSelection] = useState(false);
+
+    // Load training runs and pipelines for model selection
     useEffect(() => {
         const loadTrainingRuns = async () => {
             try {
                 const data = await http.get<{ runs: TrainingRun[] }>('/api/ml/training-runs');
                 const completedRuns = data.runs.filter(r => r.status === 'completed');
                 setTrainingRuns(completedRuns);
-                // Auto-select from URL or most recent completed run
-                if (completedRuns.length > 0) {
+                // Auto-select from URL or most recent completed run (only on initial load)
+                if (completedRuns.length > 0 && !hasInitialSelection) {
                     const urlModel = modelIdFromUrl;
                     if (urlModel && completedRuns.some(r => r.id === urlModel)) {
                         setSelectedModelIdState(urlModel);
@@ -161,13 +165,23 @@ export const ImageDetailPage = () => {
                         setSelectedModelIdState(completedRuns[0].id);
                         setViewModelIdState(completedRuns[0].id);
                     }
+                    setHasInitialSelection(true);
                 }
             } catch {
                 // Ignore error
             }
         };
+        const loadPipelines = async () => {
+            try {
+                const data = await http.get<{ pipelines: ModelPipeline[] }>('/api/ml/pipelines');
+                setPipelines(data.pipelines);
+            } catch {
+                // Ignore error
+            }
+        };
         loadTrainingRuns();
-    }, [modelIdFromUrl]);
+        loadPipelines();
+    }, [modelIdFromUrl, hasInitialSelection]);
 
     const runDetection = useCallback(async () => {
         if (!id || !selectedModelId) {
@@ -393,7 +407,7 @@ export const ImageDetailPage = () => {
                 </div>
 
                 {/* Run Detection Controls */}
-                {trainingRuns.length > 0 && (
+                {(trainingRuns.length > 0 || pipelines.length > 0) && (
                     <div className="bg-surface rounded-lg border border-border p-4">
                         <h2 className="text-sm font-medium text-foreground mb-3">Run Detection</h2>
                         <div className="flex items-center gap-3">
@@ -401,10 +415,16 @@ export const ImageDetailPage = () => {
                                 value={selectedModelId}
                                 onChange={(value) => setSelectedModelId(String(value))}
                                 placeholder="Select a model..."
-                                options={trainingRuns.map((run) => ({
-                                    value: run.id,
-                                    label: `${run.id.slice(0, 8)} - ${run.imageCount} images${run.accuracy !== null ? ` - ${(run.accuracy * 100).toFixed(1)}% acc` : ''}`,
-                                }))}
+                                options={[
+                                    ...trainingRuns.map((run) => ({
+                                        value: run.id,
+                                        label: `${run.id.slice(0, 8)} - ${run.imageCount} images${run.accuracy !== null ? ` - ${(run.accuracy * 100).toFixed(1)}% acc` : ''}`,
+                                    })),
+                                    ...pipelines.map((pipeline) => ({
+                                        value: `pipeline:${pipeline.id}`,
+                                        label: `\u{1F517} ${pipeline.name} (${pipeline.componentIds.length} models)`,
+                                    })),
+                                ]}
                                 className="flex-1"
                             />
                             <Button
@@ -474,71 +494,71 @@ export const ImageDetailPage = () => {
                             />
                         </div>
                         {detection && detection.detection ? (
-                        <div className="space-y-3">
-                            {/* Board detected */}
-                            <div className="flex items-center justify-between gap-4">
-                                <span className="text-sm text-secondary">Board detected</span>
-                                <span className={`px-2 py-0.5 text-xs font-medium rounded ${
-                                    detection.detection.hasBoardDetected
-                                        ? 'bg-success/20 text-success'
-                                        : 'bg-error/20 text-error'
-                                }`}>
-                                    {detection.detection.hasBoardDetected ? 'Yes' : 'No'}
-                                </span>
-                            </div>
-
-                            {/* Entire board visible */}
-                            <div className="flex items-center justify-between gap-4">
-                                <span className="text-sm text-secondary">Entire board visible</span>
-                                <span className={`px-2 py-0.5 text-xs font-medium rounded ${
-                                    detection.detection.isEntireBoardVisible
-                                        ? 'bg-success/20 text-success'
-                                        : 'bg-error/20 text-error'
-                                }`}>
-                                    {detection.detection.isEntireBoardVisible ? 'Yes' : 'No'}
-                                </span>
-                            </div>
-
-                            {/* Confidence */}
-                            <div className="flex items-center justify-between gap-4">
-                                <span className="text-sm text-secondary">Confidence</span>
-                                <span className="text-sm font-mono text-foreground">
-                                    {(detection.detection.confidence * 100).toFixed(0)}%
-                                </span>
-                            </div>
-
-                            {/* Classifier Confidence */}
-                            {detection.detection.classifierConfidence !== undefined && detection.detection.classifierConfidence !== null && (
+                            <div className="space-y-3">
+                                {/* Board detected */}
                                 <div className="flex items-center justify-between gap-4">
-                                    <span className="text-sm text-secondary">Classifier confidence</span>
-                                    <span className="text-sm font-mono text-foreground">
-                                        {(detection.detection.classifierConfidence * 100).toFixed(0)}%
-                                    </span>
-                                </div>
-                            )}
-
-                            {/* IoU vs Ground Truth */}
-                            {iou !== null && (
-                                <div className="flex items-center justify-between gap-4">
-                                    <span className="text-sm text-secondary">IoU vs Ground Truth</span>
-                                    <span className={`text-sm font-mono ${
-                                        iou >= 0.75 ? 'text-success' : iou >= 0.5 ? 'text-warning' : 'text-error'
+                                    <span className="text-sm text-secondary">Board detected</span>
+                                    <span className={`px-2 py-0.5 text-xs font-medium rounded ${
+                                        detection.detection.hasBoardDetected
+                                            ? 'bg-success/20 text-success'
+                                            : 'bg-error/20 text-error'
                                     }`}>
-                                        {(iou * 100).toFixed(1)}%
+                                        {detection.detection.hasBoardDetected ? 'Yes' : 'No'}
                                     </span>
                                 </div>
-                            )}
 
-                            {/* Bounding box coordinates */}
-                            {detection.detection.boundingBox && (
-                                <div className="pt-2 border-t border-border">
-                                    <span className="text-xs text-muted">Bounding box</span>
-                                    <p className="text-xs font-mono text-foreground mt-1">
-                                        {formatBbox(detection.detection.boundingBox)}
-                                    </p>
+                                {/* Entire board visible */}
+                                <div className="flex items-center justify-between gap-4">
+                                    <span className="text-sm text-secondary">Entire board visible</span>
+                                    <span className={`px-2 py-0.5 text-xs font-medium rounded ${
+                                        detection.detection.isEntireBoardVisible
+                                            ? 'bg-success/20 text-success'
+                                            : 'bg-error/20 text-error'
+                                    }`}>
+                                        {detection.detection.isEntireBoardVisible ? 'Yes' : 'No'}
+                                    </span>
                                 </div>
-                            )}
-                        </div>
+
+                                {/* Confidence */}
+                                <div className="flex items-center justify-between gap-4">
+                                    <span className="text-sm text-secondary">Confidence</span>
+                                    <span className="text-sm font-mono text-foreground">
+                                        {(detection.detection.confidence * 100).toFixed(0)}%
+                                    </span>
+                                </div>
+
+                                {/* Classifier Confidence */}
+                                {detection.detection.classifierConfidence !== undefined && detection.detection.classifierConfidence !== null && (
+                                    <div className="flex items-center justify-between gap-4">
+                                        <span className="text-sm text-secondary">Classifier confidence</span>
+                                        <span className="text-sm font-mono text-foreground">
+                                            {(detection.detection.classifierConfidence * 100).toFixed(0)}%
+                                        </span>
+                                    </div>
+                                )}
+
+                                {/* IoU vs Ground Truth */}
+                                {iou !== null && (
+                                    <div className="flex items-center justify-between gap-4">
+                                        <span className="text-sm text-secondary">IoU vs Ground Truth</span>
+                                        <span className={`text-sm font-mono ${
+                                            iou >= 0.75 ? 'text-success' : iou >= 0.5 ? 'text-warning' : 'text-error'
+                                        }`}>
+                                            {(iou * 100).toFixed(1)}%
+                                        </span>
+                                    </div>
+                                )}
+
+                                {/* Bounding box coordinates */}
+                                {detection.detection.boundingBox && (
+                                    <div className="pt-2 border-t border-border">
+                                        <span className="text-xs text-muted">Bounding box</span>
+                                        <p className="text-xs font-mono text-foreground mt-1">
+                                            {formatBbox(detection.detection.boundingBox)}
+                                        </p>
+                                    </div>
+                                )}
+                            </div>
                         ) : (
                             <p className="text-sm text-muted">No AI detection for this model</p>
                         )}

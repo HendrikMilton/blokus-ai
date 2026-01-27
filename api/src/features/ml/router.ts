@@ -4,7 +4,7 @@ import { asyncHandler } from '../../lib/async-handler';
 import { mlHttp } from '../../lib/http';
 import type { DetectResponse } from '@blokus-ai/shared';
 import { BadRequestError, NotFoundError } from '../../error';
-import { getBoardDetectionWithCorrectionBySampleId, upsertModelDetection, deleteBoardDetection, deleteBoardDetections, saveBoardDetectionCorrection, CorrectionData, setVerificationStatus, saveManualLabel, ManualLabelData, getSampleStatusFlagsById, getSampleDetectionInfoMap, createTrainingRun, updateTrainingRun, listTrainingRuns, getTrainingRun, deleteTrainingRun, getHumanLabeledImageCount, getTrainingData, getClassifierTrainingData, createDetectionRun, updateDetectionRun, listDetectionRuns, getDetectionRun, deleteDetectionRun, getSampleIdsForBulkDetection, calculateAverageIoU } from './database';
+import { getBoardDetectionWithCorrectionBySampleId, upsertModelDetection, deleteBoardDetection, deleteBoardDetections, saveBoardDetectionCorrection, CorrectionData, setVerificationStatus, saveManualLabel, ManualLabelData, getSampleStatusFlagsById, getSampleDetectionInfoMap, createTrainingRun, updateTrainingRun, listTrainingRuns, getTrainingRun, deleteTrainingRun, getHumanLabeledImageCount, getTrainingData, getClassifierTrainingData, createDetectionRun, updateDetectionRun, listDetectionRuns, getDetectionRun, deleteDetectionRun, getSampleIdsForBulkDetection, calculateAverageIoU, createPipeline, listPipelines, getPipeline, getPipelineWithComponents, updatePipeline, deletePipeline } from './database';
 import type { SampleStatusFlags } from '@blokus-ai/shared';
 import { listSamples, getSample, getUploadPresignedUrl, getCloudFrontUrl, getThumbnailUrl, generateThumbnail, deleteSamples } from './s3';
 import { emitEvent } from '../../lib/socket';
@@ -81,14 +81,29 @@ const defaultStatusFlags: SampleStatusFlags = {
 
 // GET /api/ml/samples - List all samples from S3
 // Optional query params:
-//   ?modelId= to filter AI detections by model
+//   ?modelId= to filter AI detections by model (can be pipeline:uuid for pipelines)
 //   ?filter= to apply preset filter (unlabeled, false-positives, false-negatives, low-iou, disagreements)
 mlRouter.get('/samples', asyncHandler(async (req, res) => {
-    const modelId = req.query.modelId as string | undefined;
+    const modelIdParam = req.query.modelId as string | undefined;
     const filter = req.query.filter as string | undefined;
 
+    // Handle pipeline: prefix - expand to component model IDs
+    let modelIds: string[] | null = null;
+    if (modelIdParam) {
+        if (modelIdParam.startsWith('pipeline:')) {
+            const pipelineId = modelIdParam.replace('pipeline:', '');
+            const pipeline = await getPipeline(pipelineId);
+            if (pipeline) {
+                modelIds = pipeline.componentIds;
+            }
+        } else {
+            modelIds = [modelIdParam];
+        }
+    }
+
     const s3Samples = await listSamples();
-    const detectionInfoMap = await getSampleDetectionInfoMap(modelId || null);
+    // Pass first model ID for now - multi-model support would need refactoring
+    const detectionInfoMap = await getSampleDetectionInfoMap(modelIds?.[0] || null);
 
     let samples = s3Samples.map(s => {
         const info = detectionInfoMap.get(s.id);
@@ -110,19 +125,19 @@ mlRouter.get('/samples', asyncHandler(async (req, res) => {
     if (filter) {
         samples = samples.filter(s => {
             switch (filter) {
-            case 'unlabeled':
-                return !s.status.humanLabeled;
-            case 'false-positives':
-                return s.ai?.hasBoardDetected === true && s.human?.hasBoardDetected === false;
-            case 'false-negatives':
-                return s.ai?.hasBoardDetected === false && s.human?.hasBoardDetected === true;
-            case 'low-iou':
-                return s.iou !== null && s.iou < 0.8;
-            case 'disagreements':
-                return s.ai !== null && s.human !== null &&
+                case 'unlabeled':
+                    return !s.status.humanLabeled;
+                case 'false-positives':
+                    return s.ai?.hasBoardDetected === true && s.human?.hasBoardDetected === false;
+                case 'false-negatives':
+                    return s.ai?.hasBoardDetected === false && s.human?.hasBoardDetected === true;
+                case 'low-iou':
+                    return s.iou !== null && s.iou < 0.8;
+                case 'disagreements':
+                    return s.ai !== null && s.human !== null &&
                     s.ai.hasBoardDetected !== s.human.hasBoardDetected;
-            default:
-                return true;
+                default:
+                    return true;
             }
         });
     }
@@ -188,6 +203,62 @@ mlRouter.post('/detect/test', asyncHandler(async (req, res) => {
         throw new BadRequestError('Image is required');
     }
 
+    // Check if this is a pipeline request
+    if (modelId && modelId.startsWith('pipeline:')) {
+        const pipelineId = modelId.replace('pipeline:', '');
+        const pipeline = await getPipeline(pipelineId);
+
+        if (!pipeline) {
+            throw new NotFoundError('Pipeline not found');
+        }
+
+        // Try each model in the pipeline until one detects a board
+        interface TestDetectResponse {
+            detection: {
+                hasBoardDetected: boolean;
+                isEntireBoardVisible: boolean;
+                confidence: number;
+                classifierConfidence?: number | null;
+                boundingBox: { x: number; y: number; width: number; height: number } | null;
+            };
+            processing_time_ms: number;
+        }
+
+        let lastResult: TestDetectResponse | null = null;
+        let totalProcessingTime = 0;
+
+        for (const componentModelId of pipeline.componentIds) {
+            const result = await mlHttp.post<TestDetectResponse>('/detect/test', {
+                image,
+                model_id: componentModelId,
+            });
+
+            totalProcessingTime += result.processing_time_ms;
+            lastResult = result;
+
+            // If board detected, stop and return this result
+            if (result.detection.hasBoardDetected) {
+                res.json({
+                    ...result,
+                    processing_time_ms: totalProcessingTime,
+                });
+                return;
+            }
+        }
+
+        // No model detected a board, return the last result
+        if (lastResult) {
+            res.json({
+                ...lastResult,
+                processing_time_ms: totalProcessingTime,
+            });
+        } else {
+            throw new BadRequestError('Pipeline has no components');
+        }
+        return;
+    }
+
+    // Regular model detection
     const response = await mlHttp.post('/detect/test', {
         image,
         model_id: modelId,
@@ -219,6 +290,39 @@ mlRouter.get('/detect/:id/preview', asyncHandler(async (req, res) => {
     const { id } = req.params;
     const { modelId } = req.query;
 
+    // Check if this is a pipeline request
+    if (modelId && typeof modelId === 'string' && modelId.startsWith('pipeline:')) {
+        const pipelineId = modelId.replace('pipeline:', '');
+        const pipeline = await getPipeline(pipelineId);
+
+        if (!pipeline) {
+            throw new NotFoundError('Pipeline not found');
+        }
+
+        // Try each model in the pipeline until one detects a board
+        let lastResult: DetectResponse | null = null;
+
+        for (const componentModelId of pipeline.componentIds) {
+            const result = await mlHttp.post<DetectResponse>(`/detect/${id}?model_id=${componentModelId}`, {});
+            lastResult = result;
+
+            // If board detected, stop and return this result
+            if (result.detection.hasBoardDetected) {
+                res.json(result);
+                return;
+            }
+        }
+
+        // No model detected a board, return the last result
+        if (lastResult) {
+            res.json(lastResult);
+        } else {
+            throw new BadRequestError('Pipeline has no components');
+        }
+        return;
+    }
+
+    // Regular model detection
     const queryParams = modelId ? `?model_id=${modelId}` : '';
     const data = await mlHttp.post<DetectResponse>(`/detect/${id}${queryParams}`, {});
     res.json(data);
@@ -464,8 +568,31 @@ mlRouter.post('/detection-runs', asyncHandler(async (req, res) => {
         throw new BadRequestError('modelId is required');
     }
 
+    // Check if this is a pipeline request
+    let pipelineComponentIds: string[] | null = null;
+    let effectiveModelId = modelId;
+
+    if (modelId.startsWith('pipeline:')) {
+        const pipelineId = modelId.replace('pipeline:', '');
+        const pipeline = await getPipeline(pipelineId);
+
+        if (!pipeline) {
+            throw new NotFoundError('Pipeline not found');
+        }
+
+        if (pipeline.componentIds.length === 0) {
+            throw new BadRequestError('Pipeline has no components');
+        }
+
+        // Use the first model in the pipeline for detection run storage
+        // The detection run will use this as the "primary" model
+        effectiveModelId = pipeline.componentIds[0];
+        pipelineComponentIds = pipeline.componentIds;
+        log.info(`[DEBUG] Pipeline ${pipelineId} has ${pipeline.componentIds.length} components`);
+    }
+
     // Validate that the model exists and is completed
-    const trainingRun = await getTrainingRun(modelId);
+    const trainingRun = await getTrainingRun(effectiveModelId);
     log.info(`[DEBUG] Found training run: ${JSON.stringify(trainingRun)}`);
     if (!trainingRun) {
         throw new NotFoundError('Training run not found');
@@ -480,7 +607,7 @@ mlRouter.post('/detection-runs', asyncHandler(async (req, res) => {
     log.info(`[DEBUG] Found ${allSampleIds.length} samples in S3, includeExistingAiLabeled=${includeExistingAiLabeled}`);
 
     // Get eligible sample IDs (optionally excluding samples with existing AI detections for this model)
-    const { sampleIds, existingDetectionCount } = await getSampleIdsForBulkDetection(allSampleIds, modelId, includeExistingAiLabeled);
+    const { sampleIds, existingDetectionCount } = await getSampleIdsForBulkDetection(allSampleIds, effectiveModelId, includeExistingAiLabeled);
     log.info(`[DEBUG] Found ${sampleIds.length} eligible samples (${existingDetectionCount} already have AI detections for this model, ${includeExistingAiLabeled ? 'included' : 'excluded'})`);
 
     if (sampleIds.length === 0) {
@@ -492,7 +619,9 @@ mlRouter.post('/detection-runs', asyncHandler(async (req, res) => {
     }
 
     // Create detection run record
-    const run = await createDetectionRun(modelId, sampleIds.length);
+    // For pipelines, store the pipeline ID separately and use effectiveModelId for model reference
+    const pipelineId = pipelineComponentIds ? modelId.replace('pipeline:', '') : null;
+    const run = await createDetectionRun(effectiveModelId, sampleIds.length, pipelineId);
 
     // Update to running status
     const runningRun = await updateDetectionRun(run.id, {
@@ -512,8 +641,10 @@ mlRouter.post('/detection-runs', asyncHandler(async (req, res) => {
         try {
             await mlHttp.post('/detect/bulk', {
                 run_id: run.id,
-                model_id: modelId,
+                model_id: effectiveModelId,
                 sample_ids: sampleIds,
+                // Include pipeline components if this is a pipeline detection
+                pipeline_components: pipelineComponentIds,
             });
             // ML service will call back to /detection-runs/:id/complete when done
         } catch (error) {
@@ -643,5 +774,101 @@ mlRouter.post('/detect/:id/result', asyncHandler(async (req, res) => {
     }
 
     await upsertModelDetection(detection, modelId);
+    res.json({ success: true });
+}));
+
+// ============================================================================
+// Pipeline Routes
+// ============================================================================
+
+// POST /api/ml/pipelines - Create a new pipeline
+mlRouter.post('/pipelines', asyncHandler(async (req, res) => {
+    const { name, componentIds } = req.body as { name: string; componentIds: string[] };
+
+    if (!name || typeof name !== 'string' || name.trim().length === 0) {
+        throw new BadRequestError('name is required');
+    }
+    if (!componentIds || !Array.isArray(componentIds) || componentIds.length === 0) {
+        throw new BadRequestError('componentIds must be a non-empty array');
+    }
+
+    // Validate that all component IDs are valid completed training runs
+    for (const id of componentIds) {
+        const run = await getTrainingRun(id);
+        if (!run) {
+            throw new BadRequestError(`Training run not found: ${id}`);
+        }
+        if (run.status !== 'completed') {
+            throw new BadRequestError(`Training run is not completed: ${id}`);
+        }
+    }
+
+    const pipeline = await createPipeline(name.trim(), componentIds);
+    res.json(pipeline);
+}));
+
+// GET /api/ml/pipelines - List all pipelines
+mlRouter.get('/pipelines', asyncHandler(async (_req, res) => {
+    const pipelines = await listPipelines();
+    res.json({ pipelines });
+}));
+
+// GET /api/ml/pipelines/:id - Get single pipeline with component details
+mlRouter.get('/pipelines/:id', asyncHandler(async (req, res) => {
+    const { id } = req.params;
+
+    const pipeline = await getPipelineWithComponents(id);
+    if (!pipeline) {
+        throw new NotFoundError('Pipeline not found');
+    }
+
+    res.json(pipeline);
+}));
+
+// PUT /api/ml/pipelines/:id - Update a pipeline
+mlRouter.put('/pipelines/:id', asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const { name, componentIds } = req.body as { name?: string; componentIds?: string[] };
+
+    const existing = await getPipeline(id);
+    if (!existing) {
+        throw new NotFoundError('Pipeline not found');
+    }
+
+    // Validate component IDs if provided
+    if (componentIds) {
+        if (!Array.isArray(componentIds) || componentIds.length === 0) {
+            throw new BadRequestError('componentIds must be a non-empty array');
+        }
+        for (const compId of componentIds) {
+            const run = await getTrainingRun(compId);
+            if (!run) {
+                throw new BadRequestError(`Training run not found: ${compId}`);
+            }
+            if (run.status !== 'completed') {
+                throw new BadRequestError(`Training run is not completed: ${compId}`);
+            }
+        }
+    }
+
+    const updated = await updatePipeline(id, {
+        name: name?.trim(),
+        componentIds,
+    });
+
+    res.json(updated);
+}));
+
+// DELETE /api/ml/pipelines/:id - Delete a pipeline
+mlRouter.delete('/pipelines/:id', asyncHandler(async (req, res) => {
+    const { id } = req.params;
+
+    const existing = await getPipeline(id);
+    if (!existing) {
+        throw new NotFoundError('Pipeline not found');
+    }
+
+    await deletePipeline(id);
+    log.info(`Deleted pipeline ${id}`);
     res.json({ success: true });
 }));

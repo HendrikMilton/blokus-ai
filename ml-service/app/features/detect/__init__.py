@@ -31,6 +31,7 @@ class BulkDetectRequest(BaseModel):
     run_id: str
     model_id: str
     sample_ids: list[str]
+    pipeline_components: Optional[list[str]] = None  # List of model IDs for pipeline fallback
 
 
 class BulkDetectResponse(BaseModel):
@@ -112,9 +113,19 @@ def report_bulk_complete(
         print(f"[bulk_detect] Failed to report completion: {e}")
 
 
-def run_bulk_detection(run_id: str, model_id: str, sample_ids: list[str]) -> None:
-    """Run bulk detection in the background."""
-    print(f"[bulk_detect] Starting bulk detection: run_id={run_id}, model_id={model_id}, samples={len(sample_ids)}")
+def run_bulk_detection(
+    run_id: str,
+    model_id: str,
+    sample_ids: list[str],
+    pipeline_components: Optional[list[str]] = None,
+) -> None:
+    """Run bulk detection in the background.
+
+    If pipeline_components is provided, each sample is run through the models
+    in order until a board is detected (fallback behavior).
+    """
+    is_pipeline = pipeline_components is not None and len(pipeline_components) > 1
+    print(f"[bulk_detect] Starting bulk detection: run_id={run_id}, model_id={model_id}, samples={len(sample_ids)}, pipeline={is_pipeline}")
 
     start_time = time.perf_counter()
     success_count = 0
@@ -122,13 +133,26 @@ def run_bulk_detection(run_id: str, model_id: str, sample_ids: list[str]) -> Non
     processed_count = 0
     total_count = len(sample_ids)
 
-    # Pre-load the model once
+    # Pre-load the model(s)
     from .detector_yolo import get_trained_model
-    try:
-        model = get_trained_model(model_id)
-        print(f"[bulk_detect] Model loaded: {model_id}")
-    except Exception as e:
-        print(f"[bulk_detect] Failed to load model: {e}")
+
+    models_to_load = pipeline_components if is_pipeline else [model_id]
+    loaded_models = {}
+
+    for mid in models_to_load:
+        try:
+            loaded_models[mid] = get_trained_model(mid)
+            print(f"[bulk_detect] Model loaded: {mid}")
+        except Exception as e:
+            print(f"[bulk_detect] Failed to load model {mid}: {e}")
+            # Continue with other models if pipeline
+            if not is_pipeline:
+                duration_ms = int((time.perf_counter() - start_time) * 1000)
+                report_bulk_complete(run_id, 0, total_count, duration_ms)
+                return
+
+    if not loaded_models:
+        print(f"[bulk_detect] No models could be loaded")
         duration_ms = int((time.perf_counter() - start_time) * 1000)
         report_bulk_complete(run_id, 0, total_count, duration_ms)
         return
@@ -137,10 +161,27 @@ def run_bulk_detection(run_id: str, model_id: str, sample_ids: list[str]) -> Non
         try:
             # Download image
             filepath = download_sample_image(sample_id)
-
-            # Run detection
             sample_start = time.perf_counter()
-            detection = detect_board_with_trained_model(filepath, model_id)
+
+            detection = None
+            used_model_id = model_id
+
+            if is_pipeline:
+                # Pipeline detection: try each model until one detects a board
+                for component_id in pipeline_components:
+                    if component_id not in loaded_models:
+                        continue
+
+                    detection = detect_board_with_trained_model(filepath, component_id)
+                    used_model_id = component_id
+
+                    # If board detected, stop trying other models
+                    if detection.hasBoardDetected:
+                        break
+            else:
+                # Single model detection
+                detection = detect_board_with_trained_model(filepath, model_id)
+
             sample_elapsed_ms = (time.perf_counter() - sample_start) * 1000
 
             # Create response
@@ -150,7 +191,9 @@ def run_bulk_detection(run_id: str, model_id: str, sample_ids: list[str]) -> Non
                 processing_time_ms=round(sample_elapsed_ms, 2),
             )
 
-            # Store result
+            # Store result using the primary model ID (first component for pipelines)
+            # This ensures all detections from a pipeline run are associated with the same model_id
+            # which is needed for disagreement count calculation
             if store_detection_result(sample_id, model_id, response):
                 success_count += 1
             else:
@@ -178,8 +221,12 @@ async def bulk_detect(request: BulkDetectRequest, background_tasks: BackgroundTa
     """
     Start bulk detection on multiple samples.
     Returns immediately and processes in the background.
+
+    If pipeline_components is provided, each sample is run through the models
+    in order until a board is detected (fallback behavior).
     """
-    print(f"[bulk_detect] Received request: run_id={request.run_id}, model_id={request.model_id}, samples={len(request.sample_ids)}")
+    is_pipeline = request.pipeline_components is not None and len(request.pipeline_components) > 1
+    print(f"[bulk_detect] Received request: run_id={request.run_id}, model_id={request.model_id}, samples={len(request.sample_ids)}, pipeline={is_pipeline}")
 
     # Add background task
     background_tasks.add_task(
@@ -187,6 +234,7 @@ async def bulk_detect(request: BulkDetectRequest, background_tasks: BackgroundTa
         request.run_id,
         request.model_id,
         request.sample_ids,
+        request.pipeline_components,
     )
 
     return BulkDetectResponse(

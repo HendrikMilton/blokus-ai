@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { TrainingRun } from '@blokus-ai/shared';
+import type { TrainingRun, ModelPipeline } from '@blokus-ai/shared';
 import { Modal } from '../../../components/ui/Modal';
 import { Button } from '../../../components/ui/Button';
 import { Select } from '../../../components/ui/Select';
@@ -9,6 +9,7 @@ interface Props {
     onClose: () => void;
     onStart: (modelId: string, includeExistingAiLabeled: boolean) => void;
     trainingRuns: TrainingRun[];
+    pipelines: ModelPipeline[];
     isLoading: boolean;
 }
 
@@ -29,7 +30,7 @@ const formatPercent = (value: number | null): string => {
     return `${(value * 100).toFixed(1)}%`;
 };
 
-export const RunDetectionModal = ({ isOpen, onClose, onStart, trainingRuns, isLoading }: Props) => {
+export const RunDetectionModal = ({ isOpen, onClose, onStart, trainingRuns, pipelines, isLoading }: Props) => {
     const [selectedModelId, setSelectedModelId] = useState<string>('');
     const [includeExistingAiLabeled, setIncludeExistingAiLabeled] = useState(false);
 
@@ -53,23 +54,34 @@ export const RunDetectionModal = ({ isOpen, onClose, onStart, trainingRuns, isLo
         onClose();
     };
 
+    // Build model options with pipelines grouped separately
+    const modelOptions = [
+        // Models section
+        ...completedRuns.map(run => ({
+            value: run.id,
+            label: `${formatDate(run.createdAt)} - ${formatPercent(run.accuracy)} acc (${run.imageCount} imgs)`,
+        })),
+        // Pipelines section (prefixed with link emoji)
+        ...pipelines.map(pipeline => ({
+            value: `pipeline:${pipeline.id}`,
+            label: `\u{1F517} ${pipeline.name} (${pipeline.componentIds.length} models)`,
+        })),
+    ];
+
     return (
         <Modal isOpen={isOpen} onClose={handleClose} title="Run AI Detection" size="md">
             <div className="space-y-4">
                 {/* Model selection */}
-                {completedRuns.length === 0 ? (
+                {completedRuns.length === 0 && pipelines.length === 0 ? (
                     <p className="text-sm text-muted">
                         No completed training runs available. Please train a model first.
                     </p>
                 ) : (
                     <Select
-                        label="Select trained model"
+                        label="Select model or pipeline"
                         value={selectedModelId}
                         onChange={(v) => setSelectedModelId(v as string)}
-                        options={completedRuns.map(run => ({
-                            value: run.id,
-                            label: `${formatDate(run.createdAt)} - Accuracy: ${formatPercent(run.accuracy)} (${run.imageCount} images)`,
-                        }))}
+                        options={modelOptions}
                     />
                 )}
 
@@ -99,7 +111,7 @@ export const RunDetectionModal = ({ isOpen, onClose, onStart, trainingRuns, isLo
                     </Button>
                     <Button
                         onClick={handleStart}
-                        disabled={!selectedModelId || completedRuns.length === 0}
+                        disabled={!selectedModelId || (completedRuns.length === 0 && pipelines.length === 0)}
                         loading={isLoading}
                     >
                         Start Detection

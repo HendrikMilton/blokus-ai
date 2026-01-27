@@ -3,13 +3,14 @@ import { Camera, RefreshCw } from 'lucide-react';
 import { Button } from '../../../components/ui/Button';
 import { Select } from '../../../components/ui/Select';
 import { ML_API, TestDetectResponse } from '../../../api/ml';
-import type { TrainingRun, BoundingBox } from '@blokus-ai/shared';
+import type { TrainingRun, BoundingBox, ModelPipeline } from '@blokus-ai/shared';
 
 interface Props {
     trainingRuns: TrainingRun[];
+    pipelines: ModelPipeline[];
 }
 
-export const TestModelTab = ({ trainingRuns }: Props) => {
+export const TestModelTab = ({ trainingRuns, pipelines }: Props) => {
     const videoRef = useRef<HTMLVideoElement>(null);
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const [stream, setStream] = useState<MediaStream | null>(null);
@@ -186,13 +187,17 @@ export const TestModelTab = ({ trainingRuns }: Props) => {
                     value={selectedModelId}
                     onChange={(val) => {
                         setHasUserSelected(true);
-                        setSelectedModelId(val);
+                        setSelectedModelId(String(val));
                     }}
                     options={[
                         { value: '', label: 'Default (YOLO)' },
                         ...completedRuns.map(run => ({
                             value: run.id,
                             label: `${run.id.slice(0, 8)} - ${run.imageCount} images, ${Math.round((run.accuracy || 0) * 100)}% acc`,
+                        })),
+                        ...pipelines.map(pipeline => ({
+                            value: `pipeline:${pipeline.id}`,
+                            label: `\u{1F517} ${pipeline.name} (${pipeline.componentIds.length} models)`,
                         })),
                     ]}
                     className="w-64"

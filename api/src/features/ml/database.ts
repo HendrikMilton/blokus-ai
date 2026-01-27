@@ -1,6 +1,6 @@
 import { Knex } from 'knex';
 import { knex } from '../../knex';
-import type { DetectResponse, DetectResponseWithCorrection, SampleStatusFlags, TrainingRun, TrainingRunStatus, BoardDetection, DetectionRun, DetectionRunStatus, SampleAiDetection, SampleHumanLabel } from '@blokus-ai/shared';
+import type { DetectResponse, DetectResponseWithCorrection, SampleStatusFlags, TrainingRun, TrainingRunStatus, BoardDetection, DetectionRun, DetectionRunStatus, SampleAiDetection, SampleHumanLabel, ModelPipeline } from '@blokus-ai/shared';
 
 interface BoardDetectionRow {
     id: string;
@@ -500,9 +500,14 @@ export const getSampleDetectionInfoMap = async (
     const effectiveModelId = modelId ?? await getLatestCompletedModelId(trx);
 
     // Get AI detections from model_detections for the selected model
-    const aiDetectionMap = new Map<string, ModelDetectionRow>();
+    type PartialModelDetection = Pick<ModelDetectionRow,
+        'sample_id' | 'has_board_detected' | 'is_entire_board_visible' |
+        'confidence' | 'classifier_confidence' |
+        'bbox_x' | 'bbox_y' | 'bbox_width' | 'bbox_height'
+    >;
+    const aiDetectionMap = new Map<string, PartialModelDetection>();
     if (effectiveModelId) {
-        const aiRows = await trx<ModelDetectionRow>('model_detections')
+        const aiRows = await trx<PartialModelDetection>('model_detections')
             .where('model_id', effectiveModelId)
             .select(
                 'sample_id',
@@ -919,6 +924,7 @@ interface DetectionRunRow {
     id: string;
     status: DetectionRunStatus;
     model_id: string;
+    pipeline_id: string | null;
     total_count: number;
     processed_count: number;
     success_count: number | null;
@@ -939,6 +945,7 @@ const rowToDetectionRun = (row: DetectionRunRow): DetectionRun => ({
     id: row.id,
     status: row.status,
     modelId: row.model_id,
+    pipelineId: row.pipeline_id,
     totalCount: row.total_count,
     processedCount: row.processed_count,
     successCount: row.success_count,
@@ -956,10 +963,15 @@ const rowToDetectionRun = (row: DetectionRunRow): DetectionRun => ({
 export const createDetectionRun = async (
     modelId: string,
     totalCount: number,
+    pipelineId?: string | null,
     trx: Knex.Transaction | Knex = knex
 ): Promise<DetectionRun> => {
     const [row] = await trx<DetectionRunRow>('detection_runs')
-        .insert({ model_id: modelId, total_count: totalCount })
+        .insert({
+            model_id: modelId,
+            total_count: totalCount,
+            pipeline_id: pipelineId || null,
+        })
         .returning('*');
     return rowToDetectionRun(row);
 };
@@ -1025,29 +1037,34 @@ export const listDetectionRuns = async (
     trx: Knex.Transaction | Knex = knex
 ): Promise<DetectionRun[]> => {
     // Get detection runs with computed stats via subqueries
+    // Only compute disagreement_count and avg_classifier_accuracy for completed runs
     const rows = await trx<DetectionRunRow>('detection_runs as dr')
         .select('dr.*')
         .select(
             trx.raw(`(
-                SELECT COUNT(*)
-                FROM model_detections md
-                INNER JOIN board_detections bd ON bd.sample_id = md.sample_id
-                WHERE md.model_id = dr.model_id
-                AND bd.human_has_board IS NOT NULL
-                AND md.has_board_detected != bd.human_has_board
+                CASE WHEN dr.status = 'completed' THEN (
+                    SELECT COUNT(*)
+                    FROM model_detections md
+                    INNER JOIN board_detections bd ON bd.sample_id = md.sample_id
+                    WHERE md.model_id = dr.model_id
+                    AND bd.human_has_board IS NOT NULL
+                    AND md.has_board_detected != bd.human_has_board
+                ) ELSE NULL END
             ) as disagreement_count`)
         )
         .select(
             trx.raw(`(
-                SELECT AVG(
-                    CASE WHEN md.is_entire_board_visible = bd.human_is_entire_visible
-                    THEN 1.0 ELSE 0.0 END
-                )
-                FROM model_detections md
-                INNER JOIN board_detections bd ON bd.sample_id = md.sample_id
-                WHERE md.model_id = dr.model_id
-                AND bd.human_is_entire_visible IS NOT NULL
-                AND md.classifier_confidence IS NOT NULL
+                CASE WHEN dr.status = 'completed' THEN (
+                    SELECT AVG(
+                        CASE WHEN md.is_entire_board_visible = bd.human_is_entire_visible
+                        THEN 1.0 ELSE 0.0 END
+                    )
+                    FROM model_detections md
+                    INNER JOIN board_detections bd ON bd.sample_id = md.sample_id
+                    WHERE md.model_id = dr.model_id
+                    AND bd.human_is_entire_visible IS NOT NULL
+                    AND md.classifier_confidence IS NOT NULL
+                ) ELSE NULL END
             ) as avg_classifier_accuracy`)
         )
         .orderBy('dr.created_at', 'desc');
@@ -1058,29 +1075,34 @@ export const getDetectionRun = async (
     id: string,
     trx: Knex.Transaction | Knex = knex
 ): Promise<DetectionRun | null> => {
+    // Only compute disagreement_count and avg_classifier_accuracy for completed runs
     const rows = await trx<DetectionRunRow>('detection_runs as dr')
         .select('dr.*')
         .select(
             trx.raw(`(
-                SELECT COUNT(*)
-                FROM model_detections md
-                INNER JOIN board_detections bd ON bd.sample_id = md.sample_id
-                WHERE md.model_id = dr.model_id
-                AND bd.human_has_board IS NOT NULL
-                AND md.has_board_detected != bd.human_has_board
+                CASE WHEN dr.status = 'completed' THEN (
+                    SELECT COUNT(*)
+                    FROM model_detections md
+                    INNER JOIN board_detections bd ON bd.sample_id = md.sample_id
+                    WHERE md.model_id = dr.model_id
+                    AND bd.human_has_board IS NOT NULL
+                    AND md.has_board_detected != bd.human_has_board
+                ) ELSE NULL END
             ) as disagreement_count`)
         )
         .select(
             trx.raw(`(
-                SELECT AVG(
-                    CASE WHEN md.is_entire_board_visible = bd.human_is_entire_visible
-                    THEN 1.0 ELSE 0.0 END
-                )
-                FROM model_detections md
-                INNER JOIN board_detections bd ON bd.sample_id = md.sample_id
-                WHERE md.model_id = dr.model_id
-                AND bd.human_is_entire_visible IS NOT NULL
-                AND md.classifier_confidence IS NOT NULL
+                CASE WHEN dr.status = 'completed' THEN (
+                    SELECT AVG(
+                        CASE WHEN md.is_entire_board_visible = bd.human_is_entire_visible
+                        THEN 1.0 ELSE 0.0 END
+                    )
+                    FROM model_detections md
+                    INNER JOIN board_detections bd ON bd.sample_id = md.sample_id
+                    WHERE md.model_id = dr.model_id
+                    AND bd.human_is_entire_visible IS NOT NULL
+                    AND md.classifier_confidence IS NOT NULL
+                ) ELSE NULL END
             ) as avg_classifier_accuracy`)
         )
         .where('dr.id', id);
@@ -1144,5 +1166,124 @@ export const getSampleIdsForBulkDetection = async (
     return {
         sampleIds: eligibleSampleIds,
         existingDetectionCount,
+    };
+};
+
+// ============================================================================
+// Model Pipelines
+// ============================================================================
+
+interface ModelPipelineRow {
+    id: string;
+    name: string;
+    component_ids: string[];
+    created_at: Date;
+    updated_at: Date;
+}
+
+const rowToModelPipeline = (row: ModelPipelineRow): ModelPipeline => ({
+    id: row.id,
+    name: row.name,
+    componentIds: row.component_ids,
+    createdAt: row.created_at.toISOString(),
+    updatedAt: row.updated_at.toISOString(),
+});
+
+export const createPipeline = async (
+    name: string,
+    componentIds: string[],
+    trx: Knex.Transaction | Knex = knex
+): Promise<ModelPipeline> => {
+    const [row] = await trx<ModelPipelineRow>('model_pipelines')
+        .insert({
+            name,
+            component_ids: JSON.stringify(componentIds) as unknown as string[],
+        })
+        .returning('*');
+    return rowToModelPipeline(row);
+};
+
+export const listPipelines = async (
+    trx: Knex.Transaction | Knex = knex
+): Promise<ModelPipeline[]> => {
+    const rows = await trx<ModelPipelineRow>('model_pipelines')
+        .orderBy('created_at', 'desc');
+    return rows.map(rowToModelPipeline);
+};
+
+export const getPipeline = async (
+    id: string,
+    trx: Knex.Transaction | Knex = knex
+): Promise<ModelPipeline | null> => {
+    const row = await trx<ModelPipelineRow>('model_pipelines')
+        .where('id', id)
+        .first();
+    return row ? rowToModelPipeline(row) : null;
+};
+
+export interface PipelineUpdate {
+    name?: string;
+    componentIds?: string[];
+}
+
+export const updatePipeline = async (
+    id: string,
+    updates: PipelineUpdate,
+    trx: Knex.Transaction | Knex = knex
+): Promise<ModelPipeline | null> => {
+    const dbUpdates: Partial<ModelPipelineRow> = {
+        updated_at: new Date(),
+    };
+
+    if (updates.name !== undefined) {
+        dbUpdates.name = updates.name;
+    }
+    if (updates.componentIds !== undefined) {
+        dbUpdates.component_ids = JSON.stringify(updates.componentIds) as unknown as string[];
+    }
+
+    const [row] = await trx<ModelPipelineRow>('model_pipelines')
+        .where('id', id)
+        .update(dbUpdates)
+        .returning('*');
+
+    return row ? rowToModelPipeline(row) : null;
+};
+
+export const deletePipeline = async (
+    id: string,
+    trx: Knex.Transaction | Knex = knex
+): Promise<boolean> => {
+    const deleted = await trx('model_pipelines')
+        .where('id', id)
+        .delete();
+    return deleted > 0;
+};
+
+/**
+ * Get a pipeline with its component training runs populated.
+ */
+export const getPipelineWithComponents = async (
+    id: string,
+    trx: Knex.Transaction | Knex = knex
+): Promise<ModelPipeline | null> => {
+    const pipeline = await getPipeline(id, trx);
+    if (!pipeline) {
+        return null;
+    }
+
+    // Fetch all component training runs
+    const componentRows = await trx<TrainingRunRow>('training_runs')
+        .whereIn('id', pipeline.componentIds);
+
+    // Map to TrainingRun and preserve order from componentIds
+    const componentsMap = new Map(componentRows.map(r => [r.id, rowToTrainingRun(r)]));
+    const components = pipeline.componentIds
+        .map(id => componentsMap.get(id))
+        .filter((c): c is TrainingRun => c !== undefined);
+
+    return {
+        ...pipeline,
+        components,
     };
 };

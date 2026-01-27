@@ -219,6 +219,7 @@ export interface DetectionRun {
     id: string;
     status: DetectionRunStatus;
     modelId: string;
+    pipelineId: string | null;
     totalCount: number;
     processedCount: number;
     successCount: number | null;
@@ -261,4 +262,17 @@ export interface Sample {
     created_at: string;
     imageUrl?: string;
     thumbnailUrl?: string;
+}
+
+// ============================================================================
+// Model Pipeline types
+// ============================================================================
+
+export interface ModelPipeline {
+    id: string;
+    name: string;
+    componentIds: string[];
+    components?: TrainingRun[];  // Populated when fetching with details
+    createdAt: string;
+    updatedAt: string;
 }

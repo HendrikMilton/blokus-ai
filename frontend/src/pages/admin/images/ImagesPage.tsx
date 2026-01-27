@@ -16,9 +16,12 @@ import { TrainedModelsTable } from './TrainedModelsTable';
 import { DetectionRunsTable } from './DetectionRunsTable';
 import { RunDetectionModal } from './RunDetectionModal';
 import { TestModelTab } from './TestModelTab';
+import { PipelinesSection } from './PipelinesSection';
+import { CreatePipelineModal } from './CreatePipelineModal';
 import { ConfirmModal } from '../../../components/ui/ConfirmModal';
 import { useAdmin } from '../../../contexts/AdminContext';
 import { useSocketEvent } from '../../../hooks/useSocketEvent';
+import type { ModelPipeline } from '@blokus-ai/shared';
 
 type Tab = 'images' | 'models' | 'detections' | 'test';
 type FilterPreset = 'all' | 'unlabeled' | 'false-positives' | 'false-negatives' | 'low-iou' | 'disagreements';
@@ -135,8 +138,12 @@ export const ImagesPage = () => {
         detectionRuns,
         isLoadingDetectionRuns: isLoadingDetections,
         detectionProgress,
-        addDetectionRun,
         removeDetectionRun,
+        pipelines,
+        isLoadingPipelines,
+        addPipeline,
+        updatePipelineState,
+        removePipeline,
     } = useAdmin();
 
     // Local UI state
@@ -145,6 +152,8 @@ export const ImagesPage = () => {
     const [isTraining, setIsTraining] = useState(false);
     const [isRunningDetection, setIsRunningDetection] = useState(false);
     const [showDetectionModal, setShowDetectionModal] = useState(false);
+    const [showPipelineModal, setShowPipelineModal] = useState(false);
+    const [editingPipeline, setEditingPipeline] = useState<ModelPipeline | null>(null);
 
     // Selection state
     const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -306,7 +315,7 @@ export const ImagesPage = () => {
 
         if (successCount > 0) {
             toast.success(`Uploaded ${successCount} image${successCount > 1 ? 's' : ''}`);
-            loadSamples();
+            fetchSamples(true);
         }
         if (failCount > 0) {
             toast.error(`Failed to upload ${failCount} image${failCount > 1 ? 's' : ''}`);
@@ -337,14 +346,47 @@ export const ImagesPage = () => {
     const handleStartDetection = async (modelId: string, includeExistingAiLabeled: boolean) => {
         setIsRunningDetection(true);
         try {
-            const run = await ML_API.startBulkDetection(modelId, includeExistingAiLabeled);
-            addDetectionRun(run);
+            await ML_API.startBulkDetection(modelId, includeExistingAiLabeled);
+            // Don't add run here - socket event 'detection-run-started' will handle it
             setShowDetectionModal(false);
             toast.success('Detection started');
         } catch {
             toast.error('Failed to start detection');
         } finally {
             setIsRunningDetection(false);
+        }
+    };
+
+    // Pipeline handlers
+    const handleCreatePipeline = () => {
+        setEditingPipeline(null);
+        setShowPipelineModal(true);
+    };
+
+    const handleEditPipeline = (pipeline: ModelPipeline) => {
+        setEditingPipeline(pipeline);
+        setShowPipelineModal(true);
+    };
+
+    const handleSavePipeline = async (name: string, componentIds: string[]) => {
+        if (editingPipeline) {
+            const updated = await ML_API.updatePipeline(editingPipeline.id, { name, componentIds });
+            updatePipelineState(editingPipeline.id, updated);
+            toast.success('Pipeline updated');
+        } else {
+            const pipeline = await ML_API.createPipeline(name, componentIds);
+            addPipeline(pipeline);
+            toast.success('Pipeline created');
+        }
+    };
+
+    const handleDeletePipeline = async (id: string) => {
+        try {
+            await ML_API.deletePipeline(id);
+            removePipeline(id);
+            toast.success('Pipeline deleted');
+        } catch {
+            toast.error('Failed to delete pipeline');
         }
     };
 
@@ -845,13 +887,19 @@ export const ImagesPage = () => {
                                 className="w-40"
                             />
                         )}
-                        {completedModels.length > 0 && (
+                        {(completedModels.length > 0 || pipelines.length > 0) && (
                             <MultiSelect
                                 label="Models"
-                                options={completedModels.map(run => ({
-                                    value: run.id,
-                                    label: `${formatDate(run.createdAt)} (${run.imageCount} imgs)`,
-                                }))}
+                                options={[
+                                    ...completedModels.map(run => ({
+                                        value: run.id,
+                                        label: `${formatDate(run.createdAt)} (${run.imageCount} imgs)`,
+                                    })),
+                                    ...pipelines.map(pipeline => ({
+                                        value: `pipeline:${pipeline.id}`,
+                                        label: `\u{1F517} ${pipeline.name}`,
+                                    })),
+                                ]}
                                 selected={selectedModelIds}
                                 onChange={setSelectedModelIds}
                                 placeholder="All models"
@@ -1184,12 +1232,22 @@ export const ImagesPage = () => {
                     )}
                 </>
             ) : tab === 'models' ? (
-                <TrainedModelsTable
-                    runs={trainingRuns}
-                    loading={isLoadingRuns}
-                    progress={trainingProgress}
-                    onDelete={removeTrainingRun}
-                />
+                <div className="space-y-6">
+                    <TrainedModelsTable
+                        runs={trainingRuns}
+                        loading={isLoadingRuns}
+                        progress={trainingProgress}
+                        onDelete={removeTrainingRun}
+                    />
+                    <PipelinesSection
+                        pipelines={pipelines}
+                        trainingRuns={trainingRuns}
+                        loading={isLoadingPipelines}
+                        onDelete={handleDeletePipeline}
+                        onEdit={handleEditPipeline}
+                        onCreate={handleCreatePipeline}
+                    />
+                </div>
             ) : tab === 'detections' ? (
                 <DetectionRunsTable
                     runs={detectionRuns}
@@ -1199,9 +1257,11 @@ export const ImagesPage = () => {
                         removeDetectionRun(id);
                         fetchSamples(true); // Reload to reflect cleared AI labels
                     }}
+                    trainingRuns={trainingRuns}
+                    pipelines={pipelines}
                 />
             ) : (
-                <TestModelTab trainingRuns={trainingRuns} />
+                <TestModelTab trainingRuns={trainingRuns} pipelines={pipelines} />
             )}
 
             {/* Detection Modal */}
@@ -1210,7 +1270,20 @@ export const ImagesPage = () => {
                 onClose={() => setShowDetectionModal(false)}
                 onStart={handleStartDetection}
                 trainingRuns={trainingRuns}
+                pipelines={pipelines}
                 isLoading={isRunningDetection}
+            />
+
+            {/* Pipeline Modal */}
+            <CreatePipelineModal
+                isOpen={showPipelineModal}
+                onClose={() => {
+                    setShowPipelineModal(false);
+                    setEditingPipeline(null);
+                }}
+                onSave={handleSavePipeline}
+                trainingRuns={trainingRuns}
+                editingPipeline={editingPipeline}
             />
 
             {/* Delete Confirmation Modal */}

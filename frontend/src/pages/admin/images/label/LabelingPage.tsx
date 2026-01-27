@@ -227,10 +227,12 @@ export const LabelingPage = () => {
 
     const updateCorrection = useCallback((updates: Partial<BoardDetection>) => {
         setLabelData(prev => {
-            const base = prev.correction || prev.prediction || {
+            const base: BoardDetection = prev.correction || prev.prediction || {
                 hasBoardDetected: false,
                 isEntireBoardVisible: false,
                 boundingBox: null,
+                confidence: 0,
+                classifierConfidence: null,
             };
             return {
                 ...prev,
