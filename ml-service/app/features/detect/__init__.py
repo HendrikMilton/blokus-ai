@@ -38,12 +38,13 @@ class BulkDetectResponse(BaseModel):
     message: str
 
 
-def store_detection_result(sample_id: str, response: DetectResponse) -> bool:
+def store_detection_result(sample_id: str, model_id: str, response: DetectResponse) -> bool:
     """Store a single detection result by calling the API."""
     try:
         with httpx.Client(timeout=30.0) as client:
             result = client.post(
                 f"{API_URL}/api/ml/detect/{sample_id}/result",
+                params={"modelId": model_id},
                 json={
                     "sample_id": response.sample_id,
                     "detection": {
@@ -150,7 +151,7 @@ def run_bulk_detection(run_id: str, model_id: str, sample_ids: list[str]) -> Non
             )
 
             # Store result
-            if store_detection_result(sample_id, response):
+            if store_detection_result(sample_id, model_id, response):
                 success_count += 1
             else:
                 failed_count += 1

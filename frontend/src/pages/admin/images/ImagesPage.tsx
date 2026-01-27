@@ -1,11 +1,12 @@
 import { useRef, useState, useEffect, useMemo } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { Plus, ChevronLeft, ChevronRight, Tag, Lightbulb, Trash2, Search, Image, LayoutGrid, List } from 'lucide-react';
+import { Plus, ChevronLeft, ChevronRight, Tag, Lightbulb, Trash2, Search, Image, LayoutGrid, List, X } from 'lucide-react';
 import { cn } from '../../../utils/cn';
 import { http, API_URL } from '../../../api/config';
 import { ML_API } from '../../../api/ml';
 import { Button } from '../../../components/ui/Button';
+import { Input } from '../../../components/ui/Input';
 import { Select } from '../../../components/ui/Select';
 import { Table, Column, SortState } from '../../../components/ui/Table';
 import { getStatusLabels, Sample } from '@blokus-ai/shared';
@@ -210,6 +211,9 @@ export const ImagesPage = () => {
         setSearchParams(searchParams);
     };
 
+    // Search state
+    const [searchQuery, setSearchQuery] = useState('');
+
     // List view sorting state
     const [listSortState, setListSortState] = useState<SortState>({ column: 'created_at', direction: 'desc' });
 
@@ -359,8 +363,9 @@ export const ImagesPage = () => {
     };
 
     const handleDoubleClick = (id: string) => {
-        // Open in new tab on double-click
-        window.open(`/admin/images/${id}`, '_blank');
+        // Open in new tab on double-click, passing current model selection
+        const modelParam = selectedModelId ? `?model=${selectedModelId}` : '';
+        window.open(`/admin/images/${id}${modelParam}`, '_blank');
     };
 
     const selectAll = () => {
@@ -426,14 +431,24 @@ export const ImagesPage = () => {
     );
 
     const filteredSamples = sortSamples(
-        samples.filter(s => matchesPreset(s, preset)),
+        samples.filter(s => {
+            // Apply preset filter
+            if (!matchesPreset(s, preset)) {
+                return false;
+            }
+            // Apply search filter
+            if (searchQuery) {
+                return s.id.toLowerCase().includes(searchQuery.toLowerCase());
+            }
+            return true;
+        }),
         sort
     );
 
     // Reset page when filters change
     useEffect(() => {
         setCurrentPage(1);
-    }, [preset, sort, samples.length]);
+    }, [preset, sort, samples.length, searchQuery]);
 
     // Paginate grid view samples
     const paginatedGridSamples = useMemo(() => {
@@ -455,6 +470,18 @@ export const ImagesPage = () => {
             }
             return 0;
         };
+        const getBoardAgreed = (s: Sample): number => {
+            if (!s.ai || !s.human) {
+                return -1;
+            }
+            return s.ai.hasBoardDetected === s.human.hasBoardDetected ? 1 : 0;
+        };
+        const getEntireAgreed = (s: Sample): number => {
+            if (!s.ai || !s.human) {
+                return -1;
+            }
+            return s.ai.isEntireBoardVisible === s.human.isEntireBoardVisible ? 1 : 0;
+        };
         return [...filteredSamples].sort((a, b) => {
             let comparison = 0;
             switch (listSortState.column) {
@@ -472,6 +499,12 @@ export const ImagesPage = () => {
                 break;
             case 'status':
                 comparison = getStatusPriority(a) - getStatusPriority(b);
+                break;
+            case 'boardAgreed':
+                comparison = getBoardAgreed(a) - getBoardAgreed(b);
+                break;
+            case 'entireAgreed':
+                comparison = getEntireAgreed(a) - getEntireAgreed(b);
                 break;
             }
             return listSortState.direction === 'asc' ? comparison : -comparison;
@@ -526,6 +559,30 @@ export const ImagesPage = () => {
                         ))}
                     </div>
                 );
+            },
+        },
+        {
+            key: 'boardAgreed',
+            header: 'Board visible agreed',
+            sortable: true,
+            render: (sample) => {
+                if (!sample.ai || !sample.human) {
+                    return '—';
+                }
+                const agreed = sample.ai.hasBoardDetected === sample.human.hasBoardDetected;
+                return <span className={agreed ? 'text-success' : 'text-error'}>{agreed ? 'Yes' : 'No'}</span>;
+            },
+        },
+        {
+            key: 'entireAgreed',
+            header: 'Entire board visible agreed',
+            sortable: true,
+            render: (sample) => {
+                if (!sample.ai || !sample.human) {
+                    return '—';
+                }
+                const agreed = sample.ai.isEntireBoardVisible === sample.human.isEntireBoardVisible;
+                return <span className={agreed ? 'text-success' : 'text-error'}>{agreed ? 'Yes' : 'No'}</span>;
             },
         },
         {
@@ -697,6 +754,23 @@ export const ImagesPage = () => {
                 <>
                     {/* Filter, Sort, Model Dropdowns, Selection and View Toggle */}
                     <div className="flex flex-wrap items-end gap-3">
+                        {/* Search input */}
+                        <Input
+                            label="Search"
+                            value={searchQuery}
+                            onChange={(e) => setSearchQuery(e.target.value)}
+                            placeholder="Search by ID..."
+                            icon={<Search className="w-4 h-4" />}
+                            rightIcon={searchQuery ? (
+                                <button
+                                    onClick={() => setSearchQuery('')}
+                                    className="text-muted hover:text-foreground"
+                                >
+                                    <X className="w-4 h-4" />
+                                </button>
+                            ) : undefined}
+                            className="w-40"
+                        />
                         <Select
                             label="Filter"
                             value={preset}
@@ -725,7 +799,7 @@ export const ImagesPage = () => {
                                         label: `${formatDate(run.createdAt)} (${run.imageCount} imgs)`,
                                     })),
                                 ]}
-                                className="w-48"
+                                className="w-64"
                             />
                         )}
                         {/* Spacer to push right side elements */}

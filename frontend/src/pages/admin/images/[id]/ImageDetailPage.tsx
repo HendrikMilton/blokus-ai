@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { ChevronLeft, ChevronRight, Pencil, Play } from 'lucide-react';
 import { http, API_URL } from '../../../../api/config';
 import { Button } from '../../../../components/ui/Button';
@@ -60,15 +60,42 @@ interface SampleListItem {
 export const ImageDetailPage = () => {
     const { id } = useParams<{ id: string }>();
     const navigate = useNavigate();
+    const [searchParams, setSearchParams] = useSearchParams();
     const [sample, setSample] = useState<Sample | null>(null);
     const [isLoading, setIsLoading] = useState(true);
     const [detection, setDetection] = useState<DetectResponseWithCorrection | null>(null);
     const [sampleIds, setSampleIds] = useState<string[]>([]);
     const [currentIndex, setCurrentIndex] = useState(-1);
     const [trainingRuns, setTrainingRuns] = useState<TrainingRun[]>([]);
-    const [selectedModelId, setSelectedModelId] = useState<string>('');
     const [isDetecting, setIsDetecting] = useState(false);
     const [previewDetection, setPreviewDetection] = useState<DetectResponseWithCorrection['detection'] | null>(null);
+
+    // Model selection from URL or default to latest
+    const modelIdFromUrl = searchParams.get('model');
+    const [selectedModelId, setSelectedModelIdState] = useState<string>('');
+
+    const setSelectedModelId = useCallback((modelId: string) => {
+        setSelectedModelIdState(modelId);
+        if (modelId) {
+            searchParams.set('model', modelId);
+        } else {
+            searchParams.delete('model');
+        }
+        setSearchParams(searchParams, { replace: true });
+    }, [searchParams, setSearchParams]);
+
+    // Model for viewing AI detection (separate from run detection model)
+    const [viewModelId, setViewModelIdState] = useState<string>('');
+
+    const setViewModelId = useCallback((modelId: string) => {
+        setViewModelIdState(modelId);
+        if (modelId) {
+            searchParams.set('model', modelId);
+        } else {
+            searchParams.delete('model');
+        }
+        setSearchParams(searchParams, { replace: true });
+    }, [searchParams, setSearchParams]);
 
     // Load sample list for navigation
     useEffect(() => {
@@ -124,16 +151,23 @@ export const ImageDetailPage = () => {
                 const data = await http.get<{ runs: TrainingRun[] }>('/api/ml/training-runs');
                 const completedRuns = data.runs.filter(r => r.status === 'completed');
                 setTrainingRuns(completedRuns);
-                // Auto-select the most recent completed run
-                if (completedRuns.length > 0 && !selectedModelId) {
-                    setSelectedModelId(completedRuns[0].id);
+                // Auto-select from URL or most recent completed run
+                if (completedRuns.length > 0) {
+                    const urlModel = modelIdFromUrl;
+                    if (urlModel && completedRuns.some(r => r.id === urlModel)) {
+                        setSelectedModelIdState(urlModel);
+                        setViewModelIdState(urlModel);
+                    } else {
+                        setSelectedModelIdState(completedRuns[0].id);
+                        setViewModelIdState(completedRuns[0].id);
+                    }
                 }
             } catch {
                 // Ignore error
             }
         };
         loadTrainingRuns();
-    }, []);
+    }, [modelIdFromUrl]);
 
     const runDetection = useCallback(async () => {
         if (!id || !selectedModelId) {
@@ -158,11 +192,6 @@ export const ImageDetailPage = () => {
             try {
                 const data = await http.get<Sample>(`/api/ml/samples/${id}`);
                 setSample(data);
-                // Try to load existing detection result
-                if (id) {
-                    const detectResult = await http.get<DetectResponseWithCorrection | null>(`/api/ml/detect/${id}`);
-                    setDetection(detectResult);
-                }
             } catch {
                 // Error toast shown by http client
             } finally {
@@ -171,6 +200,23 @@ export const ImageDetailPage = () => {
         };
         loadSample();
     }, [id]);
+
+    // Load detection when sample or viewModelId changes
+    useEffect(() => {
+        const loadDetection = async () => {
+            if (!id) {
+                return;
+            }
+            try {
+                const modelParam = viewModelId ? `?modelId=${viewModelId}` : '';
+                const detectResult = await http.get<DetectResponseWithCorrection | null>(`/api/ml/detect/${id}${modelParam}`);
+                setDetection(detectResult);
+            } catch {
+                setDetection(null);
+            }
+        };
+        loadDetection();
+    }, [id, viewModelId]);
 
     // Calculate IoU if both AI and human bboxes exist
     const iou = useMemo(() => {
@@ -413,9 +459,21 @@ export const ImageDetailPage = () => {
                 )}
 
                 {/* AI Detection Info */}
-                {detection && detection.detection && detection.detection.confidence > 0 && (
+                {trainingRuns.length > 0 && (
                     <div className="bg-surface rounded-lg border border-border p-4">
-                        <h2 className="text-sm font-medium text-foreground mb-3">AI Detection</h2>
+                        <div className="flex items-center justify-between gap-3 mb-3">
+                            <h2 className="text-sm font-medium text-foreground">AI Detection</h2>
+                            <Select
+                                value={viewModelId}
+                                onChange={(value) => setViewModelId(String(value))}
+                                options={trainingRuns.map((run) => ({
+                                    value: run.id,
+                                    label: `${run.id.slice(0, 8)} - ${run.imageCount} imgs${run.accuracy !== null ? ` - ${(run.accuracy * 100).toFixed(1)}%` : ''}`,
+                                }))}
+                                className="w-56"
+                            />
+                        </div>
+                        {detection && detection.detection ? (
                         <div className="space-y-3">
                             {/* Board detected */}
                             <div className="flex items-center justify-between gap-4">
@@ -481,6 +539,9 @@ export const ImageDetailPage = () => {
                                 </div>
                             )}
                         </div>
+                        ) : (
+                            <p className="text-sm text-muted">No AI detection for this model</p>
+                        )}
                     </div>
                 )}
 
@@ -526,8 +587,8 @@ export const ImageDetailPage = () => {
                     </div>
                 )}
 
-                {/* No detection message */}
-                {!detection && (
+                {/* No labels message - only show when no training runs exist */}
+                {trainingRuns.length === 0 && !detection?.correction && (
                     <div className="bg-surface rounded-lg border border-border p-6 text-center">
                         <p className="text-secondary">No labels yet</p>
                         <p className="text-sm text-muted mt-1">Use labeling mode to add labels to this image</p>

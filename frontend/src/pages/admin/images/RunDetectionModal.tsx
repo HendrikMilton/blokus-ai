@@ -2,6 +2,7 @@ import { useState } from 'react';
 import type { TrainingRun } from '@blokus-ai/shared';
 import { Modal } from '../../../components/ui/Modal';
 import { Button } from '../../../components/ui/Button';
+import { Select } from '../../../components/ui/Select';
 
 interface Props {
     isOpen: boolean;
@@ -56,28 +57,21 @@ export const RunDetectionModal = ({ isOpen, onClose, onStart, trainingRuns, isLo
         <Modal isOpen={isOpen} onClose={handleClose} title="Run AI Detection" size="md">
             <div className="space-y-4">
                 {/* Model selection */}
-                <div>
-                    <label className="block text-sm font-medium text-foreground mb-1.5">
-                        Select trained model
-                    </label>
-                    {completedRuns.length === 0 ? (
-                        <p className="text-sm text-muted">
-                            No completed training runs available. Please train a model first.
-                        </p>
-                    ) : (
-                        <select
-                            value={selectedModelId}
-                            onChange={(e) => setSelectedModelId(e.target.value)}
-                            className="w-full px-3 py-2 bg-surface border border-border rounded-lg text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30"
-                        >
-                            {completedRuns.map(run => (
-                                <option key={run.id} value={run.id}>
-                                    {formatDate(run.createdAt)} - Accuracy: {formatPercent(run.accuracy)} ({run.imageCount} images)
-                                </option>
-                            ))}
-                        </select>
-                    )}
-                </div>
+                {completedRuns.length === 0 ? (
+                    <p className="text-sm text-muted">
+                        No completed training runs available. Please train a model first.
+                    </p>
+                ) : (
+                    <Select
+                        label="Select trained model"
+                        value={selectedModelId}
+                        onChange={(v) => setSelectedModelId(v as string)}
+                        options={completedRuns.map(run => ({
+                            value: run.id,
+                            label: `${formatDate(run.createdAt)} - Accuracy: ${formatPercent(run.accuracy)} (${run.imageCount} images)`,
+                        }))}
+                    />
+                )}
 
                 {/* Include existing AI detections checkbox */}
                 <div className="flex items-start gap-2">

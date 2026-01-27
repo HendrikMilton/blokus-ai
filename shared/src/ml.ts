@@ -223,11 +223,13 @@ export interface DetectionRun {
     processedCount: number;
     successCount: number | null;
     failedCount: number | null;
+    disagreementCount: number | null;
     startedAt: string | null;
     completedAt: string | null;
     durationMs: number | null;
     errorMessage: string | null;
     avgIou: number | null;
+    avgClassifierAccuracy: number | null;
     createdAt: string;
 }
 

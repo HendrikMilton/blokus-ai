@@ -128,6 +128,11 @@ const getColumns = (
         },
     },
     {
+        key: 'disagreementCount',
+        header: 'Disagree',
+        render: (row) => row.disagreementCount ?? '-',
+    },
+    {
         key: 'createdAt',
         header: 'Created',
         render: (row) => formatDate(row.createdAt),
@@ -141,6 +146,11 @@ const getColumns = (
         key: 'avgIou',
         header: 'Avg IoU',
         render: (row) => formatPercent(row.avgIou),
+    },
+    {
+        key: 'avgClassifierAccuracy',
+        header: 'Cls Acc',
+        render: (row) => formatPercent(row.avgClassifierAccuracy),
     },
     {
         key: 'actions',

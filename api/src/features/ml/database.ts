@@ -930,6 +930,9 @@ interface DetectionRunRow {
     avg_iou: number | null;
     created_at: Date;
     updated_at: Date;
+    // Computed fields from join
+    disagreement_count?: number | null;
+    avg_classifier_accuracy?: number | null;
 }
 
 const rowToDetectionRun = (row: DetectionRunRow): DetectionRun => ({
@@ -940,11 +943,13 @@ const rowToDetectionRun = (row: DetectionRunRow): DetectionRun => ({
     processedCount: row.processed_count,
     successCount: row.success_count,
     failedCount: row.failed_count,
+    disagreementCount: row.disagreement_count ?? null,
     startedAt: row.started_at?.toISOString() ?? null,
     completedAt: row.completed_at?.toISOString() ?? null,
     durationMs: row.duration_ms,
     errorMessage: row.error_message,
     avgIou: row.avg_iou,
+    avgClassifierAccuracy: row.avg_classifier_accuracy ?? null,
     createdAt: row.created_at.toISOString(),
 });
 
@@ -1008,19 +1013,44 @@ export const updateDetectionRun = async (
         dbUpdates.avg_iou = updates.avgIou;
     }
 
-    const [row] = await trx<DetectionRunRow>('detection_runs')
+    await trx<DetectionRunRow>('detection_runs')
         .where('id', id)
-        .update(dbUpdates)
-        .returning('*');
+        .update(dbUpdates);
 
-    return row ? rowToDetectionRun(row) : null;
+    // Return full object with computed fields
+    return getDetectionRun(id, trx);
 };
 
 export const listDetectionRuns = async (
     trx: Knex.Transaction | Knex = knex
 ): Promise<DetectionRun[]> => {
-    const rows = await trx<DetectionRunRow>('detection_runs')
-        .orderBy('created_at', 'desc');
+    // Get detection runs with computed stats via subqueries
+    const rows = await trx<DetectionRunRow>('detection_runs as dr')
+        .select('dr.*')
+        .select(
+            trx.raw(`(
+                SELECT COUNT(*)
+                FROM model_detections md
+                INNER JOIN board_detections bd ON bd.sample_id = md.sample_id
+                WHERE md.model_id = dr.model_id
+                AND bd.human_has_board IS NOT NULL
+                AND md.has_board_detected != bd.human_has_board
+            ) as disagreement_count`)
+        )
+        .select(
+            trx.raw(`(
+                SELECT AVG(
+                    CASE WHEN md.is_entire_board_visible = bd.human_is_entire_visible
+                    THEN 1.0 ELSE 0.0 END
+                )
+                FROM model_detections md
+                INNER JOIN board_detections bd ON bd.sample_id = md.sample_id
+                WHERE md.model_id = dr.model_id
+                AND bd.human_is_entire_visible IS NOT NULL
+                AND md.classifier_confidence IS NOT NULL
+            ) as avg_classifier_accuracy`)
+        )
+        .orderBy('dr.created_at', 'desc');
     return rows.map(rowToDetectionRun);
 };
 
@@ -1028,10 +1058,33 @@ export const getDetectionRun = async (
     id: string,
     trx: Knex.Transaction | Knex = knex
 ): Promise<DetectionRun | null> => {
-    const row = await trx<DetectionRunRow>('detection_runs')
-        .where('id', id)
-        .first();
-    return row ? rowToDetectionRun(row) : null;
+    const rows = await trx<DetectionRunRow>('detection_runs as dr')
+        .select('dr.*')
+        .select(
+            trx.raw(`(
+                SELECT COUNT(*)
+                FROM model_detections md
+                INNER JOIN board_detections bd ON bd.sample_id = md.sample_id
+                WHERE md.model_id = dr.model_id
+                AND bd.human_has_board IS NOT NULL
+                AND md.has_board_detected != bd.human_has_board
+            ) as disagreement_count`)
+        )
+        .select(
+            trx.raw(`(
+                SELECT AVG(
+                    CASE WHEN md.is_entire_board_visible = bd.human_is_entire_visible
+                    THEN 1.0 ELSE 0.0 END
+                )
+                FROM model_detections md
+                INNER JOIN board_detections bd ON bd.sample_id = md.sample_id
+                WHERE md.model_id = dr.model_id
+                AND bd.human_is_entire_visible IS NOT NULL
+                AND md.classifier_confidence IS NOT NULL
+            ) as avg_classifier_accuracy`)
+        )
+        .where('dr.id', id);
+    return rows.length > 0 ? rowToDetectionRun(rows[0]) : null;
 };
 
 export const deleteDetectionRun = async (
