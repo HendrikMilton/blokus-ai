@@ -12,7 +12,8 @@ const checkOrigin = (origin: string | undefined): boolean => {
         const isIPOrigin = /^https?:\/\/\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(:\d+)?$/.test(origin);
         const isLocalhost = origin.includes('localhost') || origin.includes('127.0.0.1');
         const isCloudflare = origin.includes('trycloudflare.com');
-        if (isIPOrigin || isLocalhost || isCloudflare) return true;
+        const isHycapital = origin.includes('hycapital.io');
+        if (isIPOrigin || isLocalhost || isCloudflare || isHycapital) return true;
     }
     return false;
 };

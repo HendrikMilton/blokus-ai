@@ -3,28 +3,9 @@ import { makeContext } from './config';
 import { http } from '../api/config';
 import { ML_API } from '../api/ml';
 import { useSocketEvent } from '../hooks/useSocketEvent';
-import type { TrainingRun, DetectionRun, SampleStatusFlags } from '@blokus-ai/shared';
+import type { TrainingRun, DetectionRun, Sample } from '@blokus-ai/shared';
 
-// Sample type (matches API response)
-export interface Sample {
-    id: string;
-    filename: string;
-    status: SampleStatusFlags;
-    ai: {
-        hasBoardDetected: boolean;
-        isEntireBoardVisible: boolean;
-        confidence: number;
-        classifierConfidence: number | null;
-    } | null;
-    human: {
-        hasBoardDetected: boolean;
-        isEntireBoardVisible: boolean;
-    } | null;
-    iou: number | null;
-    created_at: string;
-    imageUrl?: string;
-    thumbnailUrl?: string;
-}
+export type { Sample } from '@blokus-ai/shared';
 
 interface SamplesResponse {
     samples: Sample[];

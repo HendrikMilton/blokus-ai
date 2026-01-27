@@ -1,6 +1,6 @@
 import { Knex } from 'knex';
 import { knex } from '../../knex';
-import type { DetectResponse, DetectResponseWithCorrection, SampleStatusFlags, TrainingRun, TrainingRunStatus, BoardDetection, DetectionRun, DetectionRunStatus } from '@blokus-ai/shared';
+import type { DetectResponse, DetectResponseWithCorrection, SampleStatusFlags, TrainingRun, TrainingRunStatus, BoardDetection, DetectionRun, DetectionRunStatus, SampleAiDetection, SampleHumanLabel } from '@blokus-ai/shared';
 
 interface BoardDetectionRow {
     id: string;
@@ -336,16 +336,8 @@ export const getSampleStatusFlagsById = async (
 
 export interface SampleDetectionInfo {
     status: SampleStatusFlags;
-    ai: {
-        hasBoardDetected: boolean;
-        isEntireBoardVisible: boolean;
-        confidence: number;
-        classifierConfidence: number | null;
-    } | null;
-    human: {
-        hasBoardDetected: boolean;
-        isEntireBoardVisible: boolean;
-    } | null;
+    ai: SampleAiDetection | null;
+    human: SampleHumanLabel | null;
     iou: number | null;
 }
 
@@ -414,10 +406,22 @@ export const getSampleDetectionInfoMap = async (
                 isEntireBoardVisible: row.is_entire_board_visible,
                 confidence: row.confidence,
                 classifierConfidence: row.classifier_confidence,
+                boundingBox: row.bbox_x !== null ? {
+                    x: row.bbox_x,
+                    y: row.bbox_y,
+                    width: row.bbox_width,
+                    height: row.bbox_height,
+                } : null,
             } : null,
             human: hasHumanLabel ? {
                 hasBoardDetected: row.human_has_board ?? false,
                 isEntireBoardVisible: row.human_is_entire_visible ?? false,
+                boundingBox: row.human_bbox_x !== null ? {
+                    x: row.human_bbox_x,
+                    y: row.human_bbox_y,
+                    width: row.human_bbox_width,
+                    height: row.human_bbox_height,
+                } : null,
             } : null,
             iou,
         });

@@ -639,12 +639,38 @@ export const ImagesPage = () => {
                                             onClick={() => navigate(`/admin/images/${sample.id}`)}
                                             className="w-full text-left focus:outline-none"
                                         >
-                                            <img
+                                            <div className="relative">
+                                                <img
                                                     src={sample.thumbnailUrl || sample.imageUrl || `${API_URL}/api/ml/samples/${sample.id}/image`}
                                                     alt={`Sample ${sample.id}`}
                                                     className="w-full h-auto"
                                                     loading="lazy"
                                                 />
+                                                {/* AI bounding box (dashed, primary) */}
+                                                {sample.ai?.boundingBox && (
+                                                    <div
+                                                        className="absolute border border-primary border-dashed pointer-events-none"
+                                                        style={{
+                                                            left: `${sample.ai.boundingBox.x * 100}%`,
+                                                            top: `${sample.ai.boundingBox.y * 100}%`,
+                                                            width: `${sample.ai.boundingBox.width * 100}%`,
+                                                            height: `${sample.ai.boundingBox.height * 100}%`,
+                                                        }}
+                                                    />
+                                                )}
+                                                {/* Human bounding box (solid, info/blue) */}
+                                                {sample.human?.boundingBox && (
+                                                    <div
+                                                        className="absolute border border-info pointer-events-none"
+                                                        style={{
+                                                            left: `${sample.human.boundingBox.x * 100}%`,
+                                                            top: `${sample.human.boundingBox.y * 100}%`,
+                                                            width: `${sample.human.boundingBox.width * 100}%`,
+                                                            height: `${sample.human.boundingBox.height * 100}%`,
+                                                        }}
+                                                    />
+                                                )}
+                                            </div>
                                             <div className="px-2 py-1.5 text-xs">
                                                 {/* Header: ID + badges */}
                                                 <div className="flex items-center justify-between gap-1 mb-1">

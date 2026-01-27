@@ -230,3 +230,33 @@ export interface DetectionRun {
     avgIou: number | null;
     createdAt: string;
 }
+
+// ============================================================================
+// Sample types (for admin images list)
+// ============================================================================
+
+export interface SampleAiDetection {
+    hasBoardDetected: boolean;
+    isEntireBoardVisible: boolean;
+    confidence: number;
+    classifierConfidence: number | null;
+    boundingBox: BoundingBox | null;
+}
+
+export interface SampleHumanLabel {
+    hasBoardDetected: boolean;
+    isEntireBoardVisible: boolean;
+    boundingBox: BoundingBox | null;
+}
+
+export interface Sample {
+    id: string;
+    filename: string;
+    status: SampleStatusFlags;
+    ai: SampleAiDetection | null;
+    human: SampleHumanLabel | null;
+    iou: number | null;
+    created_at: string;
+    imageUrl?: string;
+    thumbnailUrl?: string;
+}

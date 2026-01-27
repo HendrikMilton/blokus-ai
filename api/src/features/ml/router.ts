@@ -172,10 +172,22 @@ mlRouter.post('/detect/test', asyncHandler(async (req, res) => {
 // POST /api/ml/detect/:id - Run board detection and store result
 mlRouter.post('/detect/:id', asyncHandler(async (req, res) => {
     const { id } = req.params;
-    const { model = 'yolo' } = req.body;
+    const { modelId } = req.body;
 
-    const data = await mlHttp.post<DetectResponse>(`/detect/${id}?model=${model}`, {});
+    // Build query params - if modelId is provided, use it for trained model detection
+    const queryParams = modelId ? `?model_id=${modelId}` : '';
+    const data = await mlHttp.post<DetectResponse>(`/detect/${id}${queryParams}`, {});
     await upsertBoardDetection(data);
+    res.json(data);
+}));
+
+// GET /api/ml/detect/:id/preview - Run detection without saving (for testing models)
+mlRouter.get('/detect/:id/preview', asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const { modelId } = req.query;
+
+    const queryParams = modelId ? `?model_id=${modelId}` : '';
+    const data = await mlHttp.post<DetectResponse>(`/detect/${id}${queryParams}`, {});
     res.json(data);
 }));
 
