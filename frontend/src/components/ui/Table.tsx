@@ -47,7 +47,7 @@ interface TableProps<T> {
     // Selection props (Google Drive style - click to select, double-click for action)
     selectable?: boolean;
     selectedKeys?: Set<string | number>;
-    onSelectionChange?: (key: string | number, shiftKey: boolean) => void;
+    onSelectionChange?: (key: string | number, shiftKey: boolean, ctrlKey: boolean) => void;
     onRowDoubleClick?: (item: T) => void;
 }
 
@@ -209,7 +209,7 @@ export function Table<T>({
                                         key={rowKey}
                                         onClick={(e) => {
                                             if (selectable && onSelectionChange) {
-                                                onSelectionChange(rowKey, e.shiftKey);
+                                                onSelectionChange(rowKey, e.shiftKey, e.ctrlKey || e.metaKey);
                                             } else if (onRowClick) {
                                                 onRowClick(item);
                                             }

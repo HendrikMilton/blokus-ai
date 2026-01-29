@@ -4,6 +4,7 @@ import type { ModelPipeline, TrainingRun } from '@blokus-ai/shared';
 import { Button } from '../../../components/ui/Button';
 import { Table, Column } from '../../../components/ui/Table';
 import { ConfirmModal } from '../../../components/ui/ConfirmModal';
+import { formatShortId } from '../../../utils/format';
 
 interface Props {
     pipelines: ModelPipeline[];
@@ -49,7 +50,7 @@ export const PipelinesSection = ({ pipelines, trainingRuns, loading, onDelete, o
             const run = runMap.get(id);
             const label = run
                 ? `${formatDate(run.createdAt)} (${run.imageCount})`
-                : id.slice(0, 8);
+                : formatShortId(id);
             return (
                 <span key={id}>
                     {index > 0 && <span className="text-muted mx-1">&rarr;</span>}

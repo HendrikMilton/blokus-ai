@@ -3,6 +3,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { Plus, ChevronLeft, ChevronRight, Tag, Lightbulb, Trash2, Search, Image, LayoutGrid, List, X } from 'lucide-react';
 import { cn } from '../../../utils/cn';
+import { formatShortId } from '../../../utils/format';
 import { http, API_URL } from '../../../api/config';
 import { ML_API } from '../../../api/ml';
 import { Button } from '../../../components/ui/Button';
@@ -18,12 +19,14 @@ import { RunDetectionModal } from './RunDetectionModal';
 import { TestModelTab } from './TestModelTab';
 import { PipelinesSection } from './PipelinesSection';
 import { CreatePipelineModal } from './CreatePipelineModal';
+import { TagsSection } from './TagsSection';
+import { CreateTagModal } from './CreateTagModal';
 import { ConfirmModal } from '../../../components/ui/ConfirmModal';
 import { useAdmin } from '../../../contexts/AdminContext';
 import { useSocketEvent } from '../../../hooks/useSocketEvent';
 import type { ModelPipeline } from '@blokus-ai/shared';
 
-type Tab = 'images' | 'models' | 'detections' | 'test';
+type Tab = 'images' | 'models' | 'detections' | 'test' | 'config';
 type FilterPreset = 'all' | 'unlabeled' | 'false-positives' | 'false-negatives' | 'low-iou' | 'disagreements';
 type SortOption = 'default' | 'lowest-iou' | 'lowest-confidence';
 type ViewType = 'grid' | 'list';
@@ -133,7 +136,6 @@ export const ImagesPage = () => {
         trainingRuns,
         isLoadingTrainingRuns: isLoadingRuns,
         trainingProgress,
-        addTrainingRun,
         removeTrainingRun,
         detectionRuns,
         isLoadingDetectionRuns: isLoadingDetections,
@@ -144,6 +146,10 @@ export const ImagesPage = () => {
         addPipeline,
         updatePipelineState,
         removePipeline,
+        tags,
+        isLoadingTags,
+        addTag,
+        removeTag,
     } = useAdmin();
 
     // Local UI state
@@ -154,6 +160,7 @@ export const ImagesPage = () => {
     const [showDetectionModal, setShowDetectionModal] = useState(false);
     const [showPipelineModal, setShowPipelineModal] = useState(false);
     const [editingPipeline, setEditingPipeline] = useState<ModelPipeline | null>(null);
+    const [showTagModal, setShowTagModal] = useState(false);
 
     // Selection state
     const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -167,7 +174,7 @@ export const ImagesPage = () => {
 
     // Get tab from URL or default to 'images'
     const urlTab = searchParams.get('tab') as Tab | null;
-    const tab: Tab = urlTab === 'models' ? 'models' : urlTab === 'detections' ? 'detections' : urlTab === 'test' ? 'test' : 'images';
+    const tab: Tab = urlTab === 'models' ? 'models' : urlTab === 'detections' ? 'detections' : urlTab === 'test' ? 'test' : urlTab === 'config' ? 'config' : 'images';
 
     const setTab = (newTab: Tab) => {
         if (newTab === 'images') {
@@ -224,6 +231,19 @@ export const ImagesPage = () => {
 
     // Search state
     const [searchQuery, setSearchQuery] = useState('');
+
+    // Tag filter from URL
+    const urlTagId = searchParams.get('tagId');
+    const selectedTagId = urlTagId || '';
+
+    const setSelectedTagId = (tagId: string) => {
+        if (!tagId) {
+            searchParams.delete('tagId');
+        } else {
+            searchParams.set('tagId', tagId);
+        }
+        setSearchParams(searchParams);
+    };
 
     // Multi-model mode (intersection vs union)
     const [multiModelMode, setMultiModelMode] = useState<MultiModelMode>('intersection');
@@ -334,8 +354,8 @@ export const ImagesPage = () => {
         }
         setIsTraining(true);
         try {
-            const run = await ML_API.startTraining(Array.from(selectedIds));
-            addTrainingRun(run);
+            // Don't need to addTrainingRun here - WebSocket 'training-run-started' event handles it
+            await ML_API.startTraining(Array.from(selectedIds));
             toast.success('Training started');
         } catch {
             toast.error('Failed to start training');
@@ -390,7 +410,24 @@ export const ImagesPage = () => {
         }
     };
 
-    const handleSelect = (id: string, shiftKey: boolean = false) => {
+    // Tag handlers
+    const handleCreateTag = async (name: string) => {
+        const tag = await ML_API.createTag(name);
+        addTag(tag);
+        toast.success('Tag created');
+    };
+
+    const handleDeleteTag = async (id: string) => {
+        try {
+            await ML_API.deleteTag(id);
+            removeTag(id);
+            toast.success('Tag deleted');
+        } catch {
+            toast.error('Failed to delete tag');
+        }
+    };
+
+    const handleSelect = (id: string, shiftKey: boolean = false, ctrlKey: boolean = false) => {
         const currentIndex = filteredSamples.findIndex(s => s.id === id);
 
         if (shiftKey && lastClickedIndex !== null && currentIndex !== -1) {
@@ -406,6 +443,18 @@ export const ImagesPage = () => {
                 }
                 return next;
             });
+        } else if (ctrlKey) {
+            // Ctrl+click: toggle selection (add or remove from existing selection)
+            setSelectedIds(prev => {
+                const next = new Set(prev);
+                if (next.has(id)) {
+                    next.delete(id);
+                } else {
+                    next.add(id);
+                }
+                return next;
+            });
+            setLastClickedIndex(currentIndex);
         } else {
             // Normal click: select single item (clear others)
             setSelectedIds(new Set([id]));
@@ -468,16 +517,16 @@ export const ImagesPage = () => {
     useSocketEvent('detection-run-deleted', () => {
         // Reload samples to reflect cleared AI labels
         const modelId = selectedModelIds.length === 1 ? selectedModelIds[0] : null;
-        fetchSamples(true, modelId);
-    }, [fetchSamples, selectedModelIds]);
+        fetchSamples(true, modelId, selectedTagId || null);
+    }, [fetchSamples, selectedModelIds, selectedTagId]);
 
-    // Refetch samples when selected model changes (single model mode)
+    // Refetch samples when selected model or tag changes (single model mode)
     useEffect(() => {
         if (selectedModelIds.length <= 1) {
             const modelId = selectedModelIds.length === 1 ? selectedModelIds[0] : null;
-            fetchSamples(true, modelId);
+            fetchSamples(true, modelId, selectedTagId || null);
         }
-    }, [selectedModelIds, fetchSamples]);
+    }, [selectedModelIds, selectedTagId, fetchSamples]);
 
     // Fetch samples for each model when multiple models selected
     useEffect(() => {
@@ -641,7 +690,7 @@ export const ImagesPage = () => {
             header: 'ID',
             sortable: true,
             width: '100px',
-            render: (sample) => <span className="font-mono text-muted">{sample.id.slice(0, 8)}</span>,
+            render: (sample) => <span className="font-mono text-muted">{formatShortId(sample.id)}</span>,
         },
         {
             key: 'status',
@@ -705,6 +754,20 @@ export const ImagesPage = () => {
                     {Math.round(sample.iou * 100)}%
                 </span>
             ) : '—',
+        },
+        {
+            key: 'tags',
+            header: 'Tags',
+            noTruncate: true,
+            render: (sample) => sample.tags && sample.tags.length > 0 ? (
+                <div className="flex flex-wrap gap-1">
+                    {sample.tags.map(tag => (
+                        <span key={tag.id} className="px-1.5 py-0.5 text-xs bg-primary/10 text-primary rounded">
+                            {tag.name}
+                        </span>
+                    ))}
+                </div>
+            ) : <span className="text-muted">—</span>,
         },
         {
             key: 'created_at',
@@ -848,6 +911,18 @@ export const ImagesPage = () => {
                 >
                     Test Model
                 </button>
+                <button
+                    onClick={() => setTab('config')}
+                    className={`
+                        px-4 py-2 text-sm font-medium transition-colors -mb-px whitespace-nowrap
+                        ${tab === 'config'
+            ? 'border-b-2 border-primary text-foreground'
+            : 'text-secondary hover:text-foreground'
+        }
+                    `}
+                >
+                    Configurations
+                </button>
             </div>
 
             {tab === 'images' ? (
@@ -893,7 +968,7 @@ export const ImagesPage = () => {
                                 options={[
                                     ...completedModels.map(run => ({
                                         value: run.id,
-                                        label: `${formatDate(run.createdAt)} (${run.imageCount} imgs)`,
+                                        label: `${formatShortId(run.id)} - ${formatDate(run.createdAt)} (${run.imageCount} imgs)`,
                                     })),
                                     ...pipelines.map(pipeline => ({
                                         value: `pipeline:${pipeline.id}`,
@@ -905,6 +980,18 @@ export const ImagesPage = () => {
                                 placeholder="All models"
                                 allLabel="All models"
                                 className="w-64"
+                            />
+                        )}
+                        {tags.length > 0 && (
+                            <Select
+                                label="Tags"
+                                value={selectedTagId}
+                                onChange={(v) => setSelectedTagId(String(v))}
+                                options={[
+                                    { value: '', label: 'All tags' },
+                                    ...tags.map(tag => ({ value: tag.id, label: tag.name })),
+                                ]}
+                                className="w-40"
                             />
                         )}
                         {/* Intersection/Union toggle - show when multiple models selected and filter is not "all" */}
@@ -1035,7 +1122,7 @@ export const ImagesPage = () => {
                             onSort={handleListSort}
                             selectable
                             selectedKeys={selectedIds}
-                            onSelectionChange={(key, shiftKey) => handleSelect(key as string, shiftKey)}
+                            onSelectionChange={(key, shiftKey, ctrlKey) => handleSelect(key as string, shiftKey, ctrlKey)}
                             onRowDoubleClick={(sample) => handleDoubleClick(sample.id)}
                             emptyMessage="No images found"
                             paginated
@@ -1054,7 +1141,7 @@ export const ImagesPage = () => {
                                 return (
                                     <div
                                         key={sample.id}
-                                        onClick={(e) => handleSelect(sample.id, e.shiftKey)}
+                                        onClick={(e) => handleSelect(sample.id, e.shiftKey, e.ctrlKey || e.metaKey)}
                                         onDoubleClick={() => handleDoubleClick(sample.id)}
                                         className={`relative bg-surface rounded-lg border overflow-hidden text-left transition-all cursor-pointer select-none ${
                                             isSelected
@@ -1070,6 +1157,19 @@ export const ImagesPage = () => {
                                                 loading="lazy"
                                                 draggable={false}
                                             />
+                                            {/* Tags overlay */}
+                                            {sample.tags && sample.tags.length > 0 && (
+                                                <div className="absolute top-1 left-1/2 -translate-x-1/2 flex flex-wrap justify-center gap-1 max-w-[90%]">
+                                                    {sample.tags.map(tag => (
+                                                        <span
+                                                            key={tag.id}
+                                                            className="px-1.5 py-0.5 text-[10px] bg-surface/80 text-foreground rounded backdrop-blur-sm"
+                                                        >
+                                                            {tag.name}
+                                                        </span>
+                                                    ))}
+                                                </div>
+                                            )}
                                             {/* AI bounding box (dashed, primary) */}
                                             {sample.ai?.boundingBox && (
                                                 <div
@@ -1098,7 +1198,7 @@ export const ImagesPage = () => {
                                         <div className="px-2 py-1.5 text-xs">
                                             {/* Header: ID + badges */}
                                             <div className="flex items-center justify-between gap-1 mb-1">
-                                                <span className="text-muted font-mono">{sample.id.slice(0, 8)}</span>
+                                                <span className="text-muted font-mono">{formatShortId(sample.id)}</span>
                                                 <div className="flex gap-0.5">
                                                     {allLabels.map(label => (
                                                         <span key={label} className={`px-1.5 py-0.5 text-[10px] rounded ${statusColors[label]}`}>
@@ -1260,8 +1360,17 @@ export const ImagesPage = () => {
                     trainingRuns={trainingRuns}
                     pipelines={pipelines}
                 />
-            ) : (
+            ) : tab === 'test' ? (
                 <TestModelTab trainingRuns={trainingRuns} pipelines={pipelines} />
+            ) : (
+                <div className="space-y-6">
+                    <TagsSection
+                        tags={tags}
+                        loading={isLoadingTags}
+                        onDelete={handleDeleteTag}
+                        onCreate={() => setShowTagModal(true)}
+                    />
+                </div>
             )}
 
             {/* Detection Modal */}
@@ -1284,6 +1393,13 @@ export const ImagesPage = () => {
                 onSave={handleSavePipeline}
                 trainingRuns={trainingRuns}
                 editingPipeline={editingPipeline}
+            />
+
+            {/* Tag Modal */}
+            <CreateTagModal
+                isOpen={showTagModal}
+                onClose={() => setShowTagModal(false)}
+                onSave={handleCreateTag}
             />
 
             {/* Delete Confirmation Modal */}

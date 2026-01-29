@@ -1,8 +1,8 @@
 """
 Board visibility classifier inference module.
 
-Loads trained classifier models and predicts whether the entire board
-is visible in a cropped board region.
+Uses EfficientNet-B0 with a trained classifier head to predict
+whether the entire board is visible in a cropped board region.
 """
 
 from pathlib import Path
@@ -16,7 +16,7 @@ from torchvision import models, transforms
 MODELS_DIR = Path(__file__).parent.parent.parent.parent / "models"
 
 # Cache for loaded classifier models
-_classifiers: dict[str, nn.Module] = {}
+_classifier_models: dict[str, nn.Module] = {}
 
 # Inference transform (same as validation transform during training)
 _transform = transforms.Compose([
@@ -26,9 +26,15 @@ _transform = transforms.Compose([
 ])
 
 
-def _create_classifier_model() -> nn.Module:
-    """Create EfficientNet-B0 model architecture for binary classification."""
-    model = models.efficientnet_b0(weights=None)  # Don't load pretrained weights
+def create_classifier_model() -> nn.Module:
+    """
+    Create EfficientNet-B0 model for binary classification.
+
+    Uses pretrained ImageNet weights and replaces the classifier head
+    with a single output for binary classification.
+    """
+    model = models.efficientnet_b0(weights=None)
+    # Replace classifier head: original is (dropout, Linear(1280, 1000))
     model.classifier[1] = nn.Linear(model.classifier[1].in_features, 1)
     return model
 
@@ -43,27 +49,27 @@ def get_classifier(model_id: str) -> nn.Module | None:
     Returns:
         Loaded model or None if model doesn't exist
     """
-    if model_id not in _classifiers:
+    if model_id not in _classifier_models:
         model_path = MODELS_DIR / model_id / "classifier.pt"
 
         if not model_path.exists():
             print(f"[classifier] No classifier found at {model_path}")
             return None
 
-        print(f"[classifier] Loading classifier: {model_path}")
+        print(f"[classifier] Loading classifier model: {model_path}")
 
         # Create model and load state dict
-        model = _create_classifier_model()
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+        model = create_classifier_model()
         state_dict = torch.load(model_path, map_location=device, weights_only=True)
         model.load_state_dict(state_dict)
         model = model.to(device)
         model.eval()
 
-        _classifiers[model_id] = model
+        _classifier_models[model_id] = model
 
-    return _classifiers[model_id]
+    return _classifier_models[model_id]
 
 
 def crop_board_region(image_path: Path, bbox: dict) -> Image.Image:
@@ -111,31 +117,30 @@ def classify_board_visibility(
         Tuple of (is_entire_visible, confidence)
         If no classifier is available, returns (False, 0.0)
     """
-    classifier = get_classifier(model_id)
+    model = get_classifier(model_id)
 
-    if classifier is None:
+    if model is None:
         # No classifier available - fall back to heuristic
         return (False, 0.0)
 
     try:
+        # Get device from model
+        device = next(model.parameters()).device
+
         # Crop and transform image
         crop = crop_board_region(image_path, bbox)
-        tensor = _transform(crop).unsqueeze(0)
-
-        # Get device from model
-        device = next(classifier.parameters()).device
-        tensor = tensor.to(device)
+        tensor = _transform(crop).unsqueeze(0).to(device)
 
         # Run inference
         with torch.no_grad():
-            logit = classifier(tensor)
+            logit = model(tensor)
             prob = torch.sigmoid(logit).item()
 
         is_visible = prob > 0.5
         confidence = prob if is_visible else (1.0 - prob)
 
         print(
-            f"[classifier] Prediction: is_entire_visible={is_visible}, "
+            f"[classifier] EfficientNet-B0 prediction: is_entire_visible={is_visible}, "
             f"confidence={confidence:.4f}"
         )
 
@@ -143,4 +148,6 @@ def classify_board_visibility(
 
     except Exception as e:
         print(f"[classifier] Inference failed: {e}")
+        import traceback
+        traceback.print_exc()
         return (False, 0.0)

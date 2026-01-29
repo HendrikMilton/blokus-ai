@@ -1,8 +1,20 @@
 import { Knex } from 'knex';
 import { knex } from '../../knex';
-import type { DetectResponse, DetectResponseWithCorrection, SampleStatusFlags, TrainingRun, TrainingRunStatus, BoardDetection, DetectionRun, DetectionRunStatus, SampleAiDetection, SampleHumanLabel, ModelPipeline } from '@blokus-ai/shared';
+import type { DetectResponse, DetectResponseWithCorrection, SampleStatusFlags, TrainingRun, TrainingRunStatus, BoardDetection, DetectionRun, DetectionRunStatus, SampleAiDetection, SampleHumanLabel, ModelPipeline, BoardCorners } from '@blokus-ai/shared';
 
-interface BoardDetectionRow {
+// Shared corner fields used by both board_detections and model_detections
+interface CornerFields {
+    corner_tl_x: number | null;
+    corner_tl_y: number | null;
+    corner_tr_x: number | null;
+    corner_tr_y: number | null;
+    corner_br_x: number | null;
+    corner_br_y: number | null;
+    corner_bl_x: number | null;
+    corner_bl_y: number | null;
+}
+
+interface BoardDetectionRow extends CornerFields {
     id: string;
     sample_id: string;
     // Human ground truth fields
@@ -19,7 +31,7 @@ interface BoardDetectionRow {
     verified_at: Date | null;
 }
 
-interface ModelDetectionRow {
+interface ModelDetectionRow extends CornerFields {
     id: string;
     sample_id: string;
     model_id: string;
@@ -31,10 +43,23 @@ interface ModelDetectionRow {
     bbox_y: number | null;
     bbox_width: number | null;
     bbox_height: number | null;
+    corner_confidence: number | null;
     processing_time_ms: number;
     created_at: Date;
     updated_at: Date;
 }
+
+const cornerFieldsToCorners = (row: CornerFields): BoardCorners | null => {
+    if (row.corner_tl_x === null) {
+        return null;
+    }
+    return {
+        topLeft: { x: row.corner_tl_x, y: row.corner_tl_y! },
+        topRight: { x: row.corner_tr_x!, y: row.corner_tr_y! },
+        bottomRight: { x: row.corner_br_x!, y: row.corner_br_y! },
+        bottomLeft: { x: row.corner_bl_x!, y: row.corner_bl_y! },
+    };
+};
 
 const modelRowToDetectResponse = (row: ModelDetectionRow): DetectResponse => ({
     sample_id: row.sample_id,
@@ -49,9 +74,14 @@ const modelRowToDetectResponse = (row: ModelDetectionRow): DetectResponse => ({
             width: row.bbox_width!,
             height: row.bbox_height!,
         } : null,
+        corners: cornerFieldsToCorners(row),
+        cornerConfidence: row.corner_confidence,
     },
     processing_time_ms: row.processing_time_ms,
 });
+
+// Alias for backward compatibility
+const rowToCorners = cornerFieldsToCorners;
 
 const rowToHumanLabel = (row: BoardDetectionRow): BoardDetection | null => {
     // Return human label only if human_labeled_at is set
@@ -177,6 +207,15 @@ export const upsertModelDetection = async (
             bbox_y: detection.boundingBox?.y ?? null,
             bbox_width: detection.boundingBox?.width ?? null,
             bbox_height: detection.boundingBox?.height ?? null,
+            corner_tl_x: detection.corners?.topLeft.x ?? null,
+            corner_tl_y: detection.corners?.topLeft.y ?? null,
+            corner_tr_x: detection.corners?.topRight.x ?? null,
+            corner_tr_y: detection.corners?.topRight.y ?? null,
+            corner_br_x: detection.corners?.bottomRight.x ?? null,
+            corner_br_y: detection.corners?.bottomRight.y ?? null,
+            corner_bl_x: detection.corners?.bottomLeft.x ?? null,
+            corner_bl_y: detection.corners?.bottomLeft.y ?? null,
+            corner_confidence: detection.cornerConfidence ?? null,
             processing_time_ms: data.processing_time_ms,
             updated_at: knex.fn.now(),
         })
@@ -378,6 +417,75 @@ export const saveManualLabel = async (
     }
 };
 
+export const saveCorners = async (
+    sampleId: string,
+    corners: BoardCorners,
+    trx: Knex.Transaction | Knex = knex
+): Promise<void> => {
+    // Check if record exists
+    const existing = await trx('board_detections')
+        .where('sample_id', sampleId)
+        .first();
+
+    const cornerData = {
+        corner_tl_x: corners.topLeft.x,
+        corner_tl_y: corners.topLeft.y,
+        corner_tr_x: corners.topRight.x,
+        corner_tr_y: corners.topRight.y,
+        corner_br_x: corners.bottomRight.x,
+        corner_br_y: corners.bottomRight.y,
+        corner_bl_x: corners.bottomLeft.x,
+        corner_bl_y: corners.bottomLeft.y,
+        updated_at: knex.fn.now(),
+    };
+
+    if (existing) {
+        await trx('board_detections')
+            .where('sample_id', sampleId)
+            .update(cornerData);
+    } else {
+        await trx('board_detections').insert({
+            sample_id: sampleId,
+            ...cornerData,
+        });
+    }
+};
+
+export const getCorners = async (
+    sampleId: string,
+    trx: Knex.Transaction | Knex = knex
+): Promise<BoardCorners | null> => {
+    const row = await trx<BoardDetectionRow>('board_detections')
+        .where('sample_id', sampleId)
+        .first();
+
+    if (!row) {
+        return null;
+    }
+
+    return rowToCorners(row);
+};
+
+export const clearCorners = async (
+    sampleId: string,
+    trx: Knex.Transaction | Knex = knex
+): Promise<boolean> => {
+    const updated = await trx('board_detections')
+        .where('sample_id', sampleId)
+        .update({
+            corner_tl_x: null,
+            corner_tl_y: null,
+            corner_tr_x: null,
+            corner_tr_y: null,
+            corner_br_x: null,
+            corner_br_y: null,
+            corner_bl_x: null,
+            corner_bl_y: null,
+            updated_at: knex.fn.now(),
+        });
+    return updated > 0;
+};
+
 export interface SampleStatusRow {
     sample_id: string;
     human_labeled_at: Date | null;
@@ -492,6 +600,8 @@ export const getSampleDetectionInfoMap = async (
             'human_has_board',
             'human_is_entire_visible',
             'human_bbox_x', 'human_bbox_y', 'human_bbox_width', 'human_bbox_height',
+            'corner_tl_x', 'corner_tl_y', 'corner_tr_x', 'corner_tr_y',
+            'corner_br_x', 'corner_br_y', 'corner_bl_x', 'corner_bl_y',
             'human_labeled_at',
             'verified_at'
         );
@@ -569,6 +679,12 @@ export const getSampleDetectionInfoMap = async (
                     y: row.human_bbox_y,
                     width: row.human_bbox_width,
                     height: row.human_bbox_height,
+                } : null,
+                corners: row.corner_tl_x !== null ? {
+                    topLeft: { x: row.corner_tl_x, y: row.corner_tl_y },
+                    topRight: { x: row.corner_tr_x, y: row.corner_tr_y },
+                    bottomRight: { x: row.corner_br_x, y: row.corner_br_y },
+                    bottomLeft: { x: row.corner_bl_x, y: row.corner_bl_y },
                 } : null,
             } : null,
             iou,
@@ -661,6 +777,10 @@ interface TrainingRunRow {
     val_loss: number | null;
     classifier_accuracy: number | null;
     classifier_loss: number | null;
+    pose_accuracy: number | null;
+    pose_loss: number | null;
+    pose_error: number | null;
+    pose_image_count: number | null;
     error_message: string | null;
     created_at: Date;
     updated_at: Date;
@@ -679,6 +799,10 @@ const rowToTrainingRun = (row: TrainingRunRow): TrainingRun => ({
     valLoss: row.val_loss,
     classifierAccuracy: row.classifier_accuracy,
     classifierLoss: row.classifier_loss,
+    poseAccuracy: row.pose_accuracy,
+    poseLoss: row.pose_loss,
+    poseError: row.pose_error,
+    poseImageCount: row.pose_image_count,
     errorMessage: row.error_message,
     createdAt: row.created_at.toISOString(),
 });
@@ -704,6 +828,10 @@ export interface TrainingRunUpdate {
     valLoss?: number;
     classifierAccuracy?: number;
     classifierLoss?: number;
+    poseAccuracy?: number;
+    poseLoss?: number;
+    poseError?: number;
+    poseImageCount?: number;
     errorMessage?: string;
 }
 
@@ -745,6 +873,18 @@ export const updateTrainingRun = async (
     }
     if (updates.classifierLoss !== undefined) {
         dbUpdates.classifier_loss = updates.classifierLoss;
+    }
+    if (updates.poseAccuracy !== undefined) {
+        dbUpdates.pose_accuracy = updates.poseAccuracy;
+    }
+    if (updates.poseLoss !== undefined) {
+        dbUpdates.pose_loss = updates.poseLoss;
+    }
+    if (updates.poseError !== undefined) {
+        dbUpdates.pose_error = updates.poseError;
+    }
+    if (updates.poseImageCount !== undefined) {
+        dbUpdates.pose_image_count = updates.poseImageCount;
     }
     if (updates.errorMessage !== undefined) {
         dbUpdates.error_message = updates.errorMessage;
@@ -916,6 +1056,80 @@ export const getClassifierTrainingData = async (
         });
 };
 
+export interface PoseTrainingSample {
+    sample_id: string;
+    image_url: string;
+    bbox: {
+        x: number;
+        y: number;
+        width: number;
+        height: number;
+    };
+    corners: {
+        topLeft: { x: number; y: number };
+        topRight: { x: number; y: number };
+        bottomRight: { x: number; y: number };
+        bottomLeft: { x: number; y: number };
+    };
+}
+
+export const getPoseTrainingData = async (
+    trx: Knex.Transaction | Knex = knex
+): Promise<PoseTrainingSample[]> => {
+    // Get human-labeled samples with corner labels for pose training
+    const rows = await trx<BoardDetectionRow>('board_detections')
+        .whereNotNull('human_labeled_at')
+        .whereNotNull('corner_tl_x') // Must have corners labeled
+        .select(
+            'sample_id',
+            'human_bbox_x',
+            'human_bbox_y',
+            'human_bbox_width',
+            'human_bbox_height',
+            'corner_tl_x', 'corner_tl_y',
+            'corner_tr_x', 'corner_tr_y',
+            'corner_br_x', 'corner_br_y',
+            'corner_bl_x', 'corner_bl_y'
+        );
+
+    const cloudFrontDomain = 'd26azxov2byjpl.cloudfront.net';
+
+    return rows
+        .filter(row => {
+            // Must have human bbox and all corners
+            return row.human_bbox_x !== null && row.corner_tl_x !== null;
+        })
+        .map(row => {
+            return {
+                sample_id: row.sample_id,
+                image_url: `https://${cloudFrontDomain}/thumbnails/${row.sample_id}.jpg`,
+                bbox: {
+                    x: row.human_bbox_x!,
+                    y: row.human_bbox_y!,
+                    width: row.human_bbox_width!,
+                    height: row.human_bbox_height!,
+                },
+                corners: {
+                    topLeft: { x: row.corner_tl_x!, y: row.corner_tl_y! },
+                    topRight: { x: row.corner_tr_x!, y: row.corner_tr_y! },
+                    bottomRight: { x: row.corner_br_x!, y: row.corner_br_y! },
+                    bottomLeft: { x: row.corner_bl_x!, y: row.corner_bl_y! },
+                },
+            };
+        });
+};
+
+export const getPoseTrainingImageCount = async (
+    trx: Knex.Transaction | Knex = knex
+): Promise<number> => {
+    const result = await trx('board_detections')
+        .whereNotNull('human_labeled_at')
+        .whereNotNull('corner_tl_x')
+        .count('* as count')
+        .first();
+    return Number(result?.count ?? 0);
+};
+
 // ============================================================================
 // Detection Runs
 // ============================================================================
@@ -934,6 +1148,8 @@ interface DetectionRunRow {
     duration_ms: number | null;
     error_message: string | null;
     avg_iou: number | null;
+    avg_corner_error: number | null;
+    corner_accuracy: number | null;
     created_at: Date;
     updated_at: Date;
     // Computed fields from join
@@ -957,6 +1173,8 @@ const rowToDetectionRun = (row: DetectionRunRow): DetectionRun => ({
     errorMessage: row.error_message,
     avgIou: row.avg_iou,
     avgClassifierAccuracy: row.avg_classifier_accuracy ?? null,
+    avgCornerError: row.avg_corner_error,
+    cornerAccuracy: row.corner_accuracy,
     createdAt: row.created_at.toISOString(),
 });
 
@@ -1037,7 +1255,7 @@ export const listDetectionRuns = async (
     trx: Knex.Transaction | Knex = knex
 ): Promise<DetectionRun[]> => {
     // Get detection runs with computed stats via subqueries
-    // Only compute disagreement_count and avg_classifier_accuracy for completed runs
+    // Only compute metrics for completed runs
     const rows = await trx<DetectionRunRow>('detection_runs as dr')
         .select('dr.*')
         .select(
@@ -1066,6 +1284,46 @@ export const listDetectionRuns = async (
                     AND md.classifier_confidence IS NOT NULL
                 ) ELSE NULL END
             ) as avg_classifier_accuracy`)
+        )
+        .select(
+            // Average corner error in pixels (using euclidean distance)
+            trx.raw(`(
+                CASE WHEN dr.status = 'completed' THEN (
+                    SELECT AVG(
+                        SQRT(
+                            POWER(md.corner_tl_x - bd.corner_tl_x, 2) + POWER(md.corner_tl_y - bd.corner_tl_y, 2) +
+                            POWER(md.corner_tr_x - bd.corner_tr_x, 2) + POWER(md.corner_tr_y - bd.corner_tr_y, 2) +
+                            POWER(md.corner_br_x - bd.corner_br_x, 2) + POWER(md.corner_br_y - bd.corner_br_y, 2) +
+                            POWER(md.corner_bl_x - bd.corner_bl_x, 2) + POWER(md.corner_bl_y - bd.corner_bl_y, 2)
+                        ) / 4.0
+                    )
+                    FROM model_detections md
+                    INNER JOIN board_detections bd ON bd.sample_id = md.sample_id
+                    WHERE md.model_id = dr.model_id
+                    AND md.corner_tl_x IS NOT NULL
+                    AND bd.corner_tl_x IS NOT NULL
+                ) ELSE NULL END
+            ) as avg_corner_error`)
+        )
+        .select(
+            // Corner accuracy: percentage of corners within threshold (0.05 = 5% of image)
+            trx.raw(`(
+                CASE WHEN dr.status = 'completed' THEN (
+                    SELECT AVG(
+                        CASE WHEN
+                            SQRT(POWER(md.corner_tl_x - bd.corner_tl_x, 2) + POWER(md.corner_tl_y - bd.corner_tl_y, 2)) < 0.05 AND
+                            SQRT(POWER(md.corner_tr_x - bd.corner_tr_x, 2) + POWER(md.corner_tr_y - bd.corner_tr_y, 2)) < 0.05 AND
+                            SQRT(POWER(md.corner_br_x - bd.corner_br_x, 2) + POWER(md.corner_br_y - bd.corner_br_y, 2)) < 0.05 AND
+                            SQRT(POWER(md.corner_bl_x - bd.corner_bl_x, 2) + POWER(md.corner_bl_y - bd.corner_bl_y, 2)) < 0.05
+                        THEN 1.0 ELSE 0.0 END
+                    )
+                    FROM model_detections md
+                    INNER JOIN board_detections bd ON bd.sample_id = md.sample_id
+                    WHERE md.model_id = dr.model_id
+                    AND md.corner_tl_x IS NOT NULL
+                    AND bd.corner_tl_x IS NOT NULL
+                ) ELSE NULL END
+            ) as corner_accuracy`)
         )
         .orderBy('dr.created_at', 'desc');
     return rows.map(rowToDetectionRun);
@@ -1075,7 +1333,7 @@ export const getDetectionRun = async (
     id: string,
     trx: Knex.Transaction | Knex = knex
 ): Promise<DetectionRun | null> => {
-    // Only compute disagreement_count and avg_classifier_accuracy for completed runs
+    // Only compute metrics for completed runs
     const rows = await trx<DetectionRunRow>('detection_runs as dr')
         .select('dr.*')
         .select(
@@ -1104,6 +1362,46 @@ export const getDetectionRun = async (
                     AND md.classifier_confidence IS NOT NULL
                 ) ELSE NULL END
             ) as avg_classifier_accuracy`)
+        )
+        .select(
+            // Average corner error in pixels (using euclidean distance)
+            trx.raw(`(
+                CASE WHEN dr.status = 'completed' THEN (
+                    SELECT AVG(
+                        SQRT(
+                            POWER(md.corner_tl_x - bd.corner_tl_x, 2) + POWER(md.corner_tl_y - bd.corner_tl_y, 2) +
+                            POWER(md.corner_tr_x - bd.corner_tr_x, 2) + POWER(md.corner_tr_y - bd.corner_tr_y, 2) +
+                            POWER(md.corner_br_x - bd.corner_br_x, 2) + POWER(md.corner_br_y - bd.corner_br_y, 2) +
+                            POWER(md.corner_bl_x - bd.corner_bl_x, 2) + POWER(md.corner_bl_y - bd.corner_bl_y, 2)
+                        ) / 4.0
+                    )
+                    FROM model_detections md
+                    INNER JOIN board_detections bd ON bd.sample_id = md.sample_id
+                    WHERE md.model_id = dr.model_id
+                    AND md.corner_tl_x IS NOT NULL
+                    AND bd.corner_tl_x IS NOT NULL
+                ) ELSE NULL END
+            ) as avg_corner_error`)
+        )
+        .select(
+            // Corner accuracy: percentage of corners within threshold (0.05 = 5% of image)
+            trx.raw(`(
+                CASE WHEN dr.status = 'completed' THEN (
+                    SELECT AVG(
+                        CASE WHEN
+                            SQRT(POWER(md.corner_tl_x - bd.corner_tl_x, 2) + POWER(md.corner_tl_y - bd.corner_tl_y, 2)) < 0.05 AND
+                            SQRT(POWER(md.corner_tr_x - bd.corner_tr_x, 2) + POWER(md.corner_tr_y - bd.corner_tr_y, 2)) < 0.05 AND
+                            SQRT(POWER(md.corner_br_x - bd.corner_br_x, 2) + POWER(md.corner_br_y - bd.corner_br_y, 2)) < 0.05 AND
+                            SQRT(POWER(md.corner_bl_x - bd.corner_bl_x, 2) + POWER(md.corner_bl_y - bd.corner_bl_y, 2)) < 0.05
+                        THEN 1.0 ELSE 0.0 END
+                    )
+                    FROM model_detections md
+                    INNER JOIN board_detections bd ON bd.sample_id = md.sample_id
+                    WHERE md.model_id = dr.model_id
+                    AND md.corner_tl_x IS NOT NULL
+                    AND bd.corner_tl_x IS NOT NULL
+                ) ELSE NULL END
+            ) as corner_accuracy`)
         )
         .where('dr.id', id);
     return rows.length > 0 ? rowToDetectionRun(rows[0]) : null;
@@ -1286,4 +1584,117 @@ export const getPipelineWithComponents = async (
         ...pipeline,
         components,
     };
+};
+
+// ============================================================================
+// Tags
+// ============================================================================
+
+interface TagRow {
+    id: string;
+    name: string;
+    created_at: Date;
+}
+
+import type { Tag } from '@blokus-ai/shared';
+
+const rowToTag = (row: TagRow): Tag => ({
+    id: row.id,
+    name: row.name,
+    createdAt: row.created_at.toISOString(),
+});
+
+export const getAllTags = async (
+    trx: Knex.Transaction | Knex = knex
+): Promise<Tag[]> => {
+    const rows = await trx<TagRow>('tags')
+        .orderBy('name', 'asc');
+    return rows.map(rowToTag);
+};
+
+export const createTag = async (
+    name: string,
+    trx: Knex.Transaction | Knex = knex
+): Promise<Tag> => {
+    const [row] = await trx<TagRow>('tags')
+        .insert({ name })
+        .returning('*');
+    return rowToTag(row);
+};
+
+export const deleteTag = async (
+    id: string,
+    trx: Knex.Transaction | Knex = knex
+): Promise<boolean> => {
+    const deleted = await trx('tags')
+        .where('id', id)
+        .delete();
+    return deleted > 0;
+};
+
+export const getTagsForSample = async (
+    sampleId: string,
+    trx: Knex.Transaction | Knex = knex
+): Promise<Tag[]> => {
+    const rows = await trx<TagRow>('tags as t')
+        .join('sample_tags as st', 't.id', 'st.tag_id')
+        .where('st.sample_id', sampleId)
+        .select('t.*')
+        .orderBy('t.name', 'asc');
+    return rows.map(rowToTag);
+};
+
+export const addTagToSample = async (
+    sampleId: string,
+    tagId: string,
+    trx: Knex.Transaction | Knex = knex
+): Promise<void> => {
+    await trx('sample_tags')
+        .insert({ sample_id: sampleId, tag_id: tagId })
+        .onConflict(['sample_id', 'tag_id'])
+        .ignore();
+};
+
+export const removeTagFromSample = async (
+    sampleId: string,
+    tagId: string,
+    trx: Knex.Transaction | Knex = knex
+): Promise<boolean> => {
+    const deleted = await trx('sample_tags')
+        .where('sample_id', sampleId)
+        .where('tag_id', tagId)
+        .delete();
+    return deleted > 0;
+};
+
+/**
+ * Get tags for multiple samples at once (batch query).
+ * Returns a map of sampleId -> Tag[]
+ */
+export const getTagsForSamples = async (
+    sampleIds: string[],
+    trx: Knex.Transaction | Knex = knex
+): Promise<Map<string, Tag[]>> => {
+    if (sampleIds.length === 0) {
+        return new Map();
+    }
+
+    const rows = await trx('sample_tags as st')
+        .join('tags as t', 't.id', 'st.tag_id')
+        .whereIn('st.sample_id', sampleIds)
+        .select('st.sample_id', 't.id', 't.name', 't.created_at')
+        .orderBy('t.name', 'asc');
+
+    const result = new Map<string, Tag[]>();
+    for (const row of rows) {
+        const tag: Tag = {
+            id: row.id,
+            name: row.name,
+            createdAt: row.created_at.toISOString(),
+        };
+        const existing = result.get(row.sample_id) || [];
+        existing.push(tag);
+        result.set(row.sample_id, existing);
+    }
+    return result;
 };

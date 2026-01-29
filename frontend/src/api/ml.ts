@@ -12,6 +12,7 @@ import {
     DetectionRun,
     BoardDetection,
     ModelPipeline,
+    Tag,
 } from '@blokus-ai/shared';
 
 export interface PerspectiveCorrectionMethod {
@@ -100,4 +101,51 @@ export const ML_API = {
     correctPerspective: async (sampleId: string, bbox: { x: number; y: number; width: number; height: number }): Promise<PerspectiveCorrections> => {
         return http.post<PerspectiveCorrections>(`/api/ml/detect/${sampleId}/perspective`, { bbox });
     },
+
+    // Corner labeling
+    getCorners: async (sampleId: string): Promise<{ corners: BoardCorners | null }> => {
+        return http.get<{ corners: BoardCorners | null }>(`/api/ml/samples/${sampleId}/corners`);
+    },
+
+    saveCorners: async (sampleId: string, corners: BoardCorners): Promise<void> => {
+        await http.post(`/api/ml/samples/${sampleId}/corners`, corners);
+    },
+
+    clearCorners: async (sampleId: string): Promise<void> => {
+        await http.delete(`/api/ml/samples/${sampleId}/corners`);
+    },
+
+    // Tags
+    getTags: async (): Promise<Tag[]> => {
+        const response = await http.get<{ tags: Tag[] }>('/api/ml/tags');
+        return response.tags;
+    },
+
+    createTag: async (name: string): Promise<Tag> => {
+        return http.post<Tag>('/api/ml/tags', { name });
+    },
+
+    deleteTag: async (id: string): Promise<void> => {
+        await http.delete(`/api/ml/tags/${id}`);
+    },
+
+    getTagsForSample: async (sampleId: string): Promise<Tag[]> => {
+        const response = await http.get<{ tags: Tag[] }>(`/api/ml/samples/${sampleId}/tags`);
+        return response.tags;
+    },
+
+    addTagToSample: async (sampleId: string, tagId: string): Promise<void> => {
+        await http.post(`/api/ml/samples/${sampleId}/tags`, { tagId });
+    },
+
+    removeTagFromSample: async (sampleId: string, tagId: string): Promise<void> => {
+        await http.delete(`/api/ml/samples/${sampleId}/tags/${tagId}`);
+    },
 };
+
+export interface BoardCorners {
+    topLeft: { x: number; y: number };
+    topRight: { x: number; y: number };
+    bottomRight: { x: number; y: number };
+    bottomLeft: { x: number; y: number };
+}

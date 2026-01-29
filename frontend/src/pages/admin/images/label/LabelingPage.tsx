@@ -3,10 +3,22 @@ import { useNavigate, useParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { ChevronLeft, ChevronRight, Image } from 'lucide-react';
 import { http, API_URL } from '../../../../api/config';
+import { ML_API, BoardCorners } from '../../../../api/ml';
 import { Button } from '../../../../components/ui/Button';
 import type { BoundingBox, BoardDetection, SampleStatusFlags } from '@blokus-ai/shared';
 import { getStatusLabels } from '@blokus-ai/shared';
 import { statusColors, statusLabels, isUnlabeled } from '../../../../lib/status';
+
+// Corner labels and colors
+const CORNER_CONFIG = [
+    { key: 'topLeft' as const, label: 'TL', color: '#ef4444' },     // red
+    { key: 'topRight' as const, label: 'TR', color: '#22c55e' },    // green
+    { key: 'bottomRight' as const, label: 'BR', color: '#3b82f6' }, // blue
+    { key: 'bottomLeft' as const, label: 'BL', color: '#eab308' },  // yellow
+];
+
+type CornerKey = 'topLeft' | 'topRight' | 'bottomRight' | 'bottomLeft';
+type PartialCorners = Partial<Record<CornerKey, { x: number; y: number }>>;
 
 interface Sample {
     id: string;
@@ -48,6 +60,12 @@ export const LabelingPage = () => {
     const [hideBox, setHideBox] = useState(false);
     const fastModeRef = useRef(false);
     const imageContainerRef = useRef<HTMLDivElement>(null);
+
+    // Corner labeling state
+    const [isCornerMode, setIsCornerMode] = useState(false);
+    const [pendingCorners, setPendingCorners] = useState<PartialCorners>({});
+    const [savedCorners, setSavedCorners] = useState<BoardCorners | null>(null);
+    const [cornerCount, setCornerCount] = useState(0);
 
     const currentSample = samples[currentIndex] || null;
     const currentDetection = labelData.correction || labelData.prediction;
@@ -112,6 +130,10 @@ export const LabelingPage = () => {
                 isModified: false,
             });
             setIsDrawingBox(false);
+            // Reset corner mode
+            setIsCornerMode(false);
+            setPendingCorners({});
+            setCornerCount(0);
 
             // If sample has any labels, load the existing detection
             if (!isUnlabeled(currentSample.status)) {
@@ -127,6 +149,14 @@ export const LabelingPage = () => {
                 } catch {
                     // Ignore errors
                 }
+            }
+
+            // Load corners
+            try {
+                const result = await ML_API.getCorners(currentSample.id);
+                setSavedCorners(result.corners);
+            } catch {
+                setSavedCorners(null);
             }
         };
         loadExistingLabel();
@@ -268,6 +298,68 @@ export const LabelingPage = () => {
         const current = currentDetection?.isEntireBoardVisible ?? false;
         updateCorrection({ isEntireBoardVisible: !current });
     };
+
+    // Corner mode toggle
+    const toggleCornerMode = useCallback(() => {
+        if (isCornerMode) {
+            // Reset if already in corner mode
+            setIsCornerMode(false);
+            setPendingCorners({});
+            setCornerCount(0);
+            setHideBox(false); // Show bounding box again when exiting corner mode
+        } else {
+            // Only allow corner mode if entire board is visible
+            if (!currentDetection?.isEntireBoardVisible) {
+                toast.error('Corners can only be labeled when entire board is visible');
+                return;
+            }
+            // Enter corner mode, exit draw mode, hide bounding box
+            setIsCornerMode(true);
+            setIsDrawingBox(false);
+            setHideBox(true); // Hide bounding box for easier corner labeling
+            setPendingCorners({});
+            setCornerCount(0);
+        }
+    }, [isCornerMode, currentDetection?.isEntireBoardVisible]);
+
+    // Handle corner click
+    const handleCornerClick = useCallback((pos: { x: number; y: number }) => {
+        if (!isCornerMode || !currentSample) {
+            return;
+        }
+
+        const cornerKey = CORNER_CONFIG[cornerCount].key;
+        const newCorners = { ...pendingCorners, [cornerKey]: pos };
+        setPendingCorners(newCorners);
+
+        const newCount = cornerCount + 1;
+        setCornerCount(newCount);
+
+        // Auto-save after 4th corner
+        if (newCount === 4) {
+            const fullCorners: BoardCorners = {
+                topLeft: newCorners.topLeft!,
+                topRight: newCorners.topRight!,
+                bottomRight: newCorners.bottomRight!,
+                bottomLeft: newCorners.bottomLeft!,
+            };
+            ML_API.saveCorners(currentSample.id, fullCorners).then(() => {
+                setSavedCorners(fullCorners);
+                setIsCornerMode(false);
+                setPendingCorners({});
+                setCornerCount(0);
+                toast.success('Corners saved!');
+
+                // Auto-navigate to next if bbox exists
+                const hasBbox = labelData.correction?.boundingBox || labelData.prediction?.boundingBox;
+                if (hasBbox && currentIndex < samples.length - 1) {
+                    const newIndex = currentIndex + 1;
+                    setCurrentIndex(newIndex);
+                    navigate(`/admin/images/label/${samples[newIndex].id}`, { replace: true });
+                }
+            });
+        }
+    }, [isCornerMode, cornerCount, pendingCorners, currentSample, labelData, currentIndex, samples, navigate]);
 
     // Keyboard navigation
     useEffect(() => {
@@ -427,6 +519,20 @@ export const LabelingPage = () => {
             } else if (key === 'h') {
                 e.preventDefault();
                 setHideBox(prev => !prev);
+            } else if (key === 'c') {
+                e.preventDefault();
+                toggleCornerMode();
+            } else if (key === 'q') {
+                e.preventDefault();
+                // Clear corners if they exist
+                if (currentSample && savedCorners) {
+                    ML_API.clearCorners(currentSample.id).then(() => {
+                        setSavedCorners(null);
+                        toast.success('Corners cleared');
+                    }).catch(() => {
+                        toast.error('Failed to clear corners');
+                    });
+                }
             }
         };
 
@@ -442,7 +548,7 @@ export const LabelingPage = () => {
             window.removeEventListener('keydown', handleKeyDown);
             window.removeEventListener('keyup', handleKeyUp);
         };
-    }, [currentIndex, samples.length, labelData.correction, currentSample, currentDetection, updateCorrection, goToPrevious, goToNext, handleSaveAndNext, handleDeleteLabel, isDrawingBox, boundingBox, updateBoundingBox, saveAndNext]);
+    }, [currentIndex, samples.length, labelData.correction, currentSample, currentDetection, updateCorrection, goToPrevious, goToNext, handleSaveAndNext, handleDeleteLabel, isDrawingBox, boundingBox, updateBoundingBox, saveAndNext, toggleCornerMode, savedCorners]);
 
     const getRelativePosition = useCallback((clientX: number, clientY: number) => {
         if (!imageContainerRef.current) {
@@ -458,6 +564,13 @@ export const LabelingPage = () => {
     const handlePointerDown = (e: React.PointerEvent) => {
         const pos = getRelativePosition(e.clientX, e.clientY);
         if (!pos) {
+            return;
+        }
+
+        // Handle corner mode clicks
+        if (isCornerMode) {
+            e.preventDefault();
+            handleCornerClick(pos);
             return;
         }
 
@@ -569,6 +682,9 @@ export const LabelingPage = () => {
     };
 
     const getCursor = () => {
+        if (isCornerMode) {
+            return 'crosshair';
+        }
         if (isDrawingBox) {
             return 'crosshair';
         }
@@ -710,6 +826,137 @@ export const LabelingPage = () => {
                         {isDrawingBox && (
                             <div className="absolute inset-0 bg-black/10 pointer-events-none" />
                         )}
+
+                        {/* Saved corners overlay */}
+                        {savedCorners && !isCornerMode && (
+                            <>
+                                {/* Dashed lines connecting corners */}
+                                <svg className="absolute inset-0 w-full h-full pointer-events-none" style={{ overflow: 'visible' }}>
+                                    <polygon
+                                        points={`${savedCorners.topLeft.x * 100}%,${savedCorners.topLeft.y * 100}% ${savedCorners.topRight.x * 100}%,${savedCorners.topRight.y * 100}% ${savedCorners.bottomRight.x * 100}%,${savedCorners.bottomRight.y * 100}% ${savedCorners.bottomLeft.x * 100}%,${savedCorners.bottomLeft.y * 100}%`}
+                                        fill="none"
+                                        stroke="cyan"
+                                        strokeWidth="2"
+                                        strokeDasharray="6,4"
+                                    />
+                                </svg>
+                                {/* Corner dots */}
+                                {CORNER_CONFIG.map(({ key, label, color }) => {
+                                    const corner = savedCorners[key];
+                                    return (
+                                        <div
+                                            key={key}
+                                            className="absolute pointer-events-none"
+                                            style={{
+                                                left: `${corner.x * 100}%`,
+                                                top: `${corner.y * 100}%`,
+                                                transform: 'translate(-50%, -50%)',
+                                            }}
+                                        >
+                                            <div
+                                                className="w-4 h-4 rounded-full border-2 border-white"
+                                                style={{ backgroundColor: color }}
+                                            />
+                                            <div
+                                                className="absolute -top-5 left-1/2 -translate-x-1/2 text-[10px] font-bold px-1 rounded"
+                                                style={{ backgroundColor: color, color: 'white' }}
+                                            >
+                                                {label}
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                            </>
+                        )}
+
+                        {/* Pending corners overlay (while labeling) */}
+                        {isCornerMode && Object.keys(pendingCorners).length > 0 && (
+                            <>
+                                {/* Partial lines connecting placed corners */}
+                                {cornerCount >= 2 && (
+                                    <svg className="absolute inset-0 w-full h-full pointer-events-none" style={{ overflow: 'visible' }}>
+                                        {cornerCount >= 2 && pendingCorners.topLeft && pendingCorners.topRight && (
+                                            <line
+                                                x1={`${pendingCorners.topLeft.x * 100}%`}
+                                                y1={`${pendingCorners.topLeft.y * 100}%`}
+                                                x2={`${pendingCorners.topRight.x * 100}%`}
+                                                y2={`${pendingCorners.topRight.y * 100}%`}
+                                                stroke="cyan"
+                                                strokeWidth="2"
+                                                strokeDasharray="6,4"
+                                            />
+                                        )}
+                                        {cornerCount >= 3 && pendingCorners.topRight && pendingCorners.bottomRight && (
+                                            <line
+                                                x1={`${pendingCorners.topRight.x * 100}%`}
+                                                y1={`${pendingCorners.topRight.y * 100}%`}
+                                                x2={`${pendingCorners.bottomRight.x * 100}%`}
+                                                y2={`${pendingCorners.bottomRight.y * 100}%`}
+                                                stroke="cyan"
+                                                strokeWidth="2"
+                                                strokeDasharray="6,4"
+                                            />
+                                        )}
+                                        {cornerCount >= 4 && pendingCorners.bottomRight && pendingCorners.bottomLeft && (
+                                            <line
+                                                x1={`${pendingCorners.bottomRight.x * 100}%`}
+                                                y1={`${pendingCorners.bottomRight.y * 100}%`}
+                                                x2={`${pendingCorners.bottomLeft.x * 100}%`}
+                                                y2={`${pendingCorners.bottomLeft.y * 100}%`}
+                                                stroke="cyan"
+                                                strokeWidth="2"
+                                                strokeDasharray="6,4"
+                                            />
+                                        )}
+                                        {cornerCount >= 4 && pendingCorners.bottomLeft && pendingCorners.topLeft && (
+                                            <line
+                                                x1={`${pendingCorners.bottomLeft.x * 100}%`}
+                                                y1={`${pendingCorners.bottomLeft.y * 100}%`}
+                                                x2={`${pendingCorners.topLeft.x * 100}%`}
+                                                y2={`${pendingCorners.topLeft.y * 100}%`}
+                                                stroke="cyan"
+                                                strokeWidth="2"
+                                                strokeDasharray="6,4"
+                                            />
+                                        )}
+                                    </svg>
+                                )}
+                                {/* Pending corner dots */}
+                                {CORNER_CONFIG.slice(0, cornerCount).map(({ key, label, color }) => {
+                                    const corner = pendingCorners[key];
+                                    if (!corner) {
+                                        return null;
+                                    }
+                                    return (
+                                        <div
+                                            key={key}
+                                            className="absolute pointer-events-none"
+                                            style={{
+                                                left: `${corner.x * 100}%`,
+                                                top: `${corner.y * 100}%`,
+                                                transform: 'translate(-50%, -50%)',
+                                            }}
+                                        >
+                                            <div
+                                                className="w-4 h-4 rounded-full border-2 border-white"
+                                                style={{ backgroundColor: color }}
+                                            />
+                                            <div
+                                                className="absolute -top-5 left-1/2 -translate-x-1/2 text-[10px] font-bold px-1 rounded"
+                                                style={{ backgroundColor: color, color: 'white' }}
+                                            >
+                                                {label}
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                            </>
+                        )}
+
+                        {/* Corner mode overlay */}
+                        {isCornerMode && (
+                            <div className="absolute inset-0 bg-warning/10 pointer-events-none" />
+                        )}
                     </div>
 
                     <button
@@ -722,7 +969,14 @@ export const LabelingPage = () => {
                 </div>
 
                 {/* Keyboard hints */}
-                {isDrawingBox ? (
+                {isCornerMode ? (
+                    <div className="text-xs text-center space-y-1">
+                        <p className="text-warning font-medium">Corner Mode: Click {CORNER_CONFIG[cornerCount]?.label || 'done'} ({['top-left', 'top-right', 'bottom-right', 'bottom-left'][cornerCount] || 'saving...'})</p>
+                        <p className="text-muted">
+                            <kbd className="px-1.5 py-0.5 bg-surface-dim rounded text-[10px]">C</kbd> cancel
+                        </p>
+                    </div>
+                ) : isDrawingBox ? (
                     <div className="text-xs text-center space-y-1">
                         <p className="text-primary font-medium">Draw Mode</p>
                         <p className="text-muted">
@@ -731,7 +985,7 @@ export const LabelingPage = () => {
                     </div>
                 ) : (
                     <p className="text-xs text-muted text-center">
-                        <kbd className="px-1.5 py-0.5 bg-surface-dim rounded text-[10px]">←</kbd> <kbd className="px-1.5 py-0.5 bg-surface-dim rounded text-[10px]">→</kbd> navigate · <kbd className="px-1.5 py-0.5 bg-surface-dim rounded text-[10px]">D</kbd> draw · <kbd className="px-1.5 py-0.5 bg-surface-dim rounded text-[10px]">H</kbd> hide · <kbd className="px-1.5 py-0.5 bg-surface-dim rounded text-[10px]">1</kbd><kbd className="px-1.5 py-0.5 bg-surface-dim rounded text-[10px]">2</kbd> board · <kbd className="px-1.5 py-0.5 bg-surface-dim rounded text-[10px]">3</kbd><kbd className="px-1.5 py-0.5 bg-surface-dim rounded text-[10px]">4</kbd> visible · <kbd className="px-1.5 py-0.5 bg-surface-dim rounded text-[10px]">Enter</kbd> save · <kbd className="px-1.5 py-0.5 bg-surface-dim rounded text-[10px]">X</kbd> delete
+                        <kbd className="px-1.5 py-0.5 bg-surface-dim rounded text-[10px]">←</kbd> <kbd className="px-1.5 py-0.5 bg-surface-dim rounded text-[10px]">→</kbd> navigate · <kbd className="px-1.5 py-0.5 bg-surface-dim rounded text-[10px]">D</kbd> draw · <kbd className="px-1.5 py-0.5 bg-surface-dim rounded text-[10px]">C</kbd> corners · <kbd className="px-1.5 py-0.5 bg-surface-dim rounded text-[10px]">Q</kbd> clear corners · <kbd className="px-1.5 py-0.5 bg-surface-dim rounded text-[10px]">H</kbd> hide · <kbd className="px-1.5 py-0.5 bg-surface-dim rounded text-[10px]">1</kbd><kbd className="px-1.5 py-0.5 bg-surface-dim rounded text-[10px]">2</kbd> board · <kbd className="px-1.5 py-0.5 bg-surface-dim rounded text-[10px]">3</kbd><kbd className="px-1.5 py-0.5 bg-surface-dim rounded text-[10px]">4</kbd> visible · <kbd className="px-1.5 py-0.5 bg-surface-dim rounded text-[10px]">Enter</kbd> save · <kbd className="px-1.5 py-0.5 bg-surface-dim rounded text-[10px]">X</kbd> delete
                     </p>
                 )}
 

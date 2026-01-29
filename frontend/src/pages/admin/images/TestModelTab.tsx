@@ -3,6 +3,7 @@ import { Camera, RefreshCw } from 'lucide-react';
 import { Button } from '../../../components/ui/Button';
 import { Select } from '../../../components/ui/Select';
 import { ML_API, TestDetectResponse, PerspectiveCorrectionMethod } from '../../../api/ml';
+import { formatShortDate, formatShortId } from '../../../utils/format';
 import type { TrainingRun, BoundingBox, ModelPipeline } from '@blokus-ai/shared';
 
 interface Props {
@@ -216,7 +217,7 @@ export const TestModelTab = ({ trainingRuns, pipelines }: Props) => {
                         { value: '', label: 'Default (YOLO)' },
                         ...completedRuns.map(run => ({
                             value: run.id,
-                            label: `${run.id.slice(0, 8)} - ${run.imageCount} images, ${Math.round((run.accuracy || 0) * 100)}% acc`,
+                            label: `${formatShortId(run.id)} - ${formatShortDate(run.createdAt)} - ${run.imageCount} imgs - ${Math.round((run.accuracy || 0) * 100)}% acc`,
                         })),
                         ...pipelines.map(pipeline => ({
                             value: `pipeline:${pipeline.id}`,

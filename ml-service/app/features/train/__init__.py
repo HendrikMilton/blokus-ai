@@ -29,6 +29,9 @@ class TrainResponse(BaseModel):
     val_loss: float
     classifier_accuracy: float | None = None
     classifier_loss: float | None = None
+    pose_accuracy: float | None = None
+    pose_loss: float | None = None
+    pose_image_count: int | None = None
 
 
 def report_progress(
@@ -57,6 +60,64 @@ def report_progress(
         print(f"[DEBUG] Progress API response: {response.status_code}")
     except Exception as e:
         print(f"[train] Failed to report progress: {e}")
+
+
+def report_completion(
+    run_id: str,
+    duration_ms: int,
+    accuracy: float,
+    loss: float,
+    val_accuracy: float,
+    val_loss: float,
+    classifier_accuracy: float | None = None,
+    classifier_loss: float | None = None,
+    pose_accuracy: float | None = None,
+    pose_loss: float | None = None,
+    pose_error: float | None = None,
+    pose_image_count: int | None = None,
+):
+    """Report training completion back to the API."""
+    try:
+        url = f"{API_BASE_URL}/api/ml/training-runs/{run_id}/complete"
+        print(f"[train] Reporting completion to {url}")
+        response = httpx.post(
+            url,
+            json={
+                "accuracy": accuracy,
+                "loss": loss,
+                "val_accuracy": val_accuracy,
+                "val_loss": val_loss,
+                "classifier_accuracy": classifier_accuracy,
+                "classifier_loss": classifier_loss,
+                "pose_accuracy": pose_accuracy,
+                "pose_loss": pose_loss,
+                "pose_error": pose_error,
+                "pose_image_count": pose_image_count,
+                "duration_ms": duration_ms,
+            },
+            timeout=10.0,
+        )
+        print(f"[train] Completion API response: {response.status_code}")
+    except Exception as e:
+        print(f"[train] Failed to report completion: {e}")
+
+
+def report_failure(run_id: str, duration_ms: int, error_message: str):
+    """Report training failure back to the API."""
+    try:
+        url = f"{API_BASE_URL}/api/ml/training-runs/{run_id}/failed"
+        print(f"[train] Reporting failure to {url}: {error_message}")
+        response = httpx.post(
+            url,
+            json={
+                "error_message": error_message,
+                "duration_ms": duration_ms,
+            },
+            timeout=10.0,
+        )
+        print(f"[train] Failure API response: {response.status_code}")
+    except Exception as e:
+        print(f"[train] Failed to report failure: {e}")
 
 
 class TrainingSample(BaseModel):
@@ -176,9 +237,25 @@ async def start_training(request: TrainRequest):
     """
     Start model training with verified labeled images.
     Fetches training data from API, creates YOLO dataset, trains model.
+    Reports completion/failure back to API via callback endpoints.
     """
     print(f"[train] Starting training run: {request.run_id}")
+    start_time = time.time()
 
+    try:
+        return await _do_training(request, start_time)
+    except Exception as e:
+        duration_ms = int((time.time() - start_time) * 1000)
+        error_message = str(e)
+        print(f"[train] Training failed: {error_message}")
+        import traceback
+        traceback.print_exc()
+        report_failure(request.run_id, duration_ms, error_message)
+        raise
+
+
+async def _do_training(request: TrainRequest, start_time: float) -> TrainResponse:
+    """Internal training logic."""
     # Fetch training data from API
     print("[train] Fetching training data from API...")
     samples = fetch_training_data()
@@ -329,7 +406,65 @@ async def start_training(request: TrainRequest):
                 print(f"[train] Skipping classifier: need >= 2 samples, got {len(classifier_samples)}")
         except Exception as e:
             print(f"[train] Classifier training failed: {e}")
+            import traceback
+            traceback.print_exc()
             # Don't fail the whole training run if classifier fails
+
+        # Train pose model for corner detection
+        pose_accuracy = None
+        pose_loss = None
+        pose_error = None
+        pose_image_count = None
+
+        try:
+            from .pose import fetch_pose_training_data, train_pose
+
+            print("[train] Fetching pose training data...")
+            pose_samples = fetch_pose_training_data()
+            pose_image_count = len(pose_samples)
+            print(f"[train] Got {pose_image_count} pose samples with corner labels")
+
+            if pose_image_count >= 2:
+                print("[train] Starting pose training...")
+                pose_metrics = train_pose(
+                    run_id=request.run_id,
+                    samples=pose_samples,
+                    progress_callback=lambda epoch, total, loss, acc: report_progress(
+                        request.run_id, "pose", epoch, total, loss, acc
+                    ),
+                    epochs=100,
+                )
+                pose_accuracy = pose_metrics.accuracy
+                pose_loss = pose_metrics.loss
+                pose_error = pose_metrics.error
+                print(
+                    f"[train] Pose Metrics: accuracy={pose_accuracy:.4f}, "
+                    f"loss={pose_loss:.4f}, error={pose_error}"
+                )
+            else:
+                print(f"[train] Skipping pose: need >= 2 samples, got {pose_image_count}")
+        except Exception as e:
+            print(f"[train] Pose training failed: {e}")
+            import traceback
+            traceback.print_exc()
+            # Don't fail the whole training run if pose fails
+
+        # Report completion to API
+        duration_ms = int((time.time() - start_time) * 1000)
+        report_completion(
+            run_id=request.run_id,
+            duration_ms=duration_ms,
+            accuracy=float(accuracy),
+            loss=float(loss),
+            val_accuracy=float(val_accuracy),
+            val_loss=float(val_loss),
+            classifier_accuracy=classifier_accuracy,
+            classifier_loss=classifier_loss,
+            pose_accuracy=pose_accuracy,
+            pose_loss=pose_loss,
+            pose_error=pose_error,
+            pose_image_count=pose_image_count,
+        )
 
         return TrainResponse(
             accuracy=float(accuracy),
@@ -338,4 +473,7 @@ async def start_training(request: TrainRequest):
             val_loss=float(val_loss),
             classifier_accuracy=classifier_accuracy,
             classifier_loss=classifier_loss,
+            pose_accuracy=pose_accuracy,
+            pose_loss=pose_loss,
+            pose_image_count=pose_image_count,
         )

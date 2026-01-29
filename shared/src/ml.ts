@@ -173,6 +173,8 @@ export interface BoardDetection {
     boundingBox: BoundingBox | null;
     confidence: number;
     classifierConfidence?: number | null;
+    corners?: BoardCorners | null;
+    cornerConfidence?: number | null;
 }
 
 export interface DetectResponse {
@@ -205,6 +207,10 @@ export interface TrainingRun {
     valLoss: number | null;
     classifierAccuracy: number | null;
     classifierLoss: number | null;
+    poseAccuracy: number | null;
+    poseLoss: number | null;
+    poseError: number | null;
+    poseImageCount: number | null;
     errorMessage: string | null;
     createdAt: string;
 }
@@ -231,6 +237,8 @@ export interface DetectionRun {
     errorMessage: string | null;
     avgIou: number | null;
     avgClassifierAccuracy: number | null;
+    avgCornerError: number | null;
+    cornerAccuracy: number | null;
     createdAt: string;
 }
 
@@ -244,12 +252,22 @@ export interface SampleAiDetection {
     confidence: number;
     classifierConfidence: number | null;
     boundingBox: BoundingBox | null;
+    corners: BoardCorners | null;
+    cornerError: number | null;
+}
+
+export interface BoardCorners {
+    topLeft: { x: number; y: number };
+    topRight: { x: number; y: number };
+    bottomRight: { x: number; y: number };
+    bottomLeft: { x: number; y: number };
 }
 
 export interface SampleHumanLabel {
     hasBoardDetected: boolean;
     isEntireBoardVisible: boolean;
     boundingBox: BoundingBox | null;
+    corners: BoardCorners | null;
 }
 
 export interface Sample {
@@ -262,6 +280,7 @@ export interface Sample {
     created_at: string;
     imageUrl?: string;
     thumbnailUrl?: string;
+    tags?: Tag[];
 }
 
 // ============================================================================
@@ -275,4 +294,14 @@ export interface ModelPipeline {
     components?: TrainingRun[];  // Populated when fetching with details
     createdAt: string;
     updatedAt: string;
+}
+
+// ============================================================================
+// Tag types
+// ============================================================================
+
+export interface Tag {
+    id: string;
+    name: string;
+    createdAt: string;
 }

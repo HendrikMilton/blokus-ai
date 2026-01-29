@@ -2,12 +2,30 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { ChevronLeft, ChevronRight, Pencil, Play, Grid3X3 } from 'lucide-react';
 import { http, API_URL } from '../../../../api/config';
-import { ML_API, PerspectiveCorrections, PerspectiveCorrectionMethod } from '../../../../api/ml';
+import { ML_API, PerspectiveCorrections, PerspectiveCorrectionMethod, BoardCorners } from '../../../../api/ml';
 import { Button } from '../../../../components/ui/Button';
 import { Select } from '../../../../components/ui/Select';
-import type { BoundingBox, DetectResponseWithCorrection, SampleStatusFlags, ModelPipeline } from '@blokus-ai/shared';
+import { formatShortDate, formatShortId } from '../../../../utils/format';
+import type { BoundingBox, DetectResponseWithCorrection, SampleStatusFlags, ModelPipeline, Tag } from '@blokus-ai/shared';
 import { getStatusLabels } from '@blokus-ai/shared';
 import { statusColors, statusLabels } from '../../../../lib/status';
+import { SampleTagsSection } from './SampleTagsSection';
+
+// Corner labels and colors for human-labeled corners
+const CORNER_CONFIG = [
+    { key: 'topLeft' as const, label: 'TL', color: '#ef4444' },     // red
+    { key: 'topRight' as const, label: 'TR', color: '#22c55e' },    // green
+    { key: 'bottomRight' as const, label: 'BR', color: '#3b82f6' }, // blue
+    { key: 'bottomLeft' as const, label: 'BL', color: '#eab308' },  // yellow
+];
+
+// Corner config for AI-predicted corners (lighter/pastel versions)
+const AI_CORNER_CONFIG = [
+    { key: 'topLeft' as const, label: 'TL', color: '#f87171' },     // lighter red
+    { key: 'topRight' as const, label: 'TR', color: '#4ade80' },    // lighter green
+    { key: 'bottomRight' as const, label: 'BR', color: '#60a5fa' }, // lighter blue
+    { key: 'bottomLeft' as const, label: 'BL', color: '#facc15' },  // lighter yellow
+];
 
 interface TrainingRun {
     id: string;
@@ -73,6 +91,12 @@ export const ImageDetailPage = () => {
     const [previewDetection, setPreviewDetection] = useState<DetectResponseWithCorrection['detection'] | null>(null);
     const [perspectiveCorrections, setPerspectiveCorrections] = useState<PerspectiveCorrections | null>(null);
     const [isCorrectingPerspective, setIsCorrectingPerspective] = useState(false);
+
+    // Saved corners (display only - editing is in LabelingPage)
+    const [savedCorners, setSavedCorners] = useState<BoardCorners | null>(null);
+
+    // All available tags for the tag selector
+    const [allTags, setAllTags] = useState<Tag[]>([]);
 
     // Model selection from URL or default to latest
     const modelIdFromUrl = searchParams.get('model');
@@ -182,8 +206,17 @@ export const ImageDetailPage = () => {
                 // Ignore error
             }
         };
+        const loadTags = async () => {
+            try {
+                const tags = await ML_API.getTags();
+                setAllTags(tags);
+            } catch {
+                // Ignore error
+            }
+        };
         loadTrainingRuns();
         loadPipelines();
+        loadTags();
     }, [modelIdFromUrl, hasInitialSelection]);
 
     const runDetection = useCallback(async () => {
@@ -257,6 +290,22 @@ export const ImageDetailPage = () => {
         };
         loadDetection();
     }, [id, viewModelId]);
+
+    // Load saved corners when sample changes
+    useEffect(() => {
+        const loadCorners = async () => {
+            if (!id) {
+                return;
+            }
+            try {
+                const result = await ML_API.getCorners(id);
+                setSavedCorners(result.corners);
+            } catch {
+                setSavedCorners(null);
+            }
+        };
+        loadCorners();
+    }, [id]);
 
     // Calculate IoU if both AI and human bboxes exist
     const iou = useMemo(() => {
@@ -346,7 +395,7 @@ export const ImageDetailPage = () => {
                         >
                             <ChevronLeft className="w-4 h-4" />
                         </button>
-                        <h1 className="text-lg sm:text-xl font-medium text-foreground font-mono">{sample.id.slice(0, 8)}</h1>
+                        <h1 className="text-lg sm:text-xl font-medium text-foreground font-mono">{formatShortId(sample.id)}</h1>
                         {getStatusLabels(sample.status).map(label => (
                             <span
                                 key={label}
@@ -397,8 +446,11 @@ export const ImageDetailPage = () => {
             {/* Content container - centered with max width */}
             <div className="max-w-2xl mx-auto space-y-6">
 
+                {/* Tags Section */}
+                <SampleTagsSection sampleId={sample.id} allTags={allTags} />
+
                 {/* Image with bounding box overlays (read-only) */}
-                <div className="relative bg-surface rounded-lg border border-border overflow-hidden">
+                <div className="relative bg-surface rounded-lg border overflow-hidden border-border">
                     <img
                         src={sample.thumbnailUrl || sample.imageUrl || `${API_URL}/api/ml/samples/${sample.id}/image`}
                         alt={`Sample ${sample.id}`}
@@ -453,6 +505,84 @@ export const ImageDetailPage = () => {
                             </div>
                         </div>
                     )}
+
+                    {/* AI-predicted corners overlay (dashed, different style) */}
+                    {detection?.detection?.corners && (
+                        <>
+                            {/* Dashed lines connecting AI corners */}
+                            <svg className="absolute inset-0 w-full h-full pointer-events-none" style={{ overflow: 'visible' }}>
+                                <polygon
+                                    points={`${detection.detection.corners.topLeft.x * 100}%,${detection.detection.corners.topLeft.y * 100}% ${detection.detection.corners.topRight.x * 100}%,${detection.detection.corners.topRight.y * 100}% ${detection.detection.corners.bottomRight.x * 100}%,${detection.detection.corners.bottomRight.y * 100}% ${detection.detection.corners.bottomLeft.x * 100}%,${detection.detection.corners.bottomLeft.y * 100}%`}
+                                    fill="none"
+                                    stroke="#a855f7"
+                                    strokeWidth="2"
+                                    strokeDasharray="4,4"
+                                    opacity="0.8"
+                                />
+                            </svg>
+                            {/* AI Corner dots (smaller, with dashed border) */}
+                            {AI_CORNER_CONFIG.map(({ key, color }) => {
+                                const corner = detection.detection.corners![key];
+                                return (
+                                    <div
+                                        key={`ai-${key}`}
+                                        className="absolute pointer-events-none"
+                                        style={{
+                                            left: `${corner.x * 100}%`,
+                                            top: `${corner.y * 100}%`,
+                                            transform: 'translate(-50%, -50%)',
+                                        }}
+                                    >
+                                        <div
+                                            className="w-3 h-3 rounded-full border-2 border-dashed border-white"
+                                            style={{ backgroundColor: color, opacity: 0.8 }}
+                                        />
+                                    </div>
+                                );
+                            })}
+                        </>
+                    )}
+
+                    {/* Human-labeled corners overlay (solid) */}
+                    {savedCorners && (
+                        <>
+                            {/* Solid lines connecting corners */}
+                            <svg className="absolute inset-0 w-full h-full pointer-events-none" style={{ overflow: 'visible' }}>
+                                <polygon
+                                    points={`${savedCorners.topLeft.x * 100}%,${savedCorners.topLeft.y * 100}% ${savedCorners.topRight.x * 100}%,${savedCorners.topRight.y * 100}% ${savedCorners.bottomRight.x * 100}%,${savedCorners.bottomRight.y * 100}% ${savedCorners.bottomLeft.x * 100}%,${savedCorners.bottomLeft.y * 100}%`}
+                                    fill="none"
+                                    stroke="cyan"
+                                    strokeWidth="2"
+                                />
+                            </svg>
+                            {/* Corner dots */}
+                            {CORNER_CONFIG.map(({ key, label, color }) => {
+                                const corner = savedCorners[key];
+                                return (
+                                    <div
+                                        key={key}
+                                        className="absolute pointer-events-none"
+                                        style={{
+                                            left: `${corner.x * 100}%`,
+                                            top: `${corner.y * 100}%`,
+                                            transform: 'translate(-50%, -50%)',
+                                        }}
+                                    >
+                                        <div
+                                            className="w-4 h-4 rounded-full border-2 border-white"
+                                            style={{ backgroundColor: color }}
+                                        />
+                                        <div
+                                            className="absolute -top-5 left-1/2 -translate-x-1/2 text-[10px] font-bold px-1 rounded"
+                                            style={{ backgroundColor: color, color: 'white' }}
+                                        >
+                                            {label}
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                        </>
+                    )}
                 </div>
 
                 {/* Run Detection Controls */}
@@ -467,7 +597,7 @@ export const ImageDetailPage = () => {
                                 options={[
                                     ...trainingRuns.map((run) => ({
                                         value: run.id,
-                                        label: `${run.id.slice(0, 8)} - ${run.imageCount} images${run.accuracy !== null ? ` - ${(run.accuracy * 100).toFixed(1)}% acc` : ''}`,
+                                        label: `${formatShortId(run.id)} - ${formatShortDate(run.createdAt)} - ${run.imageCount} imgs${run.accuracy !== null ? ` - ${(run.accuracy * 100).toFixed(1)}% acc` : ''}`,
                                     })),
                                     ...pipelines.map((pipeline) => ({
                                         value: `pipeline:${pipeline.id}`,
@@ -537,7 +667,7 @@ export const ImageDetailPage = () => {
                                 onChange={(value) => setViewModelId(String(value))}
                                 options={trainingRuns.map((run) => ({
                                     value: run.id,
-                                    label: `${run.id.slice(0, 8)} - ${run.imageCount} imgs${run.accuracy !== null ? ` - ${(run.accuracy * 100).toFixed(1)}%` : ''}`,
+                                    label: `${formatShortId(run.id)} - ${run.imageCount} imgs${run.accuracy !== null ? ` - ${(run.accuracy * 100).toFixed(1)}%` : ''}`,
                                 }))}
                                 className="w-56"
                             />
@@ -605,6 +735,42 @@ export const ImageDetailPage = () => {
                                         <p className="text-xs font-mono text-foreground mt-1">
                                             {formatBbox(detection.detection.boundingBox)}
                                         </p>
+                                    </div>
+                                )}
+
+                                {/* Corner detection info */}
+                                {detection.detection.corners && (
+                                    <div className="pt-2 border-t border-border space-y-1">
+                                        <div className="flex items-center justify-between">
+                                            <span className="text-xs text-muted">Corners detected</span>
+                                            {detection.detection.cornerConfidence !== undefined && detection.detection.cornerConfidence !== null && (
+                                                <span className="text-xs font-mono text-foreground">
+                                                    {(detection.detection.cornerConfidence * 100).toFixed(0)}% conf
+                                                </span>
+                                            )}
+                                        </div>
+                                        {/* Corner accuracy vs ground truth */}
+                                        {savedCorners && (() => {
+                                            const aiCorners = detection.detection.corners!;
+                                            const humanCorners = savedCorners;
+                                            // Calculate average corner error (euclidean distance)
+                                            const errors = [
+                                                Math.sqrt(Math.pow(aiCorners.topLeft.x - humanCorners.topLeft.x, 2) + Math.pow(aiCorners.topLeft.y - humanCorners.topLeft.y, 2)),
+                                                Math.sqrt(Math.pow(aiCorners.topRight.x - humanCorners.topRight.x, 2) + Math.pow(aiCorners.topRight.y - humanCorners.topRight.y, 2)),
+                                                Math.sqrt(Math.pow(aiCorners.bottomRight.x - humanCorners.bottomRight.x, 2) + Math.pow(aiCorners.bottomRight.y - humanCorners.bottomRight.y, 2)),
+                                                Math.sqrt(Math.pow(aiCorners.bottomLeft.x - humanCorners.bottomLeft.x, 2) + Math.pow(aiCorners.bottomLeft.y - humanCorners.bottomLeft.y, 2)),
+                                            ];
+                                            const avgError = errors.reduce((a, b) => a + b, 0) / 4;
+                                            const allWithinThreshold = errors.every(e => e < 0.05);
+                                            return (
+                                                <div className="flex items-center justify-between">
+                                                    <span className="text-xs text-muted">Corner vs Ground Truth</span>
+                                                    <span className={`text-xs font-mono ${allWithinThreshold ? 'text-success' : avgError < 0.1 ? 'text-warning' : 'text-error'}`}>
+                                                        {(avgError * 100).toFixed(1)}% err
+                                                    </span>
+                                                </div>
+                                            );
+                                        })()}
                                     </div>
                                 )}
                             </div>

@@ -4,7 +4,8 @@ import { asyncHandler } from '../../lib/async-handler';
 import { mlHttp } from '../../lib/http';
 import type { DetectResponse } from '@blokus-ai/shared';
 import { BadRequestError, NotFoundError } from '../../error';
-import { getBoardDetectionWithCorrectionBySampleId, upsertModelDetection, deleteBoardDetection, deleteBoardDetections, saveBoardDetectionCorrection, CorrectionData, setVerificationStatus, saveManualLabel, ManualLabelData, getSampleStatusFlagsById, getSampleDetectionInfoMap, createTrainingRun, updateTrainingRun, listTrainingRuns, getTrainingRun, deleteTrainingRun, getHumanLabeledImageCount, getTrainingData, getClassifierTrainingData, createDetectionRun, updateDetectionRun, listDetectionRuns, getDetectionRun, deleteDetectionRun, getSampleIdsForBulkDetection, calculateAverageIoU, createPipeline, listPipelines, getPipeline, getPipelineWithComponents, updatePipeline, deletePipeline } from './database';
+import { getBoardDetectionWithCorrectionBySampleId, upsertModelDetection, deleteBoardDetection, deleteBoardDetections, saveBoardDetectionCorrection, CorrectionData, setVerificationStatus, saveManualLabel, ManualLabelData, getSampleStatusFlagsById, getSampleDetectionInfoMap, createTrainingRun, updateTrainingRun, listTrainingRuns, getTrainingRun, deleteTrainingRun, getHumanLabeledImageCount, getTrainingData, getClassifierTrainingData, getPoseTrainingData, getPoseTrainingImageCount, createDetectionRun, updateDetectionRun, listDetectionRuns, getDetectionRun, deleteDetectionRun, getSampleIdsForBulkDetection, calculateAverageIoU, createPipeline, listPipelines, getPipeline, getPipelineWithComponents, updatePipeline, deletePipeline, saveCorners, getCorners, clearCorners, getTagsForSamples } from './database';
+import type { BoardCorners } from '@blokus-ai/shared';
 import type { SampleStatusFlags } from '@blokus-ai/shared';
 import { listSamples, getSample, getUploadPresignedUrl, getCloudFrontUrl, getThumbnailUrl, generateThumbnail, deleteSamples } from './s3';
 import { emitEvent } from '../../lib/socket';
@@ -83,9 +84,11 @@ const defaultStatusFlags: SampleStatusFlags = {
 // Optional query params:
 //   ?modelId= to filter AI detections by model (can be pipeline:uuid for pipelines)
 //   ?filter= to apply preset filter (unlabeled, false-positives, false-negatives, low-iou, disagreements)
+//   ?tagId= to filter by tag
 mlRouter.get('/samples', asyncHandler(async (req, res) => {
     const modelIdParam = req.query.modelId as string | undefined;
     const filter = req.query.filter as string | undefined;
+    const tagIdParam = req.query.tagId as string | undefined;
 
     // Handle pipeline: prefix - expand to component model IDs
     let modelIds: string[] | null = null;
@@ -105,8 +108,13 @@ mlRouter.get('/samples', asyncHandler(async (req, res) => {
     // Pass first model ID for now - multi-model support would need refactoring
     const detectionInfoMap = await getSampleDetectionInfoMap(modelIds?.[0] || null);
 
+    // Get tags for all samples
+    const sampleIds = s3Samples.map(s => s.id);
+    const tagsMap = await getTagsForSamples(sampleIds);
+
     let samples = s3Samples.map(s => {
         const info = detectionInfoMap.get(s.id);
+        const sampleTags = tagsMap.get(s.id) || [];
 
         return {
             id: s.id,
@@ -118,8 +126,14 @@ mlRouter.get('/samples', asyncHandler(async (req, res) => {
             created_at: s.lastModified.toISOString(),
             imageUrl: getCloudFrontUrl(s.id),
             thumbnailUrl: getThumbnailUrl(s.id),
+            tags: sampleTags,
         };
     });
+
+    // Apply tag filter if specified
+    if (tagIdParam) {
+        samples = samples.filter(s => s.tags.some(t => t.id === tagIdParam));
+    }
 
     // Apply filter if specified
     if (filter) {
@@ -387,6 +401,28 @@ mlRouter.post('/samples/:id/label', asyncHandler(async (req, res) => {
     res.json({ success: true });
 }));
 
+// GET /api/ml/samples/:id/corners - Get corners for a sample
+mlRouter.get('/samples/:id/corners', asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const corners = await getCorners(id);
+    res.json({ corners });
+}));
+
+// POST /api/ml/samples/:id/corners - Save corners for a sample
+mlRouter.post('/samples/:id/corners', asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const corners = req.body as BoardCorners;
+    await saveCorners(id, corners);
+    res.json({ success: true });
+}));
+
+// DELETE /api/ml/samples/:id/corners - Clear corners for a sample
+mlRouter.delete('/samples/:id/corners', asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    await clearCorners(id);
+    res.json({ success: true });
+}));
+
 // ============================================================================
 // Training Routes
 // ============================================================================
@@ -404,6 +440,18 @@ mlRouter.get('/training-data', asyncHandler(async (req, res) => {
 mlRouter.get('/classifier-training-data', asyncHandler(async (_req, res) => {
     const samples = await getClassifierTrainingData();
     res.json({ samples });
+}));
+
+// GET /api/ml/pose-training-data - Get human-labeled samples with corners for pose training
+mlRouter.get('/pose-training-data', asyncHandler(async (_req, res) => {
+    const samples = await getPoseTrainingData();
+    res.json({ samples, count: samples.length });
+}));
+
+// GET /api/ml/pose-training-count - Get count of samples with corner labels
+mlRouter.get('/pose-training-count', asyncHandler(async (_req, res) => {
+    const count = await getPoseTrainingImageCount();
+    res.json({ count });
 }));
 
 // POST /api/ml/train - Start a new training run
@@ -436,52 +484,82 @@ mlRouter.post('/train', asyncHandler(async (req, res) => {
     // Return immediately - training runs in background
     res.json(runningRun);
 
-    // Run training in background (don't await)
-    const startTime = Date.now();
-    (async () => {
-        try {
-            interface TrainResult {
-                accuracy?: number;
-                loss?: number;
-                val_accuracy?: number;
-                val_loss?: number;
-                classifier_accuracy?: number;
-                classifier_loss?: number;
-            }
-            const result = await mlHttp.post<TrainResult>('/train/', { run_id: run.id, sample_ids: sampleIds });
+    // Fire-and-forget: ML service will call back on completion/failure
+    mlHttp.post('/train/', { run_id: run.id, sample_ids: sampleIds }).catch(err => {
+        // Log but don't fail - ML service might still succeed and call back
+        log.warn(`Initial training request failed (ML service will callback on completion): ${err}`);
+    });
+}));
 
-            const durationMs = Date.now() - startTime;
-            const completedRun = await updateTrainingRun(run.id, {
-                status: 'completed',
-                completedAt: new Date(),
-                durationMs,
-                accuracy: result.accuracy,
-                loss: result.loss,
-                valAccuracy: result.val_accuracy,
-                valLoss: result.val_loss,
-                classifierAccuracy: result.classifier_accuracy,
-                classifierLoss: result.classifier_loss,
-            });
+// POST /api/ml/training-runs/:id/complete - ML service callback on training completion
+mlRouter.post('/training-runs/:id/complete', asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const {
+        accuracy,
+        loss,
+        val_accuracy,
+        val_loss,
+        classifier_accuracy,
+        classifier_loss,
+        pose_accuracy,
+        pose_loss,
+        pose_error,
+        pose_image_count,
+        duration_ms,
+    } = req.body;
 
-            // Emit completion event
-            emitEvent('training-run-completed', { run: completedRun! });
-            log.info(`Training run ${run.id} completed`, { durationMs, accuracy: result.accuracy });
-        } catch (error) {
-            const durationMs = Date.now() - startTime;
-            const errorMessage = error instanceof Error ? error.message : 'Training failed';
+    log.info(`[train] Training run ${id} completed callback received`);
 
-            const failedRun = await updateTrainingRun(run.id, {
-                status: 'failed',
-                completedAt: new Date(),
-                durationMs,
-                errorMessage,
-            });
+    const run = await getTrainingRun(id);
+    if (!run) {
+        throw new NotFoundError('Training run not found');
+    }
 
-            // Emit failure event
-            emitEvent('training-run-failed', { run: failedRun! });
-            log.error(`Training run ${run.id} failed`, { error: errorMessage, durationMs });
-        }
-    })();
+    const completedRun = await updateTrainingRun(id, {
+        status: 'completed',
+        completedAt: new Date(),
+        durationMs: duration_ms,
+        accuracy,
+        loss,
+        valAccuracy: val_accuracy,
+        valLoss: val_loss,
+        classifierAccuracy: classifier_accuracy,
+        classifierLoss: classifier_loss,
+        poseAccuracy: pose_accuracy,
+        poseLoss: pose_loss,
+        poseError: pose_error,
+        poseImageCount: pose_image_count,
+    });
+
+    emitEvent('training-run-completed', { run: completedRun! });
+    log.info(`Training run ${id} completed`, { durationMs: duration_ms, accuracy });
+
+    res.json({ success: true });
+}));
+
+// POST /api/ml/training-runs/:id/failed - ML service callback on training failure
+mlRouter.post('/training-runs/:id/failed', asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const { error_message, duration_ms } = req.body;
+
+    log.info(`[train] Training run ${id} failed callback received: ${error_message}`);
+
+    const run = await getTrainingRun(id);
+    if (!run) {
+        throw new NotFoundError('Training run not found');
+    }
+
+    const failedRun = await updateTrainingRun(id, {
+        status: 'failed',
+        completedAt: new Date(),
+        durationMs: duration_ms,
+        errorMessage: error_message,
+    });
+
+    emitEvent('training-run-failed', { run: failedRun! });
+    log.error(`Training run ${id} failed`, { error: error_message, durationMs: duration_ms });
+
+    res.json({ success: true });
 }));
 
 // GET /api/ml/training-runs - List all training runs
@@ -889,5 +967,73 @@ mlRouter.delete('/pipelines/:id', asyncHandler(async (req, res) => {
 
     await deletePipeline(id);
     log.info(`Deleted pipeline ${id}`);
+    res.json({ success: true });
+}));
+
+// ============================================================================
+// Tag Routes
+// ============================================================================
+
+import { getAllTags, createTag, deleteTag, getTagsForSample, addTagToSample, removeTagFromSample } from './database';
+
+// GET /api/ml/tags - List all tags
+mlRouter.get('/tags', asyncHandler(async (_req, res) => {
+    const tags = await getAllTags();
+    res.json({ tags });
+}));
+
+// POST /api/ml/tags - Create a new tag
+mlRouter.post('/tags', asyncHandler(async (req, res) => {
+    const { name } = req.body as { name: string };
+
+    if (!name || typeof name !== 'string' || name.trim().length === 0) {
+        throw new BadRequestError('name is required');
+    }
+
+    const tag = await createTag(name.trim());
+    res.json(tag);
+}));
+
+// DELETE /api/ml/tags/:id - Delete a tag
+mlRouter.delete('/tags/:id', asyncHandler(async (req, res) => {
+    const { id } = req.params;
+
+    const deleted = await deleteTag(id);
+    if (!deleted) {
+        throw new NotFoundError('Tag not found');
+    }
+
+    res.json({ success: true });
+}));
+
+// GET /api/ml/samples/:id/tags - Get tags for a sample
+mlRouter.get('/samples/:id/tags', asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const tags = await getTagsForSample(id);
+    res.json({ tags });
+}));
+
+// POST /api/ml/samples/:id/tags - Add tag to sample
+mlRouter.post('/samples/:id/tags', asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const { tagId } = req.body as { tagId: string };
+
+    if (!tagId) {
+        throw new BadRequestError('tagId is required');
+    }
+
+    await addTagToSample(id, tagId);
+    res.json({ success: true });
+}));
+
+// DELETE /api/ml/samples/:id/tags/:tagId - Remove tag from sample
+mlRouter.delete('/samples/:id/tags/:tagId', asyncHandler(async (req, res) => {
+    const { id, tagId } = req.params;
+
+    const removed = await removeTagFromSample(id, tagId);
+    if (!removed) {
+        throw new NotFoundError('Tag assignment not found');
+    }
+
     res.json({ success: true });
 }));

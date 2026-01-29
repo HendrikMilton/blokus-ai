@@ -8,12 +8,26 @@ class BoundingBox(BaseModel):
     height: float  # (0-1)
 
 
+class Corner(BaseModel):
+    x: float  # (0-1)
+    y: float  # (0-1)
+
+
+class BoardCorners(BaseModel):
+    topLeft: Corner
+    topRight: Corner
+    bottomRight: Corner
+    bottomLeft: Corner
+
+
 class BoardDetection(BaseModel):
     hasBoardDetected: bool
     isEntireBoardVisible: bool
     boundingBox: BoundingBox | None
     confidence: float = 0.0
     classifierConfidence: float | None = None
+    corners: BoardCorners | None = None
+    cornerConfidence: float | None = None
 
 
 class DetectResponse(BaseModel):

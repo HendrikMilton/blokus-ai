@@ -4,15 +4,16 @@ import { Trash2, Loader2 } from 'lucide-react';
 import { Table, Column } from '../../../components/ui/Table';
 import { ConfirmModal } from '../../../components/ui/ConfirmModal';
 import { http } from '../../../api/config';
+import { formatShortId } from '../../../utils/format';
 import toast from 'react-hot-toast';
 
 export interface TrainingProgress {
-    phase: 'detection' | 'classifier';
+    phase: 'detection' | 'classifier' | 'pose';
     epoch: number;
     totalEpochs: number;
     loss: number;
     accuracy: number;
-    // Preserved detection metrics for when classifier phase starts
+    // Preserved detection metrics for when classifier/pose phase starts
     detectionAccuracy?: number;
     detectionLoss?: number;
 }
@@ -41,6 +42,7 @@ const statusLabels: Record<TrainingRunStatus, string> = {
 const phaseLabels: Record<string, string> = {
     detection: 'Detection',
     classifier: 'Classifier',
+    pose: 'Pose',
 };
 
 const StatusChip = ({ status, progress }: { status: TrainingRunStatus; progress?: TrainingProgress }) => (
@@ -97,6 +99,11 @@ const getColumns = (
     progress?: Record<string, TrainingProgress>,
     onDeleteClick?: (run: TrainingRun) => void
 ): Column<TrainingRun>[] => [
+    {
+        key: 'id',
+        header: 'ID',
+        render: (row) => <span className="font-mono text-xs">{formatShortId(row.id)}</span>,
+    },
     {
         key: 'status',
         header: 'Status',
@@ -155,10 +162,15 @@ const getColumns = (
         key: 'classifierAccuracy',
         header: 'Cls Acc',
         render: (row) => {
-            // Show live accuracy during classifier phase
             const liveProgress = progress?.[row.id];
-            if (row.status === 'running' && liveProgress?.phase === 'classifier' && liveProgress?.accuracy) {
-                return formatPercent(liveProgress.accuracy);
+            if (row.status === 'running') {
+                // Show live accuracy during classifier phase, or preserved value during pose phase
+                if (liveProgress?.phase === 'classifier' && liveProgress?.accuracy) {
+                    return formatPercent(liveProgress.accuracy);
+                }
+                if (liveProgress?.classifierAccuracy) {
+                    return formatPercent(liveProgress.classifierAccuracy);
+                }
             }
             return formatPercent(row.classifierAccuracy);
         },
@@ -167,13 +179,47 @@ const getColumns = (
         key: 'classifierLoss',
         header: 'Cls Loss',
         render: (row) => {
-            // Show live loss during classifier phase
             const liveProgress = progress?.[row.id];
-            if (row.status === 'running' && liveProgress?.phase === 'classifier' && liveProgress?.loss) {
-                return formatLoss(liveProgress.loss);
+            if (row.status === 'running') {
+                // Show live loss during classifier phase, or preserved value during pose phase
+                if (liveProgress?.phase === 'classifier' && liveProgress?.loss) {
+                    return formatLoss(liveProgress.loss);
+                }
+                if (liveProgress?.classifierLoss) {
+                    return formatLoss(liveProgress.classifierLoss);
+                }
             }
             return formatLoss(row.classifierLoss);
         },
+    },
+    {
+        key: 'poseAccuracy',
+        header: 'Pose Acc',
+        render: (row) => {
+            // Show live accuracy during pose phase
+            const liveProgress = progress?.[row.id];
+            if (row.status === 'running' && liveProgress?.phase === 'pose' && liveProgress?.accuracy) {
+                return formatPercent(liveProgress.accuracy);
+            }
+            return formatPercent(row.poseAccuracy);
+        },
+    },
+    {
+        key: 'poseError',
+        header: 'Pose Err',
+        render: (row) => {
+            // Show live loss during pose phase as error
+            const liveProgress = progress?.[row.id];
+            if (row.status === 'running' && liveProgress?.phase === 'pose' && liveProgress?.loss) {
+                return formatLoss(liveProgress.loss);
+            }
+            return formatLoss(row.poseError);
+        },
+    },
+    {
+        key: 'poseImageCount',
+        header: 'Pose Imgs',
+        render: (row) => row.poseImageCount ?? '-',
     },
     {
         key: 'actions',

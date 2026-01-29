@@ -3,7 +3,7 @@ import { makeContext } from './config';
 import { http } from '../api/config';
 import { ML_API } from '../api/ml';
 import { useSocketEvent } from '../hooks/useSocketEvent';
-import type { TrainingRun, DetectionRun, Sample, ModelPipeline } from '@blokus-ai/shared';
+import type { TrainingRun, DetectionRun, Sample, ModelPipeline, Tag } from '@blokus-ai/shared';
 
 export type { Sample } from '@blokus-ai/shared';
 
@@ -13,7 +13,7 @@ interface SamplesResponse {
 
 // Progress tracking types (must match TrainedModelsTable and DetectionRunsTable)
 export interface TrainingProgress {
-    phase: 'detection' | 'classifier';
+    phase: 'detection' | 'classifier' | 'pose';
     epoch: number;
     totalEpochs: number;
     loss: number;
@@ -55,17 +55,28 @@ export const [AdminProvider, useAdmin] = makeContext(() => {
     const [isLoadingPipelines, setIsLoadingPipelines] = useState(false);
     const [hasFetchedPipelines, setHasFetchedPipelines] = useState(false);
 
-    // Fetch samples with optional model filter
-    const fetchSamples = useCallback(async (forceFetch = false, modelId?: string | null) => {
+    // Tags state
+    const [tags, setTags] = useState<Tag[]>([]);
+    const [isLoadingTags, setIsLoadingTags] = useState(false);
+    const [hasFetchedTags, setHasFetchedTags] = useState(false);
+
+    // Fetch samples with optional model and tag filters
+    const fetchSamples = useCallback(async (forceFetch = false, modelId?: string | null, tagId?: string | null) => {
         if (hasFetchedSamples && !forceFetch) {
             return;
         }
 
         setIsLoadingSamples(true);
         try {
-            const url = modelId
-                ? `/api/ml/samples?modelId=${modelId}`
-                : '/api/ml/samples';
+            const params = new URLSearchParams();
+            if (modelId) {
+                params.set('modelId', modelId);
+            }
+            if (tagId) {
+                params.set('tagId', tagId);
+            }
+            const queryString = params.toString();
+            const url = queryString ? `/api/ml/samples?${queryString}` : '/api/ml/samples';
             const data = await http.get<SamplesResponse>(url);
             setSamples(data.samples || []);
             setHasFetchedSamples(true);
@@ -130,13 +141,32 @@ export const [AdminProvider, useAdmin] = makeContext(() => {
         }
     }, [hasFetchedPipelines]);
 
+    // Fetch tags
+    const fetchTags = useCallback(async (forceFetch = false) => {
+        if (hasFetchedTags && !forceFetch) {
+            return;
+        }
+
+        setIsLoadingTags(true);
+        try {
+            const tagsData = await ML_API.getTags();
+            setTags(tagsData);
+            setHasFetchedTags(true);
+        } catch {
+            // Error toast shown by http client
+        } finally {
+            setIsLoadingTags(false);
+        }
+    }, [hasFetchedTags]);
+
     // Load all data on mount
     useEffect(() => {
         fetchSamples();
         fetchTrainingRuns();
         fetchDetectionRuns();
         fetchPipelines();
-    }, [fetchSamples, fetchTrainingRuns, fetchDetectionRuns, fetchPipelines]);
+        fetchTags();
+    }, [fetchSamples, fetchTrainingRuns, fetchDetectionRuns, fetchPipelines, fetchTags]);
 
     // Socket listeners for training runs
     useSocketEvent('training-run-started', (data) => {
@@ -149,9 +179,12 @@ export const [AdminProvider, useAdmin] = makeContext(() => {
             return {
                 ...prev,
                 [data.runId]: {
-                    // Preserve detection metrics when classifier phase starts
+                    // Preserve detection metrics when classifier/pose phase starts
                     detectionAccuracy: data.phase === 'detection' ? data.accuracy : existing?.detectionAccuracy,
                     detectionLoss: data.phase === 'detection' ? data.loss : existing?.detectionLoss,
+                    // Preserve classifier metrics when pose phase starts
+                    classifierAccuracy: data.phase === 'classifier' ? data.accuracy : existing?.classifierAccuracy,
+                    classifierLoss: data.phase === 'classifier' ? data.loss : existing?.classifierLoss,
                     // Current phase info
                     phase: data.phase,
                     epoch: data.epoch,
@@ -265,6 +298,14 @@ export const [AdminProvider, useAdmin] = makeContext(() => {
         setPipelines(prev => prev.filter(p => p.id !== id));
     }, []);
 
+    const addTag = useCallback((tag: Tag) => {
+        setTags(prev => [...prev, tag].sort((a, b) => a.name.localeCompare(b.name)));
+    }, []);
+
+    const removeTag = useCallback((id: string) => {
+        setTags(prev => prev.filter(t => t.id !== id));
+    }, []);
+
     return {
         // Samples
         samples,
@@ -302,5 +343,12 @@ export const [AdminProvider, useAdmin] = makeContext(() => {
         addPipeline,
         updatePipelineState,
         removePipeline,
+
+        // Tags
+        tags,
+        isLoadingTags,
+        fetchTags,
+        addTag,
+        removeTag,
     };
 });

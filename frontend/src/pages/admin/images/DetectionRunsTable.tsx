@@ -4,6 +4,7 @@ import { Trash2, Loader2 } from 'lucide-react';
 import { Table, Column } from '../../../components/ui/Table';
 import { ConfirmModal } from '../../../components/ui/ConfirmModal';
 import { http } from '../../../api/config';
+import { formatShortId } from '../../../utils/format';
 import toast from 'react-hot-toast';
 
 export interface DetectionProgress {
@@ -86,6 +87,11 @@ const getColumns = (
     pipelinesMap?: Map<string, ModelPipeline>
 ): Column<DetectionRun>[] => [
     {
+        key: 'id',
+        header: 'ID',
+        render: (row) => <span className="font-mono text-xs">{formatShortId(row.id)}</span>,
+    },
+    {
         key: 'status',
         header: 'Status',
         render: (row) => <StatusChip status={row.status} progress={progress?.[row.id]} />,
@@ -99,7 +105,7 @@ const getColumns = (
                 const pipeline = pipelinesMap?.get(row.pipelineId);
                 return (
                     <span className="text-sm">
-                        🔗 {pipeline?.name || row.pipelineId.slice(0, 8)}
+                        🔗 {pipeline?.name || formatShortId(row.pipelineId)}
                     </span>
                 );
             }
@@ -112,7 +118,7 @@ const getColumns = (
                     </span>
                 );
             }
-            return <span className="text-sm text-muted">{row.modelId.slice(0, 8)}</span>;
+            return <span className="text-sm text-muted">{formatShortId(row.modelId)}</span>;
         },
     },
     {
@@ -180,6 +186,22 @@ const getColumns = (
         key: 'avgClassifierAccuracy',
         header: 'Cls Acc',
         render: (row) => formatPercent(row.avgClassifierAccuracy),
+    },
+    {
+        key: 'avgCornerError',
+        header: 'Crn Err',
+        render: (row) => {
+            if (row.avgCornerError === null) {
+                return '-';
+            }
+            // Display as percentage (e.g., 2.5%)
+            return `${(row.avgCornerError * 100).toFixed(1)}%`;
+        },
+    },
+    {
+        key: 'cornerAccuracy',
+        header: 'Crn Acc',
+        render: (row) => formatPercent(row.cornerAccuracy),
     },
     {
         key: 'actions',

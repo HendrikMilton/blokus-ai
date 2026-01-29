@@ -44,6 +44,16 @@ def store_detection_result(sample_id: str, model_id: str, response: DetectRespon
     """Store a single detection result by calling the API."""
     try:
         with httpx.Client(timeout=30.0) as client:
+            # Build corners dict if present
+            corners_dict = None
+            if response.detection.corners:
+                corners_dict = {
+                    "topLeft": {"x": response.detection.corners.topLeft.x, "y": response.detection.corners.topLeft.y},
+                    "topRight": {"x": response.detection.corners.topRight.x, "y": response.detection.corners.topRight.y},
+                    "bottomRight": {"x": response.detection.corners.bottomRight.x, "y": response.detection.corners.bottomRight.y},
+                    "bottomLeft": {"x": response.detection.corners.bottomLeft.x, "y": response.detection.corners.bottomLeft.y},
+                }
+
             result = client.post(
                 f"{API_URL}/api/ml/detect/{sample_id}/result",
                 params={"modelId": model_id},
@@ -60,6 +70,8 @@ def store_detection_result(sample_id: str, model_id: str, response: DetectRespon
                         } if response.detection.boundingBox else None,
                         "confidence": response.detection.confidence,
                         "classifierConfidence": response.detection.classifierConfidence,
+                        "corners": corners_dict,
+                        "cornerConfidence": response.detection.cornerConfidence,
                     },
                     "processing_time_ms": response.processing_time_ms,
                 },

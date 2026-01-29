@@ -5,6 +5,7 @@ import { Modal } from '../../../components/ui/Modal';
 import { Button } from '../../../components/ui/Button';
 import { Input } from '../../../components/ui/Input';
 import { Select } from '../../../components/ui/Select';
+import { formatShortId } from '../../../utils/format';
 
 interface Props {
     isOpen: boolean;
@@ -170,7 +171,7 @@ export const CreatePipelineModal = ({ isOpen, onClose, onSave, trainingRuns, edi
                                                 </div>
                                             ) : (
                                                 <span className="text-sm text-error">
-                                                    Model not found: {id.slice(0, 8)}
+                                                    Model not found: {formatShortId(id)}
                                                 </span>
                                             )}
                                         </div>

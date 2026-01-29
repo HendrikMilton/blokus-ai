@@ -230,7 +230,7 @@ def train_classifier(
         )
 
         # Training loop
-        total_epochs = 20
+        total_epochs = 50
         best_val_loss = float("inf")
         best_model_state = None
 
