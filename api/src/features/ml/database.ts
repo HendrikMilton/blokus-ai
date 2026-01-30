@@ -1,6 +1,6 @@
 import { Knex } from 'knex';
 import { knex } from '../../knex';
-import type { DetectResponse, DetectResponseWithCorrection, SampleStatusFlags, TrainingRun, TrainingRunStatus, BoardDetection, DetectionRun, DetectionRunStatus, SampleAiDetection, SampleHumanLabel, ModelPipeline, BoardCorners } from '@blokus-ai/shared';
+import type { DetectResponse, DetectResponseWithCorrection, SampleStatusFlags, TrainingRun, TrainingRunStatus, BoardDetection, DetectionRun, DetectionRunStatus, SampleAiDetection, SampleHumanLabel, ModelPipeline, BoardCorners, CornerDetectionRun, CornerDetectionRunStatus, CornerDetectionResult } from '@blokus-ai/shared';
 
 // Shared corner fields used by both board_detections and model_detections
 interface CornerFields {
@@ -1695,6 +1695,361 @@ export const getTagsForSamples = async (
         const existing = result.get(row.sample_id) || [];
         existing.push(tag);
         result.set(row.sample_id, existing);
+    }
+    return result;
+};
+
+// ============================================================================
+// Corner Detection Runs
+// ============================================================================
+
+interface CornerDetectionRunRow {
+    id: string;
+    status: CornerDetectionRunStatus;
+    total_count: number;
+    processed_count: number;
+    success_count: number | null;
+    failed_count: number | null;
+    started_at: Date | null;
+    completed_at: Date | null;
+    duration_ms: number | null;
+    error_message: string | null;
+    created_at: Date;
+    updated_at: Date;
+}
+
+const rowToCornerDetectionRun = (row: CornerDetectionRunRow): CornerDetectionRun => ({
+    id: row.id,
+    status: row.status,
+    totalCount: row.total_count,
+    processedCount: row.processed_count,
+    successCount: row.success_count,
+    failedCount: row.failed_count,
+    startedAt: row.started_at?.toISOString() ?? null,
+    completedAt: row.completed_at?.toISOString() ?? null,
+    durationMs: row.duration_ms,
+    errorMessage: row.error_message,
+    createdAt: row.created_at.toISOString(),
+});
+
+export const createCornerDetectionRun = async (
+    totalCount: number,
+    trx: Knex.Transaction | Knex = knex
+): Promise<CornerDetectionRun> => {
+    const [row] = await trx<CornerDetectionRunRow>('corner_detection_runs')
+        .insert({ total_count: totalCount })
+        .returning('*');
+    return rowToCornerDetectionRun(row);
+};
+
+export interface CornerDetectionRunUpdate {
+    status?: CornerDetectionRunStatus;
+    processedCount?: number;
+    successCount?: number;
+    failedCount?: number;
+    startedAt?: Date;
+    completedAt?: Date;
+    durationMs?: number;
+    errorMessage?: string;
+}
+
+export const updateCornerDetectionRun = async (
+    id: string,
+    updates: CornerDetectionRunUpdate,
+    trx: Knex.Transaction | Knex = knex
+): Promise<CornerDetectionRun | null> => {
+    const dbUpdates: Partial<CornerDetectionRunRow> = {
+        updated_at: new Date(),
+    };
+
+    if (updates.status !== undefined) {
+        dbUpdates.status = updates.status;
+    }
+    if (updates.processedCount !== undefined) {
+        dbUpdates.processed_count = updates.processedCount;
+    }
+    if (updates.successCount !== undefined) {
+        dbUpdates.success_count = updates.successCount;
+    }
+    if (updates.failedCount !== undefined) {
+        dbUpdates.failed_count = updates.failedCount;
+    }
+    if (updates.startedAt !== undefined) {
+        dbUpdates.started_at = updates.startedAt;
+    }
+    if (updates.completedAt !== undefined) {
+        dbUpdates.completed_at = updates.completedAt;
+    }
+    if (updates.durationMs !== undefined) {
+        dbUpdates.duration_ms = updates.durationMs;
+    }
+    if (updates.errorMessage !== undefined) {
+        dbUpdates.error_message = updates.errorMessage;
+    }
+
+    const [row] = await trx<CornerDetectionRunRow>('corner_detection_runs')
+        .where('id', id)
+        .update(dbUpdates)
+        .returning('*');
+
+    return row ? rowToCornerDetectionRun(row) : null;
+};
+
+export const listCornerDetectionRuns = async (
+    trx: Knex.Transaction | Knex = knex
+): Promise<CornerDetectionRun[]> => {
+    const rows = await trx<CornerDetectionRunRow>('corner_detection_runs')
+        .orderBy('created_at', 'desc');
+    return rows.map(rowToCornerDetectionRun);
+};
+
+export const getCornerDetectionRun = async (
+    id: string,
+    trx: Knex.Transaction | Knex = knex
+): Promise<CornerDetectionRun | null> => {
+    const row = await trx<CornerDetectionRunRow>('corner_detection_runs')
+        .where('id', id)
+        .first();
+    return row ? rowToCornerDetectionRun(row) : null;
+};
+
+export const deleteCornerDetectionRun = async (
+    id: string,
+    trx: Knex.Transaction | Knex = knex
+): Promise<boolean> => {
+    const deleted = await trx('corner_detection_runs')
+        .where('id', id)
+        .delete();
+    return deleted > 0;
+};
+
+// ============================================================================
+// Corner Detections (results per sample)
+// ============================================================================
+
+interface CornerDetectionRow {
+    id: string;
+    sample_id: string;
+    run_id: string;
+    // "best" method - automatically selected between hough and edge
+    best_success: boolean | null;
+    best_tl_x: number | null;
+    best_tl_y: number | null;
+    best_tr_x: number | null;
+    best_tr_y: number | null;
+    best_br_x: number | null;
+    best_br_y: number | null;
+    best_bl_x: number | null;
+    best_bl_y: number | null;
+    best_error: number | null;
+    best_aspect_ratio: number | null;
+    best_area_ratio: number | null;
+    best_avg_angle: number | null;
+    hough_success: boolean | null;
+    hough_tl_x: number | null;
+    hough_tl_y: number | null;
+    hough_tr_x: number | null;
+    hough_tr_y: number | null;
+    hough_br_x: number | null;
+    hough_br_y: number | null;
+    hough_bl_x: number | null;
+    hough_bl_y: number | null;
+    hough_error: number | null;
+    hough_aspect_ratio: number | null;
+    hough_area_ratio: number | null;
+    hough_avg_angle: number | null;
+    edge_success: boolean | null;
+    edge_tl_x: number | null;
+    edge_tl_y: number | null;
+    edge_tr_x: number | null;
+    edge_tr_y: number | null;
+    edge_br_x: number | null;
+    edge_br_y: number | null;
+    edge_bl_x: number | null;
+    edge_bl_y: number | null;
+    edge_error: number | null;
+    edge_aspect_ratio: number | null;
+    edge_area_ratio: number | null;
+    edge_avg_angle: number | null;
+    created_at: Date;
+}
+
+const rowToCornerDetectionResult = (row: CornerDetectionRow): CornerDetectionResult => ({
+    sampleId: row.sample_id,
+    runId: row.run_id,
+    best: {
+        success: row.best_success ?? false,
+        corners: row.best_tl_x !== null ? {
+            topLeft: { x: row.best_tl_x, y: row.best_tl_y! },
+            topRight: { x: row.best_tr_x!, y: row.best_tr_y! },
+            bottomRight: { x: row.best_br_x!, y: row.best_br_y! },
+            bottomLeft: { x: row.best_bl_x!, y: row.best_bl_y! },
+        } : null,
+        error: row.best_error,
+        quality: row.best_aspect_ratio !== null ? {
+            aspectRatio: row.best_aspect_ratio,
+            areaRatio: row.best_area_ratio,
+            avgAngle: row.best_avg_angle,
+        } : null,
+    },
+    hough: {
+        success: row.hough_success ?? false,
+        corners: row.hough_tl_x !== null ? {
+            topLeft: { x: row.hough_tl_x, y: row.hough_tl_y! },
+            topRight: { x: row.hough_tr_x!, y: row.hough_tr_y! },
+            bottomRight: { x: row.hough_br_x!, y: row.hough_br_y! },
+            bottomLeft: { x: row.hough_bl_x!, y: row.hough_bl_y! },
+        } : null,
+        error: row.hough_error,
+        quality: row.hough_aspect_ratio !== null ? {
+            aspectRatio: row.hough_aspect_ratio,
+            areaRatio: row.hough_area_ratio,
+            avgAngle: row.hough_avg_angle,
+        } : null,
+    },
+    edge: {
+        success: row.edge_success ?? false,
+        corners: row.edge_tl_x !== null ? {
+            topLeft: { x: row.edge_tl_x, y: row.edge_tl_y! },
+            topRight: { x: row.edge_tr_x!, y: row.edge_tr_y! },
+            bottomRight: { x: row.edge_br_x!, y: row.edge_br_y! },
+            bottomLeft: { x: row.edge_bl_x!, y: row.edge_bl_y! },
+        } : null,
+        error: row.edge_error,
+        quality: row.edge_aspect_ratio !== null ? {
+            aspectRatio: row.edge_aspect_ratio,
+            areaRatio: row.edge_area_ratio,
+            avgAngle: row.edge_avg_angle,
+        } : null,
+    },
+});
+
+export interface CornerQualityData {
+    aspectRatio: number | null;
+    areaRatio: number | null;
+    avgAngle: number | null;
+}
+
+export interface CornerDetectionData {
+    sampleId: string;
+    runId: string;
+    best: {
+        success: boolean;
+        corners: BoardCorners | null;
+        error: number | null;
+        quality?: CornerQualityData | null;
+    };
+    hough: {
+        success: boolean;
+        corners: BoardCorners | null;
+        error: number | null;
+        quality?: CornerQualityData | null;
+    };
+    edge: {
+        success: boolean;
+        corners: BoardCorners | null;
+        error: number | null;
+        quality?: CornerQualityData | null;
+    };
+}
+
+export const upsertCornerDetection = async (
+    data: CornerDetectionData,
+    trx: Knex.Transaction | Knex = knex
+): Promise<void> => {
+    await trx('corner_detections')
+        .insert({
+            sample_id: data.sampleId,
+            run_id: data.runId,
+            best_success: data.best.success,
+            best_tl_x: data.best.corners?.topLeft.x ?? null,
+            best_tl_y: data.best.corners?.topLeft.y ?? null,
+            best_tr_x: data.best.corners?.topRight.x ?? null,
+            best_tr_y: data.best.corners?.topRight.y ?? null,
+            best_br_x: data.best.corners?.bottomRight.x ?? null,
+            best_br_y: data.best.corners?.bottomRight.y ?? null,
+            best_bl_x: data.best.corners?.bottomLeft.x ?? null,
+            best_bl_y: data.best.corners?.bottomLeft.y ?? null,
+            best_error: data.best.error,
+            best_aspect_ratio: data.best.quality?.aspectRatio ?? null,
+            best_area_ratio: data.best.quality?.areaRatio ?? null,
+            best_avg_angle: data.best.quality?.avgAngle ?? null,
+            hough_success: data.hough.success,
+            hough_tl_x: data.hough.corners?.topLeft.x ?? null,
+            hough_tl_y: data.hough.corners?.topLeft.y ?? null,
+            hough_tr_x: data.hough.corners?.topRight.x ?? null,
+            hough_tr_y: data.hough.corners?.topRight.y ?? null,
+            hough_br_x: data.hough.corners?.bottomRight.x ?? null,
+            hough_br_y: data.hough.corners?.bottomRight.y ?? null,
+            hough_bl_x: data.hough.corners?.bottomLeft.x ?? null,
+            hough_bl_y: data.hough.corners?.bottomLeft.y ?? null,
+            hough_error: data.hough.error,
+            hough_aspect_ratio: data.hough.quality?.aspectRatio ?? null,
+            hough_area_ratio: data.hough.quality?.areaRatio ?? null,
+            hough_avg_angle: data.hough.quality?.avgAngle ?? null,
+            edge_success: data.edge.success,
+            edge_tl_x: data.edge.corners?.topLeft.x ?? null,
+            edge_tl_y: data.edge.corners?.topLeft.y ?? null,
+            edge_tr_x: data.edge.corners?.topRight.x ?? null,
+            edge_tr_y: data.edge.corners?.topRight.y ?? null,
+            edge_br_x: data.edge.corners?.bottomRight.x ?? null,
+            edge_br_y: data.edge.corners?.bottomRight.y ?? null,
+            edge_bl_x: data.edge.corners?.bottomLeft.x ?? null,
+            edge_bl_y: data.edge.corners?.bottomLeft.y ?? null,
+            edge_error: data.edge.error,
+            edge_aspect_ratio: data.edge.quality?.aspectRatio ?? null,
+            edge_area_ratio: data.edge.quality?.areaRatio ?? null,
+            edge_avg_angle: data.edge.quality?.avgAngle ?? null,
+        })
+        .onConflict(['sample_id', 'run_id'])
+        .merge();
+};
+
+export const getCornerDetectionsByRunId = async (
+    runId: string,
+    trx: Knex.Transaction | Knex = knex
+): Promise<CornerDetectionResult[]> => {
+    const rows = await trx<CornerDetectionRow>('corner_detections')
+        .where('run_id', runId);
+    return rows.map(rowToCornerDetectionResult);
+};
+
+export const getLatestCornerDetectionForSample = async (
+    sampleId: string,
+    trx: Knex.Transaction | Knex = knex
+): Promise<CornerDetectionResult | null> => {
+    const row = await trx<CornerDetectionRow>('corner_detections')
+        .where('sample_id', sampleId)
+        .orderBy('created_at', 'desc')
+        .first();
+    return row ? rowToCornerDetectionResult(row) : null;
+};
+
+/**
+ * Get corner detections for multiple samples at once (batch query).
+ * Returns the latest result for each sample.
+ */
+export const getCornerDetectionsForSamples = async (
+    sampleIds: string[],
+    trx: Knex.Transaction | Knex = knex
+): Promise<Map<string, CornerDetectionResult>> => {
+    if (sampleIds.length === 0) {
+        return new Map();
+    }
+
+    // Use a subquery to get the latest detection for each sample
+    const rows = await trx<CornerDetectionRow>('corner_detections as cd')
+        .whereIn('cd.sample_id', sampleIds)
+        .whereRaw(`cd.created_at = (
+            SELECT MAX(cd2.created_at)
+            FROM corner_detections cd2
+            WHERE cd2.sample_id = cd.sample_id
+        )`)
+        .select('cd.*');
+
+    const result = new Map<string, CornerDetectionResult>();
+    for (const row of rows) {
+        result.set(row.sample_id, rowToCornerDetectionResult(row));
     }
     return result;
 };

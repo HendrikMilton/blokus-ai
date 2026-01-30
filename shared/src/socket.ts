@@ -1,6 +1,6 @@
 // WebSocket event types and payloads
 import type { SafeUser } from './user';
-import type { TrainingRun, DetectionRun } from './ml';
+import type { TrainingRun, DetectionRun, CornerDetectionRun } from './ml';
 
 // Socket event names
 export type SocketEvent =
@@ -16,7 +16,11 @@ export type SocketEvent =
     | 'detection-run-progress'
     | 'detection-run-completed'
     | 'detection-run-failed'
-    | 'detection-run-deleted';
+    | 'detection-run-deleted'
+    | 'corner-run-started'
+    | 'corner-run-progress'
+    | 'corner-run-completed'
+    | 'corner-run-failed';
 
 // Event payload types
 export interface UserCreatedPayload {
@@ -81,6 +85,27 @@ export interface DetectionRunDeletedPayload {
     runId: string;
 }
 
+// Corner detection run event payloads
+export interface CornerRunStartedPayload {
+    run: CornerDetectionRun;
+}
+
+export interface CornerRunProgressPayload {
+    runId: string;
+    processedCount: number;
+    totalCount: number;
+    successCount: number;
+    failedCount: number;
+}
+
+export interface CornerRunCompletedPayload {
+    run: CornerDetectionRun;
+}
+
+export interface CornerRunFailedPayload {
+    run: CornerDetectionRun;
+}
+
 // Discriminated union of all event payloads
 // Using Record<SocketEvent, ...> ensures all events have corresponding payloads
 export type EventPayloads = Record<SocketEvent, unknown> & {
@@ -97,6 +122,10 @@ export type EventPayloads = Record<SocketEvent, unknown> & {
     'detection-run-completed': DetectionRunCompletedPayload;
     'detection-run-failed': DetectionRunFailedPayload;
     'detection-run-deleted': DetectionRunDeletedPayload;
+    'corner-run-started': CornerRunStartedPayload;
+    'corner-run-progress': CornerRunProgressPayload;
+    'corner-run-completed': CornerRunCompletedPayload;
+    'corner-run-failed': CornerRunFailedPayload;
 };
 
 // Room names

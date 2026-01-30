@@ -13,7 +13,16 @@ import {
     BoardDetection,
     ModelPipeline,
     Tag,
+    CornerDetectionRun,
+    CornerDetectionResult,
+    BoardCorners,
+    PerspectiveFromCornersRequest,
+    PerspectiveFromCornersResponse,
+    PerspectiveMethodResult,
 } from '@blokus-ai/shared';
+
+// Re-export for convenience
+export type { PerspectiveFromCornersResponse, PerspectiveMethodResult };
 
 export interface PerspectiveCorrectionMethod {
     method: string;
@@ -97,9 +106,25 @@ export const ML_API = {
         await http.delete(`/api/ml/pipelines/${id}`);
     },
 
-    // Perspective correction for stored samples
+    // Perspective correction for stored samples (old method using bbox)
     correctPerspective: async (sampleId: string, bbox: { x: number; y: number; width: number; height: number }): Promise<PerspectiveCorrections> => {
         return http.post<PerspectiveCorrections>(`/api/ml/detect/${sampleId}/perspective`, { bbox });
+    },
+
+    // Perspective correction using saved corner coordinates
+    correctPerspectiveFromCorners: async (
+        sampleId: string,
+        corners: PerspectiveFromCornersRequest
+    ): Promise<PerspectiveFromCornersResponse> => {
+        return http.post<PerspectiveFromCornersResponse>(
+            `/api/ml/detect/${sampleId}/perspective-from-corners`,
+            corners
+        );
+    },
+
+    // Corner detection (multiple methods)
+    detectCorners: async (sampleId: string, bbox: { x: number; y: number; width: number; height: number }): Promise<CornerDetections> => {
+        return http.post<CornerDetections>(`/api/ml/detect/${sampleId}/corners`, { bbox });
     },
 
     // Corner labeling
@@ -141,6 +166,34 @@ export const ML_API = {
     removeTagFromSample: async (sampleId: string, tagId: string): Promise<void> => {
         await http.delete(`/api/ml/samples/${sampleId}/tags/${tagId}`);
     },
+
+    // Corner detection runs
+    startCornerDetection: async (sampleIds: string[]): Promise<CornerDetectionRun> => {
+        return http.post<CornerDetectionRun>('/api/ml/corner-runs', { sampleIds });
+    },
+
+    getCornerRuns: async (): Promise<CornerDetectionRun[]> => {
+        const response = await http.get<{ runs: CornerDetectionRun[] }>('/api/ml/corner-runs');
+        return response.runs;
+    },
+
+    getCornerRun: async (id: string): Promise<CornerDetectionRun> => {
+        return http.get<CornerDetectionRun>(`/api/ml/corner-runs/${id}`);
+    },
+
+    deleteCornerRun: async (id: string): Promise<void> => {
+        await http.delete(`/api/ml/corner-runs/${id}`);
+    },
+
+    getCornerDetections: async (runId: string): Promise<CornerDetectionResult[]> => {
+        const response = await http.get<{ results: CornerDetectionResult[] }>(`/api/ml/corner-detections?runId=${runId}`);
+        return response.results;
+    },
+
+    getCornerDetectionsForSamples: async (sampleIds: string[]): Promise<CornerDetectionResult[]> => {
+        const response = await http.get<{ results: CornerDetectionResult[] }>(`/api/ml/corner-detections?sampleIds=${sampleIds.join(',')}`);
+        return response.results;
+    },
 };
 
 export interface BoardCorners {
@@ -148,4 +201,17 @@ export interface BoardCorners {
     topRight: { x: number; y: number };
     bottomRight: { x: number; y: number };
     bottomLeft: { x: number; y: number };
+}
+
+export interface CornerDetectionMethod {
+    method: string;
+    corners: BoardCorners | null;
+    success: boolean;
+    debug_image?: string;  // base64 encoded image with corners drawn
+}
+
+export interface CornerDetections {
+    contour: CornerDetectionMethod;
+    hough_ransac: CornerDetectionMethod;
+    edge_intersection: CornerDetectionMethod;
 }

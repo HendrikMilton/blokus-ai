@@ -1,7 +1,7 @@
 import { useRef, useState, useEffect, useMemo } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { Plus, ChevronLeft, ChevronRight, Tag, Lightbulb, Trash2, Search, Image, LayoutGrid, List, X } from 'lucide-react';
+import { Plus, ChevronLeft, ChevronRight, Tag, Lightbulb, Trash2, Search, Image, LayoutGrid, List, X, Focus } from 'lucide-react';
 import { cn } from '../../../utils/cn';
 import { formatShortId } from '../../../utils/format';
 import { http, API_URL } from '../../../api/config';
@@ -24,16 +24,17 @@ import { CreateTagModal } from './CreateTagModal';
 import { ConfirmModal } from '../../../components/ui/ConfirmModal';
 import { useAdmin } from '../../../contexts/AdminContext';
 import { useSocketEvent } from '../../../hooks/useSocketEvent';
-import type { ModelPipeline } from '@blokus-ai/shared';
+import type { ModelPipeline, CornerDetectionResult } from '@blokus-ai/shared';
 
 type Tab = 'images' | 'models' | 'detections' | 'test' | 'config';
-type FilterPreset = 'all' | 'unlabeled' | 'false-positives' | 'false-negatives' | 'low-iou' | 'disagreements';
+type FilterPreset = 'all' | 'selected' | 'unlabeled' | 'false-positives' | 'false-negatives' | 'low-iou' | 'disagreements';
 type SortOption = 'default' | 'lowest-iou' | 'lowest-confidence';
 type ViewType = 'grid' | 'list';
 type MultiModelMode = 'intersection' | 'union';
 
 const filterPresetLabels: Record<FilterPreset, string> = {
     'all': 'All',
+    'selected': 'Selected',
     'unlabeled': 'Unlabeled',
     'false-positives': 'False Positives',
     'false-negatives': 'False Negatives',
@@ -55,10 +56,12 @@ interface PresignResponse {
 }
 
 
-const matchesPreset = (sample: Sample, preset: FilterPreset): boolean => {
+const matchesPreset = (sample: Sample, preset: FilterPreset, selectedIds?: Set<string>): boolean => {
     switch (preset) {
     case 'all':
         return true;
+    case 'selected':
+        return selectedIds?.has(sample.id) ?? false;
     case 'unlabeled':
         return !sample.status.humanLabeled;
     case 'false-positives':
@@ -150,6 +153,7 @@ export const ImagesPage = () => {
         isLoadingTags,
         addTag,
         removeTag,
+        cornerProgress,
     } = useAdmin();
 
     // Local UI state
@@ -161,6 +165,20 @@ export const ImagesPage = () => {
     const [showPipelineModal, setShowPipelineModal] = useState(false);
     const [editingPipeline, setEditingPipeline] = useState<ModelPipeline | null>(null);
     const [showTagModal, setShowTagModal] = useState(false);
+    const [isRunningCorners, setIsRunningCorners] = useState(false);
+    const [activeCornerRunId, setActiveCornerRunId] = useState<string | null>(null);
+    const [cornerDetections, setCornerDetections] = useState<Map<string, CornerDetectionResult>>(new Map());
+
+    // Overlay visibility toggles
+    const [overlayVisibility, setOverlayVisibility] = useState({
+        humanBox: true,
+        aiBox: true,
+        humanCorners: false,
+        aiCorners: false,
+        bestCorners: false,
+        houghCorners: false,
+        edgeCorners: false,
+    });
 
     // Selection state
     const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -190,7 +208,7 @@ export const ImagesPage = () => {
 
     // Get preset filter from URL or default to 'all'
     const urlPreset = searchParams.get('preset') as FilterPreset | null;
-    const validPresets: FilterPreset[] = ['all', 'unlabeled', 'false-positives', 'false-negatives', 'low-iou', 'disagreements'];
+    const validPresets: FilterPreset[] = ['all', 'selected', 'unlabeled', 'false-positives', 'false-negatives', 'low-iou', 'disagreements'];
     const preset: FilterPreset = urlPreset && validPresets.includes(urlPreset) ? urlPreset : 'all';
 
     const setPreset = (newPreset: FilterPreset) => {
@@ -427,6 +445,22 @@ export const ImagesPage = () => {
         }
     };
 
+    // Corner detection handler
+    const handleRunCorners = async () => {
+        if (selectedIds.size === 0) {
+            return;
+        }
+        setIsRunningCorners(true);
+        try {
+            const run = await ML_API.startCornerDetection(Array.from(selectedIds));
+            setActiveCornerRunId(run.id);
+            toast.success('Corner detection started');
+        } catch {
+            toast.error('Failed to start corner detection');
+            setIsRunningCorners(false);
+        }
+    };
+
     const handleSelect = (id: string, shiftKey: boolean = false, ctrlKey: boolean = false) => {
         const currentIndex = filteredSamples.findIndex(s => s.id === id);
 
@@ -520,6 +554,30 @@ export const ImagesPage = () => {
         fetchSamples(true, modelId, selectedTagId || null);
     }, [fetchSamples, selectedModelIds, selectedTagId]);
 
+    // Socket event handlers for corner detection
+    useSocketEvent('corner-run-completed', async (data) => {
+        setIsRunningCorners(false);
+        toast.success('Corner detection completed');
+        // Load corner detection results for current samples
+        if (data.run.id === activeCornerRunId) {
+            try {
+                const results = await ML_API.getCornerDetections(data.run.id);
+                const newMap = new Map<string, CornerDetectionResult>();
+                for (const result of results) {
+                    newMap.set(result.sampleId, result);
+                }
+                setCornerDetections(newMap);
+            } catch {
+                // Error toast shown by http client
+            }
+        }
+    }, [activeCornerRunId]);
+
+    useSocketEvent('corner-run-failed', (data) => {
+        setIsRunningCorners(false);
+        toast.error(data.run.errorMessage || 'Corner detection failed');
+    }, []);
+
     // Refetch samples when selected model or tag changes (single model mode)
     useEffect(() => {
         if (selectedModelIds.length <= 1) {
@@ -527,6 +585,25 @@ export const ImagesPage = () => {
             fetchSamples(true, modelId, selectedTagId || null);
         }
     }, [selectedModelIds, selectedTagId, fetchSamples]);
+
+    // Load corner detections from database when samples change
+    useEffect(() => {
+        const sampleIds = samples.map(s => s.id);
+        if (sampleIds.length === 0) {
+            return;
+        }
+        ML_API.getCornerDetectionsForSamples(sampleIds)
+            .then(results => {
+                const newMap = new Map<string, CornerDetectionResult>();
+                for (const result of results) {
+                    newMap.set(result.sampleId, result);
+                }
+                setCornerDetections(newMap);
+            })
+            .catch(() => {
+                // Silently ignore errors - corner detections are optional
+            });
+    }, [samples]);
 
     // Fetch samples for each model when multiple models selected
     useEffect(() => {
@@ -566,7 +643,7 @@ export const ImagesPage = () => {
         let filtered = samples;
 
         // Apply multi-model filtering when multiple models selected and not "all" filter
-        if (selectedModelIds.length > 1 && preset !== 'all' && multiModelSamples.size > 0) {
+        if (selectedModelIds.length > 1 && preset !== 'all' && preset !== 'selected' && multiModelSamples.size > 0) {
             const sampleSets = Array.from(multiModelSamples.values());
 
             if (multiModelMode === 'intersection') {
@@ -577,9 +654,9 @@ export const ImagesPage = () => {
                 filtered = samples.filter(s => sampleSets.some(set => set.has(s.id)));
             }
         } else {
-            // Single model or "all" filter - use normal filtering
+            // Single model or "all"/"selected" filter - use normal filtering
             filtered = samples.filter(s => {
-                if (!matchesPreset(s, preset)) {
+                if (!matchesPreset(s, preset, selectedIds)) {
                     return false;
                 }
                 return true;
@@ -592,7 +669,7 @@ export const ImagesPage = () => {
         }
 
         return sortSamples(filtered, sort);
-    }, [samples, selectedModelIds, preset, multiModelMode, multiModelSamples, searchQuery, sort]);
+    }, [samples, selectedModelIds, preset, multiModelMode, multiModelSamples, searchQuery, sort, selectedIds]);
 
     // Reset page when filters change
     useEffect(() => {
@@ -655,10 +732,41 @@ export const ImagesPage = () => {
             case 'entireAgreed':
                 comparison = getEntireAgreed(a) - getEntireAgreed(b);
                 break;
+            case 'bestErr':
+                comparison = (cornerDetections.get(a.id)?.best.error ?? -1) - (cornerDetections.get(b.id)?.best.error ?? -1);
+                break;
+            case 'houghErr':
+                comparison = (cornerDetections.get(a.id)?.hough.error ?? -1) - (cornerDetections.get(b.id)?.hough.error ?? -1);
+                break;
+            case 'edgeErr':
+                comparison = (cornerDetections.get(a.id)?.edge.error ?? -1) - (cornerDetections.get(b.id)?.edge.error ?? -1);
+                break;
             }
             return listSortState.direction === 'asc' ? comparison : -comparison;
         });
-    }, [filteredSamples, viewType, listSortState]);
+    }, [filteredSamples, viewType, listSortState, cornerDetections]);
+
+    // Calculate average corner errors for column headers
+    const avgCornerErrors = useMemo(() => {
+        const samplesWithCorners = filteredSamples.filter(s => cornerDetections.has(s.id));
+        if (samplesWithCorners.length === 0) {
+            return { best: null, hough: null, edge: null };
+        }
+        const calcAvg = (getter: (cd: CornerDetectionResult) => number | null) => {
+            const values = samplesWithCorners
+                .map(s => getter(cornerDetections.get(s.id)!))
+                .filter((v): v is number => v !== null);
+            if (values.length === 0) {
+                return null;
+            }
+            return values.reduce((a, b) => a + b, 0) / values.length;
+        };
+        return {
+            best: calcAvg(cd => cd.best.error),
+            hough: calcAvg(cd => cd.hough.error),
+            edge: calcAvg(cd => cd.edge.error),
+        };
+    }, [filteredSamples, cornerDetections]);
 
     const formatDate = (dateString: string) => {
         const date = new Date(dateString);
@@ -770,6 +878,75 @@ export const ImagesPage = () => {
             ) : <span className="text-muted">—</span>,
         },
         {
+            key: 'bestErr',
+            header: avgCornerErrors.best !== null
+                ? `Best (${(avgCornerErrors.best * 100).toFixed(1)}%)`
+                : 'Best Err',
+            sortable: true,
+            width: '180px',
+            render: (sample) => {
+                const cd = cornerDetections.get(sample.id);
+                if (!cd || cd.best.error === null) {
+                    return <span className="text-muted">—</span>;
+                }
+                const pct = cd.best.error * 100;
+                const cls = pct < 5 ? 'text-success' : pct < 10 ? 'text-warning' : 'text-error';
+                const q = cd.best.quality;
+                return (
+                    <span className={cls}>
+                        {pct.toFixed(1)}%
+                        {q && <span className="text-muted text-[10px] ml-1">({q.aspectRatio?.toFixed(2)}, {q.areaRatio?.toFixed(2)}, {q.avgAngle?.toFixed(0)}°)</span>}
+                    </span>
+                );
+            },
+        },
+        {
+            key: 'houghErr',
+            header: avgCornerErrors.hough !== null
+                ? `Hough (${(avgCornerErrors.hough * 100).toFixed(1)}%)`
+                : 'Hough Err',
+            sortable: true,
+            width: '180px',
+            render: (sample) => {
+                const cd = cornerDetections.get(sample.id);
+                if (!cd || cd.hough.error === null) {
+                    return <span className="text-muted">—</span>;
+                }
+                const pct = cd.hough.error * 100;
+                const cls = pct < 5 ? 'text-success' : pct < 10 ? 'text-warning' : 'text-error';
+                const q = cd.hough.quality;
+                return (
+                    <span className={cls}>
+                        {pct.toFixed(1)}%
+                        {q && <span className="text-muted text-[10px] ml-1">({q.aspectRatio?.toFixed(2)}, {q.areaRatio?.toFixed(2)}, {q.avgAngle?.toFixed(0)}°)</span>}
+                    </span>
+                );
+            },
+        },
+        {
+            key: 'edgeErr',
+            header: avgCornerErrors.edge !== null
+                ? `Edge (${(avgCornerErrors.edge * 100).toFixed(1)}%)`
+                : 'Edge Err',
+            sortable: true,
+            width: '180px',
+            render: (sample) => {
+                const cd = cornerDetections.get(sample.id);
+                if (!cd || cd.edge.error === null) {
+                    return <span className="text-muted">—</span>;
+                }
+                const pct = cd.edge.error * 100;
+                const cls = pct < 5 ? 'text-success' : pct < 10 ? 'text-warning' : 'text-error';
+                const q = cd.edge.quality;
+                return (
+                    <span className={cls}>
+                        {pct.toFixed(1)}%
+                        {q && <span className="text-muted text-[10px] ml-1">({q.aspectRatio?.toFixed(2)}, {q.areaRatio?.toFixed(2)}, {q.avgAngle?.toFixed(0)}°)</span>}
+                    </span>
+                );
+            },
+        },
+        {
             key: 'created_at',
             header: 'Created',
             sortable: true,
@@ -832,6 +1009,20 @@ export const ImagesPage = () => {
                     title={selectedIds.size === 0 ? 'Select images to train on' : `Train on ${selectedIds.size} selected images`}
                 >
                     Train{selectedIds.size > 0 ? ` (${selectedIds.size})` : ''}
+                </Button>
+                <Button
+                    onClick={handleRunCorners}
+                    loading={isRunningCorners}
+                    disabled={selectedIds.size === 0}
+                    leftIcon={<Focus className="w-4 h-4" />}
+                    size="sm"
+                    variant="secondary"
+                    className="justify-center"
+                    title={selectedIds.size === 0 ? 'Select images to run corner detection' : `Run corner detection on ${selectedIds.size} selected images`}
+                >
+                    {isRunningCorners && activeCornerRunId && cornerProgress[activeCornerRunId]
+                        ? `${cornerProgress[activeCornerRunId].processedCount}/${cornerProgress[activeCornerRunId].totalCount}`
+                        : `Corners${selectedIds.size > 0 ? ` (${selectedIds.size})` : ''}`}
                 </Button>
                 {tab === 'images' && (
                     <Button
@@ -994,6 +1185,80 @@ export const ImagesPage = () => {
                                 className="w-40"
                             />
                         )}
+                        {/* Visibility toggles for overlays */}
+                        {viewType === 'grid' && (
+                            <div className="flex flex-col gap-1">
+                                <label className="block text-sm font-medium text-foreground">Overlays</label>
+                                <div className="flex items-center gap-3 h-9 px-2 border border-border rounded-md bg-surface">
+                                    <span className="text-xs text-muted">Box:</span>
+                                    <label className="flex items-center gap-1 cursor-pointer" title="Human bounding box">
+                                        <input
+                                            type="checkbox"
+                                            checked={overlayVisibility.humanBox}
+                                            onChange={(e) => setOverlayVisibility(prev => ({ ...prev, humanBox: e.target.checked }))}
+                                            className="w-3 h-3 rounded border-border"
+                                        />
+                                        <span className="text-xs text-green-500">H</span>
+                                    </label>
+                                    <label className="flex items-center gap-1 cursor-pointer" title="AI bounding box">
+                                        <input
+                                            type="checkbox"
+                                            checked={overlayVisibility.aiBox}
+                                            onChange={(e) => setOverlayVisibility(prev => ({ ...prev, aiBox: e.target.checked }))}
+                                            className="w-3 h-3 rounded border-border"
+                                        />
+                                        <span className="text-xs text-blue-500">AI</span>
+                                    </label>
+                                    <div className="w-px h-4 bg-border" />
+                                    <span className="text-xs text-muted">Corners:</span>
+                                    <label className="flex items-center gap-1 cursor-pointer" title="Human corners">
+                                        <input
+                                            type="checkbox"
+                                            checked={overlayVisibility.humanCorners}
+                                            onChange={(e) => setOverlayVisibility(prev => ({ ...prev, humanCorners: e.target.checked }))}
+                                            className="w-3 h-3 rounded border-border"
+                                        />
+                                        <span className="text-xs text-green-500">H</span>
+                                    </label>
+                                    <label className="flex items-center gap-1 cursor-pointer" title="AI corners">
+                                        <input
+                                            type="checkbox"
+                                            checked={overlayVisibility.aiCorners}
+                                            onChange={(e) => setOverlayVisibility(prev => ({ ...prev, aiCorners: e.target.checked }))}
+                                            className="w-3 h-3 rounded border-border"
+                                        />
+                                        <span className="text-xs text-blue-500">AI</span>
+                                    </label>
+                                    <label className="flex items-center gap-1 cursor-pointer" title="Best (auto-selected)">
+                                        <input
+                                            type="checkbox"
+                                            checked={overlayVisibility.bestCorners}
+                                            onChange={(e) => setOverlayVisibility(prev => ({ ...prev, bestCorners: e.target.checked }))}
+                                            className="w-3 h-3 rounded border-border"
+                                        />
+                                        <span className="text-xs text-yellow-500">B</span>
+                                    </label>
+                                    <label className="flex items-center gap-1 cursor-pointer" title="Hough+RANSAC detection">
+                                        <input
+                                            type="checkbox"
+                                            checked={overlayVisibility.houghCorners}
+                                            onChange={(e) => setOverlayVisibility(prev => ({ ...prev, houghCorners: e.target.checked }))}
+                                            className="w-3 h-3 rounded border-border"
+                                        />
+                                        <span className="text-xs text-purple-500">H</span>
+                                    </label>
+                                    <label className="flex items-center gap-1 cursor-pointer" title="Edge intersection detection">
+                                        <input
+                                            type="checkbox"
+                                            checked={overlayVisibility.edgeCorners}
+                                            onChange={(e) => setOverlayVisibility(prev => ({ ...prev, edgeCorners: e.target.checked }))}
+                                            className="w-3 h-3 rounded border-border"
+                                        />
+                                        <span className="text-xs text-cyan-500">E</span>
+                                    </label>
+                                </div>
+                            </div>
+                        )}
                         {/* Intersection/Union toggle - show when multiple models selected and filter is not "all" */}
                         {selectedModelIds.length > 1 && preset !== 'all' && (
                             <div className="flex flex-col gap-1">
@@ -1114,23 +1379,25 @@ export const ImagesPage = () => {
                         </div>
                     ) : viewType === 'list' ? (
                         /* List View */
-                        <Table<Sample>
-                            columns={listColumns}
-                            data={listSortedSamples}
-                            getRowKey={(sample) => sample.id}
-                            sortState={listSortState}
-                            onSort={handleListSort}
-                            selectable
-                            selectedKeys={selectedIds}
-                            onSelectionChange={(key, shiftKey, ctrlKey) => handleSelect(key as string, shiftKey, ctrlKey)}
-                            onRowDoubleClick={(sample) => handleDoubleClick(sample.id)}
-                            emptyMessage="No images found"
-                            paginated
-                            currentPage={currentPage}
-                            pageSize={pageSize}
-                            totalItems={filteredSamples.length}
-                            onPageChange={setCurrentPage}
-                        />
+                        <>
+                            <Table<Sample>
+                                columns={listColumns}
+                                data={listSortedSamples}
+                                getRowKey={(sample) => sample.id}
+                                sortState={listSortState}
+                                onSort={handleListSort}
+                                selectable
+                                selectedKeys={selectedIds}
+                                onSelectionChange={(key, shiftKey, ctrlKey) => handleSelect(key as string, shiftKey, ctrlKey)}
+                                onRowDoubleClick={(sample) => handleDoubleClick(sample.id)}
+                                emptyMessage="No images found"
+                                paginated
+                                currentPage={currentPage}
+                                pageSize={pageSize}
+                                totalItems={filteredSamples.length}
+                                onPageChange={setCurrentPage}
+                            />
+                        </>
                     ) : (
                         /* Grid View */
                         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
@@ -1170,10 +1437,10 @@ export const ImagesPage = () => {
                                                     ))}
                                                 </div>
                                             )}
-                                            {/* AI bounding box (dashed, primary) */}
-                                            {sample.ai?.boundingBox && (
+                                            {/* AI bounding box (dashed, blue) */}
+                                            {overlayVisibility.aiBox && sample.ai?.boundingBox && (
                                                 <div
-                                                    className="absolute border border-primary border-dashed pointer-events-none"
+                                                    className="absolute border-2 border-blue-500 border-dashed pointer-events-none"
                                                     style={{
                                                         left: `${sample.ai.boundingBox.x * 100}%`,
                                                         top: `${sample.ai.boundingBox.y * 100}%`,
@@ -1182,10 +1449,10 @@ export const ImagesPage = () => {
                                                     }}
                                                 />
                                             )}
-                                            {/* Human bounding box (solid, info/blue) */}
-                                            {sample.human?.boundingBox && (
+                                            {/* Human bounding box (solid, green) */}
+                                            {overlayVisibility.humanBox && sample.human?.boundingBox && (
                                                 <div
-                                                    className="absolute border border-info pointer-events-none"
+                                                    className="absolute border-2 border-green-500 pointer-events-none"
                                                     style={{
                                                         left: `${sample.human.boundingBox.x * 100}%`,
                                                         top: `${sample.human.boundingBox.y * 100}%`,
@@ -1194,6 +1461,69 @@ export const ImagesPage = () => {
                                                     }}
                                                 />
                                             )}
+                                            {/* Corner overlays (SVG polygons) */}
+                                            <svg className="absolute inset-0 w-full h-full pointer-events-none" viewBox="0 0 100 100" preserveAspectRatio="none">
+                                                {/* Human corners - green */}
+                                                {overlayVisibility.humanCorners && sample.human?.corners && (
+                                                    <polygon
+                                                        points={`${sample.human.corners.topLeft.x * 100},${sample.human.corners.topLeft.y * 100} ${sample.human.corners.topRight.x * 100},${sample.human.corners.topRight.y * 100} ${sample.human.corners.bottomRight.x * 100},${sample.human.corners.bottomRight.y * 100} ${sample.human.corners.bottomLeft.x * 100},${sample.human.corners.bottomLeft.y * 100}`}
+                                                        fill="none"
+                                                        stroke="#22c55e"
+                                                        strokeWidth="1"
+                                                        vectorEffect="non-scaling-stroke"
+                                                    />
+                                                )}
+                                                {/* AI corners - blue */}
+                                                {overlayVisibility.aiCorners && sample.ai?.corners && (
+                                                    <polygon
+                                                        points={`${sample.ai.corners.topLeft.x * 100},${sample.ai.corners.topLeft.y * 100} ${sample.ai.corners.topRight.x * 100},${sample.ai.corners.topRight.y * 100} ${sample.ai.corners.bottomRight.x * 100},${sample.ai.corners.bottomRight.y * 100} ${sample.ai.corners.bottomLeft.x * 100},${sample.ai.corners.bottomLeft.y * 100}`}
+                                                        fill="none"
+                                                        stroke="#3b82f6"
+                                                        strokeWidth="1"
+                                                        strokeDasharray="2 1"
+                                                        vectorEffect="non-scaling-stroke"
+                                                    />
+                                                )}
+                                                {/* Best corners - yellow */}
+                                                {overlayVisibility.bestCorners && cornerDetections.get(sample.id)?.best.corners && (() => {
+                                                    const c = cornerDetections.get(sample.id)!.best.corners!;
+                                                    return (
+                                                        <polygon
+                                                            points={`${c.topLeft.x * 100},${c.topLeft.y * 100} ${c.topRight.x * 100},${c.topRight.y * 100} ${c.bottomRight.x * 100},${c.bottomRight.y * 100} ${c.bottomLeft.x * 100},${c.bottomLeft.y * 100}`}
+                                                            fill="none"
+                                                            stroke="#eab308"
+                                                            strokeWidth="1"
+                                                            vectorEffect="non-scaling-stroke"
+                                                        />
+                                                    );
+                                                })()}
+                                                {/* Hough corners - purple */}
+                                                {overlayVisibility.houghCorners && cornerDetections.get(sample.id)?.hough.corners && (() => {
+                                                    const c = cornerDetections.get(sample.id)!.hough.corners!;
+                                                    return (
+                                                        <polygon
+                                                            points={`${c.topLeft.x * 100},${c.topLeft.y * 100} ${c.topRight.x * 100},${c.topRight.y * 100} ${c.bottomRight.x * 100},${c.bottomRight.y * 100} ${c.bottomLeft.x * 100},${c.bottomLeft.y * 100}`}
+                                                            fill="none"
+                                                            stroke="#a855f7"
+                                                            strokeWidth="1"
+                                                            vectorEffect="non-scaling-stroke"
+                                                        />
+                                                    );
+                                                })()}
+                                                {/* Edge corners - cyan */}
+                                                {overlayVisibility.edgeCorners && cornerDetections.get(sample.id)?.edge.corners && (() => {
+                                                    const c = cornerDetections.get(sample.id)!.edge.corners!;
+                                                    return (
+                                                        <polygon
+                                                            points={`${c.topLeft.x * 100},${c.topLeft.y * 100} ${c.topRight.x * 100},${c.topRight.y * 100} ${c.bottomRight.x * 100},${c.bottomRight.y * 100} ${c.bottomLeft.x * 100},${c.bottomLeft.y * 100}`}
+                                                            fill="none"
+                                                            stroke="#06b6d4"
+                                                            strokeWidth="1"
+                                                            vectorEffect="non-scaling-stroke"
+                                                        />
+                                                    );
+                                                })()}
+                                            </svg>
                                         </div>
                                         <div className="px-2 py-1.5 text-xs">
                                             {/* Header: ID + badges */}
@@ -1257,6 +1587,26 @@ export const ImagesPage = () => {
                                                     </tr>
                                                 </tbody>
                                             </table>
+                                            {/* Corner detection errors */}
+                                            {cornerDetections.has(sample.id) && (() => {
+                                                const cd = cornerDetections.get(sample.id)!;
+                                                const formatErr = (err: number | null) => {
+                                                    if (err === null) {
+                                                        return '—';
+                                                    }
+                                                    const pct = err * 100;
+                                                    const cls = pct < 5 ? 'text-success' : pct < 10 ? 'text-warning' : 'text-error';
+                                                    return <span className={cls}>{pct.toFixed(1)}%</span>;
+                                                };
+                                                return (
+                                                    <div className="mt-1 pt-1 border-t border-border/50 flex gap-2 text-[10px]">
+                                                        <span className="text-muted">Corners:</span>
+                                                        <span>B:{formatErr(cd.best.error)}</span>
+                                                        <span>H:{formatErr(cd.hough.error)}</span>
+                                                        <span>E:{formatErr(cd.edge.error)}</span>
+                                                    </div>
+                                                );
+                                            })()}
                                         </div>
                                     </div>
                                 );

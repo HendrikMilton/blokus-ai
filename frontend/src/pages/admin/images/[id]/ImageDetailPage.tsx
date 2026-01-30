@@ -2,30 +2,14 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { ChevronLeft, ChevronRight, Pencil, Play, Grid3X3 } from 'lucide-react';
 import { http, API_URL } from '../../../../api/config';
-import { ML_API, PerspectiveCorrections, PerspectiveCorrectionMethod, BoardCorners } from '../../../../api/ml';
+import { ML_API, PerspectiveFromCornersResponse, PerspectiveMethodResult } from '../../../../api/ml';
 import { Button } from '../../../../components/ui/Button';
 import { Select } from '../../../../components/ui/Select';
 import { formatShortDate, formatShortId } from '../../../../utils/format';
-import type { BoundingBox, DetectResponseWithCorrection, SampleStatusFlags, ModelPipeline, Tag } from '@blokus-ai/shared';
+import type { BoundingBox, DetectResponseWithCorrection, SampleStatusFlags, ModelPipeline, Tag, CornerDetectionResult } from '@blokus-ai/shared';
 import { getStatusLabels } from '@blokus-ai/shared';
 import { statusColors, statusLabels } from '../../../../lib/status';
 import { SampleTagsSection } from './SampleTagsSection';
-
-// Corner labels and colors for human-labeled corners
-const CORNER_CONFIG = [
-    { key: 'topLeft' as const, label: 'TL', color: '#ef4444' },     // red
-    { key: 'topRight' as const, label: 'TR', color: '#22c55e' },    // green
-    { key: 'bottomRight' as const, label: 'BR', color: '#3b82f6' }, // blue
-    { key: 'bottomLeft' as const, label: 'BL', color: '#eab308' },  // yellow
-];
-
-// Corner config for AI-predicted corners (lighter/pastel versions)
-const AI_CORNER_CONFIG = [
-    { key: 'topLeft' as const, label: 'TL', color: '#f87171' },     // lighter red
-    { key: 'topRight' as const, label: 'TR', color: '#4ade80' },    // lighter green
-    { key: 'bottomRight' as const, label: 'BR', color: '#60a5fa' }, // lighter blue
-    { key: 'bottomLeft' as const, label: 'BL', color: '#facc15' },  // lighter yellow
-];
 
 interface TrainingRun {
     id: string;
@@ -89,11 +73,25 @@ export const ImageDetailPage = () => {
     const [pipelines, setPipelines] = useState<ModelPipeline[]>([]);
     const [isDetecting, setIsDetecting] = useState(false);
     const [previewDetection, setPreviewDetection] = useState<DetectResponseWithCorrection['detection'] | null>(null);
-    const [perspectiveCorrections, setPerspectiveCorrections] = useState<PerspectiveCorrections | null>(null);
+    const [perspectiveCorrections, setPerspectiveCorrections] = useState<PerspectiveFromCornersResponse | null>(null);
     const [isCorrectingPerspective, setIsCorrectingPerspective] = useState(false);
+
+    // Corner detection results from database
+    const [cornerDetection, setCornerDetection] = useState<CornerDetectionResult | null>(null);
 
     // Saved corners (display only - editing is in LabelingPage)
     const [savedCorners, setSavedCorners] = useState<BoardCorners | null>(null);
+
+    // Overlay visibility toggles (same as ImagesPage)
+    const [overlayVisibility, setOverlayVisibility] = useState({
+        humanBox: true,
+        aiBox: true,
+        humanCorners: true,
+        aiCorners: false,
+        bestCorners: false,
+        houghCorners: false,
+        edgeCorners: false,
+    });
 
     // All available tags for the tag selector
     const [allTags, setAllTags] = useState<Tag[]>([]);
@@ -236,32 +234,31 @@ export const ImageDetailPage = () => {
     }, [id, selectedModelId]);
 
     const runPerspectiveCorrection = useCallback(async () => {
-        if (!id) {
-            return;
-        }
-
-        // Use human bbox if available, otherwise AI bbox
-        const bbox = detection?.correction?.boundingBox || detection?.detection?.boundingBox;
-        if (!bbox) {
+        if (!id || !cornerDetection) {
             return;
         }
 
         setIsCorrectingPerspective(true);
         try {
-            const result = await ML_API.correctPerspective(id, bbox);
+            const result = await ML_API.correctPerspectiveFromCorners(id, {
+                best: cornerDetection.best.corners,
+                hough: cornerDetection.hough.corners,
+                edge: cornerDetection.edge.corners,
+            });
             setPerspectiveCorrections(result);
         } catch {
             // Error toast shown by http client
         } finally {
             setIsCorrectingPerspective(false);
         }
-    }, [id, detection]);
+    }, [id, cornerDetection]);
 
     useEffect(() => {
         const loadSample = async () => {
             // Clear preview and perspective corrections when navigating to a different sample
             setPreviewDetection(null);
             setPerspectiveCorrections(null);
+            setCornerDetection(null);
             try {
                 const data = await http.get<Sample>(`/api/ml/samples/${id}`);
                 setSample(data);
@@ -307,6 +304,26 @@ export const ImageDetailPage = () => {
         loadCorners();
     }, [id]);
 
+    // Load corner detection results from database
+    useEffect(() => {
+        const loadCornerDetection = async () => {
+            if (!id) {
+                return;
+            }
+            try {
+                const results = await ML_API.getCornerDetectionsForSamples([id]);
+                if (results.length > 0) {
+                    setCornerDetection(results[0]);
+                } else {
+                    setCornerDetection(null);
+                }
+            } catch {
+                setCornerDetection(null);
+            }
+        };
+        loadCornerDetection();
+    }, [id]);
+
     // Calculate IoU if both AI and human bboxes exist
     const iou = useMemo(() => {
         const aiBox = detection?.detection?.boundingBox;
@@ -332,13 +349,21 @@ export const ImageDetailPage = () => {
         return `x: ${(bbox.x * 100).toFixed(1)}%, y: ${(bbox.y * 100).toFixed(1)}%, w: ${(bbox.width * 100).toFixed(1)}%, h: ${(bbox.height * 100).toFixed(1)}%`;
     };
 
-    const renderCorrectionMethod = (title: string, method: PerspectiveCorrectionMethod) => {
+    const renderCorrectionMethod = (title: string, method: PerspectiveMethodResult, error: number | null) => {
+        const errorStr = error !== null ? `${(error * 100).toFixed(1)}%` : '—';
+        const errorColor = error !== null
+            ? (error * 100 < 1 ? 'text-success' : error * 100 < 3 ? 'text-warning' : 'text-error')
+            : 'text-muted';
+
         return (
             <div className="relative bg-surface-dim rounded-lg overflow-hidden">
                 <div className={`absolute top-2 left-2 z-10 text-xs px-2 py-1 rounded ${
                     method.success ? 'bg-success/80 text-white' : 'bg-error/80 text-white'
                 }`}>
                     {title} {method.success ? '✓' : '✗'}
+                </div>
+                <div className={`absolute top-2 right-2 z-10 text-xs px-2 py-1 rounded bg-black/60 ${errorColor}`}>
+                    err: {errorStr}
                 </div>
                 {method.image ? (
                     <img
@@ -449,6 +474,76 @@ export const ImageDetailPage = () => {
                 {/* Tags Section */}
                 <SampleTagsSection sampleId={sample.id} allTags={allTags} />
 
+                {/* Visibility toggles for overlays */}
+                <div className="flex items-center gap-3 px-2 py-2 border border-border rounded-md bg-surface">
+                    <span className="text-xs text-muted">Box:</span>
+                    <label className="flex items-center gap-1 cursor-pointer" title="Human bounding box">
+                        <input
+                            type="checkbox"
+                            checked={overlayVisibility.humanBox}
+                            onChange={(e) => setOverlayVisibility(prev => ({ ...prev, humanBox: e.target.checked }))}
+                            className="w-3 h-3 rounded border-border"
+                        />
+                        <span className="text-xs text-green-500">H</span>
+                    </label>
+                    <label className="flex items-center gap-1 cursor-pointer" title="AI bounding box">
+                        <input
+                            type="checkbox"
+                            checked={overlayVisibility.aiBox}
+                            onChange={(e) => setOverlayVisibility(prev => ({ ...prev, aiBox: e.target.checked }))}
+                            className="w-3 h-3 rounded border-border"
+                        />
+                        <span className="text-xs text-blue-500">AI</span>
+                    </label>
+                    <div className="w-px h-4 bg-border" />
+                    <span className="text-xs text-muted">Corners:</span>
+                    <label className="flex items-center gap-1 cursor-pointer" title="Human corners">
+                        <input
+                            type="checkbox"
+                            checked={overlayVisibility.humanCorners}
+                            onChange={(e) => setOverlayVisibility(prev => ({ ...prev, humanCorners: e.target.checked }))}
+                            className="w-3 h-3 rounded border-border"
+                        />
+                        <span className="text-xs text-green-500">H</span>
+                    </label>
+                    <label className="flex items-center gap-1 cursor-pointer" title="AI corners">
+                        <input
+                            type="checkbox"
+                            checked={overlayVisibility.aiCorners}
+                            onChange={(e) => setOverlayVisibility(prev => ({ ...prev, aiCorners: e.target.checked }))}
+                            className="w-3 h-3 rounded border-border"
+                        />
+                        <span className="text-xs text-blue-500">AI</span>
+                    </label>
+                    <label className="flex items-center gap-1 cursor-pointer" title="Best (auto-selected)">
+                        <input
+                            type="checkbox"
+                            checked={overlayVisibility.bestCorners}
+                            onChange={(e) => setOverlayVisibility(prev => ({ ...prev, bestCorners: e.target.checked }))}
+                            className="w-3 h-3 rounded border-border"
+                        />
+                        <span className="text-xs text-yellow-500">B</span>
+                    </label>
+                    <label className="flex items-center gap-1 cursor-pointer" title="Hough+RANSAC detection">
+                        <input
+                            type="checkbox"
+                            checked={overlayVisibility.houghCorners}
+                            onChange={(e) => setOverlayVisibility(prev => ({ ...prev, houghCorners: e.target.checked }))}
+                            className="w-3 h-3 rounded border-border"
+                        />
+                        <span className="text-xs text-purple-500">H</span>
+                    </label>
+                    <label className="flex items-center gap-1 cursor-pointer" title="Edge intersection detection">
+                        <input
+                            type="checkbox"
+                            checked={overlayVisibility.edgeCorners}
+                            onChange={(e) => setOverlayVisibility(prev => ({ ...prev, edgeCorners: e.target.checked }))}
+                            className="w-3 h-3 rounded border-border"
+                        />
+                        <span className="text-xs text-cyan-500">E</span>
+                    </label>
+                </div>
+
                 {/* Image with bounding box overlays (read-only) */}
                 <div className="relative bg-surface rounded-lg border overflow-hidden border-border">
                     <img
@@ -457,37 +552,29 @@ export const ImageDetailPage = () => {
                         className="w-full h-auto select-none"
                         draggable={false}
                     />
-                    {/* AI Detection bounding box (dashed, primary color) */}
-                    {detection?.detection?.boundingBox && detection.detection.confidence > 0 && (
+                    {/* AI Detection bounding box (dashed, blue) */}
+                    {overlayVisibility.aiBox && detection?.detection?.boundingBox && detection.detection.confidence > 0 && (
                         <div
-                            className="absolute rounded-sm pointer-events-none border-2 border-primary border-dashed"
+                            className="absolute rounded-sm pointer-events-none border-2 border-blue-500 border-dashed"
                             style={{
                                 left: `${detection.detection.boundingBox.x * 100}%`,
                                 top: `${detection.detection.boundingBox.y * 100}%`,
                                 width: `${detection.detection.boundingBox.width * 100}%`,
                                 height: `${detection.detection.boundingBox.height * 100}%`,
                             }}
-                        >
-                            <div className="absolute -top-6 left-0 text-white text-xs px-1.5 py-0.5 rounded bg-primary">
-                                AI Detection
-                            </div>
-                        </div>
+                        />
                     )}
-                    {/* Human Label bounding box (solid, info color) */}
-                    {detection?.correction?.boundingBox && (
+                    {/* Human Label bounding box (solid, green) */}
+                    {overlayVisibility.humanBox && detection?.correction?.boundingBox && (
                         <div
-                            className="absolute rounded-sm pointer-events-none border-2 border-info"
+                            className="absolute rounded-sm pointer-events-none border-2 border-green-500"
                             style={{
                                 left: `${detection.correction.boundingBox.x * 100}%`,
                                 top: `${detection.correction.boundingBox.y * 100}%`,
                                 width: `${detection.correction.boundingBox.width * 100}%`,
                                 height: `${detection.correction.boundingBox.height * 100}%`,
                             }}
-                        >
-                            <div className="absolute -top-6 left-0 text-white text-xs px-1.5 py-0.5 rounded bg-info">
-                                Human Labeled
-                            </div>
-                        </div>
+                        />
                     )}
                     {/* Preview Detection bounding box (dashed, warning color) */}
                     {previewDetection?.boundingBox && (
@@ -506,83 +593,60 @@ export const ImageDetailPage = () => {
                         </div>
                     )}
 
-                    {/* AI-predicted corners overlay (dashed, different style) */}
-                    {detection?.detection?.corners && (
-                        <>
-                            {/* Dashed lines connecting AI corners */}
-                            <svg className="absolute inset-0 w-full h-full pointer-events-none" style={{ overflow: 'visible' }}>
-                                <polygon
-                                    points={`${detection.detection.corners.topLeft.x * 100}%,${detection.detection.corners.topLeft.y * 100}% ${detection.detection.corners.topRight.x * 100}%,${detection.detection.corners.topRight.y * 100}% ${detection.detection.corners.bottomRight.x * 100}%,${detection.detection.corners.bottomRight.y * 100}% ${detection.detection.corners.bottomLeft.x * 100}%,${detection.detection.corners.bottomLeft.y * 100}%`}
-                                    fill="none"
-                                    stroke="#a855f7"
-                                    strokeWidth="2"
-                                    strokeDasharray="4,4"
-                                    opacity="0.8"
-                                />
-                            </svg>
-                            {/* AI Corner dots (smaller, with dashed border) */}
-                            {AI_CORNER_CONFIG.map(({ key, color }) => {
-                                const corner = detection.detection.corners![key];
-                                return (
-                                    <div
-                                        key={`ai-${key}`}
-                                        className="absolute pointer-events-none"
-                                        style={{
-                                            left: `${corner.x * 100}%`,
-                                            top: `${corner.y * 100}%`,
-                                            transform: 'translate(-50%, -50%)',
-                                        }}
-                                    >
-                                        <div
-                                            className="w-3 h-3 rounded-full border-2 border-dashed border-white"
-                                            style={{ backgroundColor: color, opacity: 0.8 }}
-                                        />
-                                    </div>
-                                );
-                            })}
-                        </>
-                    )}
-
-                    {/* Human-labeled corners overlay (solid) */}
-                    {savedCorners && (
-                        <>
-                            {/* Solid lines connecting corners */}
-                            <svg className="absolute inset-0 w-full h-full pointer-events-none" style={{ overflow: 'visible' }}>
-                                <polygon
-                                    points={`${savedCorners.topLeft.x * 100}%,${savedCorners.topLeft.y * 100}% ${savedCorners.topRight.x * 100}%,${savedCorners.topRight.y * 100}% ${savedCorners.bottomRight.x * 100}%,${savedCorners.bottomRight.y * 100}% ${savedCorners.bottomLeft.x * 100}%,${savedCorners.bottomLeft.y * 100}%`}
-                                    fill="none"
-                                    stroke="cyan"
-                                    strokeWidth="2"
-                                />
-                            </svg>
-                            {/* Corner dots */}
-                            {CORNER_CONFIG.map(({ key, label, color }) => {
-                                const corner = savedCorners[key];
-                                return (
-                                    <div
-                                        key={key}
-                                        className="absolute pointer-events-none"
-                                        style={{
-                                            left: `${corner.x * 100}%`,
-                                            top: `${corner.y * 100}%`,
-                                            transform: 'translate(-50%, -50%)',
-                                        }}
-                                    >
-                                        <div
-                                            className="w-4 h-4 rounded-full border-2 border-white"
-                                            style={{ backgroundColor: color }}
-                                        />
-                                        <div
-                                            className="absolute -top-5 left-1/2 -translate-x-1/2 text-[10px] font-bold px-1 rounded"
-                                            style={{ backgroundColor: color, color: 'white' }}
-                                        >
-                                            {label}
-                                        </div>
-                                    </div>
-                                );
-                            })}
-                        </>
-                    )}
+                    {/* Corner overlays (SVG polygons) */}
+                    <svg className="absolute inset-0 w-full h-full pointer-events-none" viewBox="0 0 100 100" preserveAspectRatio="none">
+                        {/* Human corners - green */}
+                        {overlayVisibility.humanCorners && savedCorners && (
+                            <polygon
+                                points={`${savedCorners.topLeft.x * 100},${savedCorners.topLeft.y * 100} ${savedCorners.topRight.x * 100},${savedCorners.topRight.y * 100} ${savedCorners.bottomRight.x * 100},${savedCorners.bottomRight.y * 100} ${savedCorners.bottomLeft.x * 100},${savedCorners.bottomLeft.y * 100}`}
+                                fill="none"
+                                stroke="#22c55e"
+                                strokeWidth="1"
+                                vectorEffect="non-scaling-stroke"
+                            />
+                        )}
+                        {/* AI corners - blue */}
+                        {overlayVisibility.aiCorners && detection?.detection?.corners && (
+                            <polygon
+                                points={`${detection.detection.corners.topLeft.x * 100},${detection.detection.corners.topLeft.y * 100} ${detection.detection.corners.topRight.x * 100},${detection.detection.corners.topRight.y * 100} ${detection.detection.corners.bottomRight.x * 100},${detection.detection.corners.bottomRight.y * 100} ${detection.detection.corners.bottomLeft.x * 100},${detection.detection.corners.bottomLeft.y * 100}`}
+                                fill="none"
+                                stroke="#3b82f6"
+                                strokeWidth="1"
+                                strokeDasharray="2 1"
+                                vectorEffect="non-scaling-stroke"
+                            />
+                        )}
+                        {/* Best corners - yellow */}
+                        {overlayVisibility.bestCorners && cornerDetection?.best.corners && (
+                            <polygon
+                                points={`${cornerDetection.best.corners.topLeft.x * 100},${cornerDetection.best.corners.topLeft.y * 100} ${cornerDetection.best.corners.topRight.x * 100},${cornerDetection.best.corners.topRight.y * 100} ${cornerDetection.best.corners.bottomRight.x * 100},${cornerDetection.best.corners.bottomRight.y * 100} ${cornerDetection.best.corners.bottomLeft.x * 100},${cornerDetection.best.corners.bottomLeft.y * 100}`}
+                                fill="none"
+                                stroke="#eab308"
+                                strokeWidth="1"
+                                vectorEffect="non-scaling-stroke"
+                            />
+                        )}
+                        {/* Hough corners - purple */}
+                        {overlayVisibility.houghCorners && cornerDetection?.hough.corners && (
+                            <polygon
+                                points={`${cornerDetection.hough.corners.topLeft.x * 100},${cornerDetection.hough.corners.topLeft.y * 100} ${cornerDetection.hough.corners.topRight.x * 100},${cornerDetection.hough.corners.topRight.y * 100} ${cornerDetection.hough.corners.bottomRight.x * 100},${cornerDetection.hough.corners.bottomRight.y * 100} ${cornerDetection.hough.corners.bottomLeft.x * 100},${cornerDetection.hough.corners.bottomLeft.y * 100}`}
+                                fill="none"
+                                stroke="#a855f7"
+                                strokeWidth="1"
+                                vectorEffect="non-scaling-stroke"
+                            />
+                        )}
+                        {/* Edge corners - cyan */}
+                        {overlayVisibility.edgeCorners && cornerDetection?.edge.corners && (
+                            <polygon
+                                points={`${cornerDetection.edge.corners.topLeft.x * 100},${cornerDetection.edge.corners.topLeft.y * 100} ${cornerDetection.edge.corners.topRight.x * 100},${cornerDetection.edge.corners.topRight.y * 100} ${cornerDetection.edge.corners.bottomRight.x * 100},${cornerDetection.edge.corners.bottomRight.y * 100} ${cornerDetection.edge.corners.bottomLeft.x * 100},${cornerDetection.edge.corners.bottomLeft.y * 100}`}
+                                fill="none"
+                                stroke="#06b6d4"
+                                strokeWidth="1"
+                                vectorEffect="non-scaling-stroke"
+                            />
+                        )}
+                    </svg>
                 </div>
 
                 {/* Run Detection Controls */}
@@ -831,30 +895,29 @@ export const ImageDetailPage = () => {
                 )}
 
                 {/* Perspective Correction */}
-                {(detection?.correction?.boundingBox || detection?.detection?.boundingBox) && (
+                {cornerDetection && (
                     <div className="bg-surface rounded-lg border border-border p-4">
                         <div className="flex items-center justify-between gap-3 mb-3">
                             <h2 className="text-sm font-medium text-foreground">Perspective Correction</h2>
                             <Button
                                 onClick={runPerspectiveCorrection}
-                                disabled={isCorrectingPerspective}
+                                disabled={isCorrectingPerspective || !cornerDetection}
                                 loading={isCorrectingPerspective}
                                 leftIcon={<Grid3X3 className="w-4 h-4" />}
                                 size="sm"
                             >
-                                {isCorrectingPerspective ? 'Correcting...' : 'Correct Perspective'}
+                                {isCorrectingPerspective ? 'Correcting...' : 'Generate from Corners'}
                             </Button>
                         </div>
                         <p className="text-xs text-muted mb-3">
-                            Using {detection?.correction?.boundingBox ? 'human' : 'AI'} bounding box
+                            Using saved corner detection results (Best, Hough, Edge)
                         </p>
 
                         {perspectiveCorrections && (
-                            <div className="grid grid-cols-2 gap-4" style={{ maxWidth: '820px' }}>
-                                {renderCorrectionMethod('Hough Lines (Extreme)', perspectiveCorrections.hough_lines_extreme)}
-                                {renderCorrectionMethod('Hough Lines (Merged)', perspectiveCorrections.hough_lines_merged)}
-                                {renderCorrectionMethod('Color Segmentation', perspectiveCorrections.color_segmentation)}
-                                {renderCorrectionMethod('Contour Detection', perspectiveCorrections.contour_detection)}
+                            <div className="flex flex-col gap-4" style={{ maxWidth: '500px' }}>
+                                {renderCorrectionMethod('Best (auto-selected)', perspectiveCorrections.best, cornerDetection.best.error)}
+                                {renderCorrectionMethod('Hough + RANSAC', perspectiveCorrections.hough, cornerDetection.hough.error)}
+                                {renderCorrectionMethod('Edge Intersection', perspectiveCorrections.edge, cornerDetection.edge.error)}
                             </div>
                         )}
                     </div>

@@ -2,10 +2,9 @@ import { Router } from 'express';
 import { randomUUID } from 'crypto';
 import { asyncHandler } from '../../lib/async-handler';
 import { mlHttp } from '../../lib/http';
-import type { DetectResponse } from '@blokus-ai/shared';
+import type { DetectResponse, BoardCorners, PerspectiveFromCornersRequest } from '@blokus-ai/shared';
 import { BadRequestError, NotFoundError } from '../../error';
-import { getBoardDetectionWithCorrectionBySampleId, upsertModelDetection, deleteBoardDetection, deleteBoardDetections, saveBoardDetectionCorrection, CorrectionData, setVerificationStatus, saveManualLabel, ManualLabelData, getSampleStatusFlagsById, getSampleDetectionInfoMap, createTrainingRun, updateTrainingRun, listTrainingRuns, getTrainingRun, deleteTrainingRun, getHumanLabeledImageCount, getTrainingData, getClassifierTrainingData, getPoseTrainingData, getPoseTrainingImageCount, createDetectionRun, updateDetectionRun, listDetectionRuns, getDetectionRun, deleteDetectionRun, getSampleIdsForBulkDetection, calculateAverageIoU, createPipeline, listPipelines, getPipeline, getPipelineWithComponents, updatePipeline, deletePipeline, saveCorners, getCorners, clearCorners, getTagsForSamples } from './database';
-import type { BoardCorners } from '@blokus-ai/shared';
+import { getBoardDetectionWithCorrectionBySampleId, upsertModelDetection, deleteBoardDetection, deleteBoardDetections, saveBoardDetectionCorrection, CorrectionData, setVerificationStatus, saveManualLabel, ManualLabelData, getSampleStatusFlagsById, getSampleDetectionInfoMap, createTrainingRun, updateTrainingRun, listTrainingRuns, getTrainingRun, deleteTrainingRun, getHumanLabeledImageCount, getTrainingData, getClassifierTrainingData, getPoseTrainingData, getPoseTrainingImageCount, createDetectionRun, updateDetectionRun, listDetectionRuns, getDetectionRun, deleteDetectionRun, getSampleIdsForBulkDetection, calculateAverageIoU, createPipeline, listPipelines, getPipeline, getPipelineWithComponents, updatePipeline, deletePipeline, saveCorners, getCorners, clearCorners, getTagsForSamples, createCornerDetectionRun, updateCornerDetectionRun, listCornerDetectionRuns, getCornerDetectionRun, deleteCornerDetectionRun, upsertCornerDetection, getCornerDetectionsByRunId, getCornerDetectionsForSamples } from './database';
 import type { SampleStatusFlags } from '@blokus-ai/shared';
 import { listSamples, getSample, getUploadPresignedUrl, getCloudFrontUrl, getThumbnailUrl, generateThumbnail, deleteSamples } from './s3';
 import { emitEvent } from '../../lib/socket';
@@ -836,7 +835,7 @@ mlRouter.delete('/detection-runs/:id', asyncHandler(async (req, res) => {
     res.json({ success: true });
 }));
 
-// POST /api/ml/detect/:id/perspective - Run perspective correction on a sample
+// POST /api/ml/detect/:id/perspective - Run perspective correction on a sample (old method)
 mlRouter.post('/detect/:id/perspective', asyncHandler(async (req, res) => {
     const { id } = req.params;
     const { bbox } = req.body as { bbox: { x: number; y: number; width: number; height: number } };
@@ -846,6 +845,39 @@ mlRouter.post('/detect/:id/perspective', asyncHandler(async (req, res) => {
     }
 
     const response = await mlHttp.post(`/detect/${id}/perspective`, {
+        bbox_x: bbox.x,
+        bbox_y: bbox.y,
+        bbox_width: bbox.width,
+        bbox_height: bbox.height,
+    });
+
+    res.json(response);
+}));
+
+// POST /api/ml/detect/:id/perspective-from-corners - Generate perspective correction using saved corners
+mlRouter.post('/detect/:id/perspective-from-corners', asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const { best, hough, edge }: PerspectiveFromCornersRequest = req.body;
+
+    const response = await mlHttp.post(`/detect/${id}/perspective-from-corners`, {
+        best,
+        hough,
+        edge,
+    });
+
+    res.json(response);
+}));
+
+// POST /api/ml/detect/:id/corners - Run corner detection on a sample
+mlRouter.post('/detect/:id/corners', asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const { bbox } = req.body as { bbox: { x: number; y: number; width: number; height: number } };
+
+    if (!bbox) {
+        throw new BadRequestError('bbox is required');
+    }
+
+    const response = await mlHttp.post(`/detect/${id}/corners`, {
         bbox_x: bbox.x,
         bbox_y: bbox.y,
         bbox_width: bbox.width,
@@ -1036,4 +1068,188 @@ mlRouter.delete('/samples/:id/tags/:tagId', asyncHandler(async (req, res) => {
     }
 
     res.json({ success: true });
+}));
+
+// ============================================================================
+// Corner Detection Run Routes
+// ============================================================================
+
+// POST /api/ml/corner-runs - Start bulk corner detection
+mlRouter.post('/corner-runs', asyncHandler(async (req, res) => {
+    const { sampleIds } = req.body as { sampleIds: string[] };
+
+    if (!sampleIds || !Array.isArray(sampleIds) || sampleIds.length === 0) {
+        throw new BadRequestError('sampleIds array is required');
+    }
+
+    // Create corner detection run record
+    const run = await createCornerDetectionRun(sampleIds.length);
+
+    // Update to running status
+    const runningRun = await updateCornerDetectionRun(run.id, {
+        status: 'running',
+        startedAt: new Date(),
+    });
+
+    // Emit start event
+    emitEvent('corner-run-started', { run: runningRun! });
+
+    // Return immediately - corner detection runs in background
+    res.json(runningRun);
+
+    // Fire-and-forget: ML service will call back on progress/completion
+    mlHttp.post('/detect/bulk-corners', {
+        run_id: run.id,
+        sample_ids: sampleIds,
+    }).catch(async (err) => {
+        log.warn(`Initial corner detection request failed: ${err}`);
+        // Update run to failed status and emit event
+        const failedRun = await updateCornerDetectionRun(run.id, {
+            status: 'failed',
+            completedAt: new Date(),
+            errorMessage: `ML service request failed: ${err}`,
+        });
+        if (failedRun) {
+            emitEvent('corner-run-failed', { run: failedRun });
+        }
+    });
+}));
+
+// GET /api/ml/corner-runs - List all corner detection runs
+mlRouter.get('/corner-runs', asyncHandler(async (_req, res) => {
+    const runs = await listCornerDetectionRuns();
+    res.json({ runs });
+}));
+
+// GET /api/ml/corner-runs/:id - Get single corner detection run
+mlRouter.get('/corner-runs/:id', asyncHandler(async (req, res) => {
+    const { id } = req.params;
+
+    const run = await getCornerDetectionRun(id);
+    if (!run) {
+        throw new NotFoundError('Corner detection run not found');
+    }
+
+    res.json(run);
+}));
+
+// POST /api/ml/corner-runs/:id/progress - ML service callback for progress
+mlRouter.post('/corner-runs/:id/progress', asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const { processedCount, totalCount, successCount, failedCount } = req.body;
+
+    // Update the corner detection run record
+    await updateCornerDetectionRun(id, {
+        processedCount,
+        successCount,
+        failedCount,
+    });
+
+    // Emit progress event via WebSocket
+    emitEvent('corner-run-progress', {
+        runId: id,
+        processedCount,
+        totalCount,
+        successCount,
+        failedCount,
+    });
+
+    res.json({ success: true });
+}));
+
+// POST /api/ml/corner-runs/:id/complete - ML service callback on completion
+mlRouter.post('/corner-runs/:id/complete', asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const { successCount, failedCount, durationMs } = req.body;
+
+    const run = await getCornerDetectionRun(id);
+    if (!run) {
+        throw new NotFoundError('Corner detection run not found');
+    }
+
+    const completedRun = await updateCornerDetectionRun(id, {
+        status: 'completed',
+        completedAt: new Date(),
+        successCount,
+        failedCount,
+        durationMs,
+    });
+
+    // Emit completion event
+    emitEvent('corner-run-completed', { run: completedRun! });
+    log.info(`Corner detection run ${id} completed`, { successCount, failedCount, durationMs });
+
+    res.json({ success: true });
+}));
+
+// POST /api/ml/corner-runs/:id/failed - ML service callback on failure
+mlRouter.post('/corner-runs/:id/failed', asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const { errorMessage, durationMs } = req.body;
+
+    const run = await getCornerDetectionRun(id);
+    if (!run) {
+        throw new NotFoundError('Corner detection run not found');
+    }
+
+    const failedRun = await updateCornerDetectionRun(id, {
+        status: 'failed',
+        completedAt: new Date(),
+        durationMs,
+        errorMessage,
+    });
+
+    emitEvent('corner-run-failed', { run: failedRun! });
+    log.error(`Corner detection run ${id} failed`, { error: errorMessage, durationMs });
+
+    res.json({ success: true });
+}));
+
+// DELETE /api/ml/corner-runs/:id - Delete a corner detection run
+mlRouter.delete('/corner-runs/:id', asyncHandler(async (req, res) => {
+    const { id } = req.params;
+
+    const run = await getCornerDetectionRun(id);
+    if (!run) {
+        throw new NotFoundError('Corner detection run not found');
+    }
+
+    // Delete the corner detection run (cascade deletes corner_detections)
+    await deleteCornerDetectionRun(id);
+
+    log.info(`Deleted corner detection run ${id}`);
+    res.json({ success: true });
+}));
+
+// POST /api/ml/corner-runs/:id/result - Store single corner detection result (internal, used by ML service)
+mlRouter.post('/corner-runs/:id/result', asyncHandler(async (req, res) => {
+    const { id: runId } = req.params;
+    const result = req.body;
+
+    await upsertCornerDetection({
+        sampleId: result.sample_id,
+        runId,
+        best: result.best,
+        hough: result.hough,
+        edge: result.edge,
+    });
+
+    res.json({ success: true });
+}));
+
+// GET /api/ml/corner-detections - Get corner detections for a run or samples
+mlRouter.get('/corner-detections', asyncHandler(async (req, res) => {
+    const { runId, sampleIds } = req.query;
+
+    if (runId && typeof runId === 'string') {
+        const results = await getCornerDetectionsByRunId(runId);
+        res.json({ results });
+    } else if (sampleIds && typeof sampleIds === 'string') {
+        const ids = sampleIds.split(',');
+        const resultsMap = await getCornerDetectionsForSamples(ids);
+        const results = Array.from(resultsMap.values());
+        res.json({ results });
+    } else {
+        throw new BadRequestError('runId or sampleIds query param required');
+    }
 }));

@@ -3,7 +3,7 @@ import { makeContext } from './config';
 import { http } from '../api/config';
 import { ML_API } from '../api/ml';
 import { useSocketEvent } from '../hooks/useSocketEvent';
-import type { TrainingRun, DetectionRun, Sample, ModelPipeline, Tag } from '@blokus-ai/shared';
+import type { TrainingRun, DetectionRun, Sample, ModelPipeline, Tag, CornerDetectionRun } from '@blokus-ai/shared';
 
 export type { Sample } from '@blokus-ai/shared';
 
@@ -23,6 +23,13 @@ export interface TrainingProgress {
 }
 
 export interface DetectionProgress {
+    processedCount: number;
+    totalCount: number;
+    successCount: number;
+    failedCount: number;
+}
+
+export interface CornerDetectionProgress {
     processedCount: number;
     totalCount: number;
     successCount: number;
@@ -59,6 +66,12 @@ export const [AdminProvider, useAdmin] = makeContext(() => {
     const [tags, setTags] = useState<Tag[]>([]);
     const [isLoadingTags, setIsLoadingTags] = useState(false);
     const [hasFetchedTags, setHasFetchedTags] = useState(false);
+
+    // Corner detection runs state
+    const [cornerRuns, setCornerRuns] = useState<CornerDetectionRun[]>([]);
+    const [isLoadingCornerRuns, setIsLoadingCornerRuns] = useState(false);
+    const [hasFetchedCornerRuns, setHasFetchedCornerRuns] = useState(false);
+    const [cornerProgress, setCornerProgress] = useState<Record<string, CornerDetectionProgress>>({});
 
     // Fetch samples with optional model and tag filters
     const fetchSamples = useCallback(async (forceFetch = false, modelId?: string | null, tagId?: string | null) => {
@@ -159,6 +172,24 @@ export const [AdminProvider, useAdmin] = makeContext(() => {
         }
     }, [hasFetchedTags]);
 
+    // Fetch corner detection runs
+    const fetchCornerRuns = useCallback(async (forceFetch = false) => {
+        if (hasFetchedCornerRuns && !forceFetch) {
+            return;
+        }
+
+        setIsLoadingCornerRuns(true);
+        try {
+            const runs = await ML_API.getCornerRuns();
+            setCornerRuns(runs);
+            setHasFetchedCornerRuns(true);
+        } catch {
+            // Error toast shown by http client
+        } finally {
+            setIsLoadingCornerRuns(false);
+        }
+    }, [hasFetchedCornerRuns]);
+
     // Load all data on mount
     useEffect(() => {
         fetchSamples();
@@ -166,7 +197,8 @@ export const [AdminProvider, useAdmin] = makeContext(() => {
         fetchDetectionRuns();
         fetchPipelines();
         fetchTags();
-    }, [fetchSamples, fetchTrainingRuns, fetchDetectionRuns, fetchPipelines, fetchTags]);
+        fetchCornerRuns();
+    }, [fetchSamples, fetchTrainingRuns, fetchDetectionRuns, fetchPipelines, fetchTags, fetchCornerRuns]);
 
     // Socket listeners for training runs
     useSocketEvent('training-run-started', (data) => {
@@ -252,6 +284,39 @@ export const [AdminProvider, useAdmin] = makeContext(() => {
         });
     }, []);
 
+    // Socket listeners for corner detection runs
+    useSocketEvent('corner-run-started', (data) => {
+        setCornerRuns(prev => [data.run, ...prev.filter(r => r.id !== data.run.id)]);
+    }, []);
+
+    useSocketEvent('corner-run-progress', (data) => {
+        setCornerProgress(prev => ({
+            ...prev,
+            [data.runId]: {
+                processedCount: data.processedCount,
+                totalCount: data.totalCount,
+                successCount: data.successCount,
+                failedCount: data.failedCount,
+            },
+        }));
+    }, []);
+
+    useSocketEvent('corner-run-completed', (data) => {
+        setCornerRuns(prev => prev.map(r => r.id === data.run.id ? data.run : r));
+        setCornerProgress(prev => {
+            const { [data.run.id]: _, ...rest } = prev;
+            return rest;
+        });
+    }, []);
+
+    useSocketEvent('corner-run-failed', (data) => {
+        setCornerRuns(prev => prev.map(r => r.id === data.run.id ? data.run : r));
+        setCornerProgress(prev => {
+            const { [data.run.id]: _, ...rest } = prev;
+            return rest;
+        });
+    }, []);
+
     // Helper functions for modifying state
     const addSample = useCallback((sample: Sample) => {
         setSamples(prev => [sample, ...prev]);
@@ -306,6 +371,14 @@ export const [AdminProvider, useAdmin] = makeContext(() => {
         setTags(prev => prev.filter(t => t.id !== id));
     }, []);
 
+    const addCornerRun = useCallback((run: CornerDetectionRun) => {
+        setCornerRuns(prev => [run, ...prev]);
+    }, []);
+
+    const removeCornerRun = useCallback((id: string) => {
+        setCornerRuns(prev => prev.filter(r => r.id !== id));
+    }, []);
+
     return {
         // Samples
         samples,
@@ -350,5 +423,13 @@ export const [AdminProvider, useAdmin] = makeContext(() => {
         fetchTags,
         addTag,
         removeTag,
+
+        // Corner detection runs
+        cornerRuns,
+        isLoadingCornerRuns,
+        fetchCornerRuns,
+        cornerProgress,
+        addCornerRun,
+        removeCornerRun,
     };
 });

@@ -305,3 +305,67 @@ export interface Tag {
     name: string;
     createdAt: string;
 }
+
+// ============================================================================
+// Corner Detection Run types
+// ============================================================================
+
+export type CornerDetectionRunStatus = 'pending' | 'running' | 'completed' | 'failed';
+
+export interface CornerDetectionRun {
+    id: string;
+    status: CornerDetectionRunStatus;
+    totalCount: number;
+    processedCount: number;
+    successCount: number | null;
+    failedCount: number | null;
+    startedAt: string | null;
+    completedAt: string | null;
+    durationMs: number | null;
+    errorMessage: string | null;
+    createdAt: string;
+}
+
+// Quality metrics for a corner detection result
+export interface CornerQualityMetrics {
+    aspectRatio: number | null;  // width/height, 1.0 = perfect square
+    areaRatio: number | null;    // detected area / bbox area
+    avgAngle: number | null;     // average corner angle in degrees, 90 = perfect
+}
+
+// Single method result with quality metrics
+export interface CornerMethodResult {
+    success: boolean;
+    corners: BoardCorners | null;
+    error: number | null;
+    quality: CornerQualityMetrics | null;
+}
+
+// Corner detection result for a single sample (3 methods: best, hough, edge)
+// "best" automatically selects between hough and edge based on quality metrics
+export interface CornerDetectionResult {
+    sampleId: string;
+    runId: string;
+    best: CornerMethodResult;
+    hough: CornerMethodResult;
+    edge: CornerMethodResult;
+}
+
+// Perspective correction from saved corners
+export interface PerspectiveFromCornersRequest {
+    best?: BoardCorners | null;
+    hough?: BoardCorners | null;
+    edge?: BoardCorners | null;
+}
+
+export interface PerspectiveMethodResult {
+    method: string;
+    image: string | null;  // base64 encoded
+    success: boolean;
+}
+
+export interface PerspectiveFromCornersResponse {
+    best: PerspectiveMethodResult;
+    hough: PerspectiveMethodResult;
+    edge: PerspectiveMethodResult;
+}
