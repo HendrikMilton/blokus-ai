@@ -1,58 +1,17 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { ChevronLeft, ChevronRight, Image } from 'lucide-react';
-import { http, API_URL } from '../../../../api/config';
+import { ChevronLeft, ChevronRight, Image, ExternalLink } from 'lucide-react';
+import { http } from '../../../../api/config';
 import { ML_API, BoardCorners } from '../../../../api/ml';
-import { Button } from '../../../../components/ui/Button';
-import type { BoundingBox, BoardDetection, SampleStatusFlags, CornerDetectionResult, GridLabels, PlayerColor } from '@blokus-ai/shared';
-import { getStatusLabels, PLAYER_COLORS } from '@blokus-ai/shared';
+import type { BoundingBox, BoardDetection, CornerDetectionResult, GridLabels, PlayerColor, GridPredictionRecord, Tag } from '@blokus-ai/shared';
+import { getStatusLabels } from '@blokus-ai/shared';
 import { statusColors, statusLabels, isUnlabeled } from '../../../../lib/status';
-
-// Grid cell colors for labeling
-const CELL_COLORS: { key: PlayerColor | null; label: string; color: string }[] = [
-    { key: null, label: 'Empty', color: '#e5e7eb' },      // gray-200
-    { key: 'blue', label: 'Blue', color: PLAYER_COLORS.blue },
-    { key: 'yellow', label: 'Yellow', color: PLAYER_COLORS.yellow },
-    { key: 'red', label: 'Red', color: PLAYER_COLORS.red },
-    { key: 'green', label: 'Green', color: PLAYER_COLORS.green },
-];
-
-// Create empty 20x20 grid
-const createEmptyGrid = (): GridLabels =>
-    Array.from({ length: 20 }, () => Array.from({ length: 20 }, () => null));
-
-// Corner labels and colors
-const CORNER_CONFIG = [
-    { key: 'topLeft' as const, label: 'TL', color: '#ef4444' },     // red
-    { key: 'topRight' as const, label: 'TR', color: '#22c55e' },    // green
-    { key: 'bottomRight' as const, label: 'BR', color: '#3b82f6' }, // blue
-    { key: 'bottomLeft' as const, label: 'BL', color: '#eab308' },  // yellow
-];
-
-type CornerKey = 'topLeft' | 'topRight' | 'bottomRight' | 'bottomLeft';
-type PartialCorners = Partial<Record<CornerKey, { x: number; y: number }>>;
-
-interface Sample {
-    id: string;
-    filename: string;
-    status: SampleStatusFlags;
-    created_at: string;
-    imageUrl?: string;
-    thumbnailUrl?: string;
-}
-
-interface SamplesResponse {
-    samples: Sample[];
-}
-
-interface LabelData {
-    prediction: BoardDetection | null;
-    correction: BoardDetection | null;
-    isModified: boolean;
-}
-
-type DragHandle = 'nw' | 'ne' | 'sw' | 'se' | 'move' | null;
+import { OriginalImagePanel } from './OriginalImagePanel';
+import { GridLabelingPanel } from './GridLabelingPanel';
+import { LabelingControls } from './LabelingControls';
+import { SampleTagsSection } from '../[id]/SampleTagsSection';
+import { CORNER_CONFIG, createEmptyGrid, type Sample, type SamplesResponse, type LabelData, type DragHandle, type PartialCorners } from './types';
 
 export const LabelingPage = () => {
     const navigate = useNavigate();
@@ -72,7 +31,6 @@ export const LabelingPage = () => {
     const [dragStartPos, setDragStartPos] = useState<{ x: number; y: number } | null>(null);
     const [hideBox, setHideBox] = useState(false);
     const fastModeRef = useRef(false);
-    const imageContainerRef = useRef<HTMLDivElement>(null);
 
     // Corner labeling state
     const [isCornerMode, setIsCornerMode] = useState(false);
@@ -88,7 +46,10 @@ export const LabelingPage = () => {
     const [gridLabels, setGridLabels] = useState<GridLabels | null>(null);
     const [selectedColor, setSelectedColor] = useState<PlayerColor | null>(null);
     const [isGridModified, setIsGridModified] = useState(false);
-    const gridContainerRef = useRef<HTMLDivElement>(null);
+    const [gridPrediction, setGridPrediction] = useState<GridPredictionRecord | null>(null);
+
+    // Tags state
+    const [allTags, setAllTags] = useState<Tag[]>([]);
 
     const currentSample = samples[currentIndex] || null;
     const currentDetection = labelData.correction || labelData.prediction;
@@ -136,7 +97,18 @@ export const LabelingPage = () => {
             }
         };
         loadSamples();
-     
+
+        // Load all tags for tag selector
+        const loadTags = async () => {
+            try {
+                const tags = await ML_API.getTags();
+                setAllTags(tags);
+            } catch {
+                // Ignore error
+            }
+        };
+        loadTags();
+
     }, []); // Only run once on mount
 
     // Load existing label when sample changes
@@ -161,6 +133,7 @@ export const LabelingPage = () => {
             setIsGridMode(false);
             setGridLabels(null);
             setIsGridModified(false);
+            setGridPrediction(null);
 
             // If sample has any labels, load the existing detection
             if (!isUnlabeled(currentSample.status)) {
@@ -200,6 +173,14 @@ export const LabelingPage = () => {
                 setGridLabels(grid);
             } catch {
                 setGridLabels(null);
+            }
+
+            // Load grid prediction (AI)
+            try {
+                const predictions = await ML_API.getGridPredictions([currentSample.id]);
+                setGridPrediction(predictions.length > 0 ? predictions[0] : null);
+            } catch {
+                setGridPrediction(null);
             }
         };
         loadExistingLabel();
@@ -470,6 +451,138 @@ export const LabelingPage = () => {
         }
     }, [isCornerMode, cornerCount, pendingCorners, currentSample, labelData, currentIndex, samples, navigate]);
 
+    // Get relative position helper for pointer events
+    const getRelativePosition = useCallback((clientX: number, clientY: number, containerRef: React.RefObject<HTMLDivElement>) => {
+        if (!containerRef.current) {
+            return null;
+        }
+        const rect = containerRef.current.getBoundingClientRect();
+        return {
+            x: Math.max(0, Math.min(1, (clientX - rect.left) / rect.width)),
+            y: Math.max(0, Math.min(1, (clientY - rect.top) / rect.height)),
+        };
+    }, []);
+
+    const handlePointerDown = useCallback((e: React.PointerEvent, containerRef: React.RefObject<HTMLDivElement>) => {
+        const pos = getRelativePosition(e.clientX, e.clientY, containerRef);
+        if (!pos) {
+            return;
+        }
+
+        // Handle corner mode clicks
+        if (isCornerMode) {
+            e.preventDefault();
+            handleCornerClick(pos);
+            return;
+        }
+
+        // Check for handle interactions first (even in draw mode)
+        if (boundingBox) {
+            const handleSize = 0.03;
+            const box = boundingBox;
+            const corners: { handle: DragHandle; x: number; y: number }[] = [
+                { handle: 'nw', x: box.x, y: box.y },
+                { handle: 'ne', x: box.x + box.width, y: box.y },
+                { handle: 'sw', x: box.x, y: box.y + box.height },
+                { handle: 'se', x: box.x + box.width, y: box.y + box.height },
+            ];
+
+            for (const corner of corners) {
+                if (Math.abs(pos.x - corner.x) < handleSize && Math.abs(pos.y - corner.y) < handleSize) {
+                    e.preventDefault();
+                    setDragHandle(corner.handle);
+                    setDragStartBox({ ...box });
+                    setDragStartPos(pos);
+                    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+                    return;
+                }
+            }
+
+            // Check for move (clicking inside the box)
+            if (pos.x >= box.x && pos.x <= box.x + box.width &&
+                pos.y >= box.y && pos.y <= box.y + box.height) {
+                e.preventDefault();
+                setDragHandle('move');
+                setDragStartBox({ ...box });
+                setDragStartPos(pos);
+                (e.target as HTMLElement).setPointerCapture(e.pointerId);
+                return;
+            }
+        }
+
+        // If in draw mode and clicked outside existing box, start drawing new box
+        if (isDrawingBox) {
+            e.preventDefault();
+            setDrawStart(pos);
+            (e.target as HTMLElement).setPointerCapture(e.pointerId);
+            return;
+        }
+    }, [isCornerMode, isDrawingBox, boundingBox, handleCornerClick, getRelativePosition]);
+
+    const handlePointerMove = useCallback((e: React.PointerEvent, containerRef: React.RefObject<HTMLDivElement>) => {
+        const pos = getRelativePosition(e.clientX, e.clientY, containerRef);
+        if (!pos) {
+            return;
+        }
+
+        if (isDrawingBox && drawStart) {
+            e.preventDefault();
+            const x = Math.min(drawStart.x, pos.x);
+            const y = Math.min(drawStart.y, pos.y);
+            const width = Math.abs(pos.x - drawStart.x);
+            const height = Math.abs(pos.y - drawStart.y);
+            updateBoundingBox({ x, y, width, height });
+            return;
+        }
+
+        if (dragHandle && dragStartBox && dragStartPos) {
+            e.preventDefault();
+            const dx = pos.x - dragStartPos.x;
+            const dy = pos.y - dragStartPos.y;
+            let newBox: BoundingBox;
+
+            switch (dragHandle) {
+            case 'move':
+                newBox = {
+                    x: Math.max(0, Math.min(1 - dragStartBox.width, dragStartBox.x + dx)),
+                    y: Math.max(0, Math.min(1 - dragStartBox.height, dragStartBox.y + dy)),
+                    width: dragStartBox.width,
+                    height: dragStartBox.height,
+                };
+                break;
+            case 'nw':
+                newBox = { x: dragStartBox.x + dx, y: dragStartBox.y + dy, width: dragStartBox.width - dx, height: dragStartBox.height - dy };
+                break;
+            case 'ne':
+                newBox = { x: dragStartBox.x, y: dragStartBox.y + dy, width: dragStartBox.width + dx, height: dragStartBox.height - dy };
+                break;
+            case 'sw':
+                newBox = { x: dragStartBox.x + dx, y: dragStartBox.y, width: dragStartBox.width - dx, height: dragStartBox.height + dy };
+                break;
+            case 'se':
+                newBox = { x: dragStartBox.x, y: dragStartBox.y, width: dragStartBox.width + dx, height: dragStartBox.height + dy };
+                break;
+            default:
+                return;
+            }
+            updateBoundingBox(newBox);
+        }
+    }, [isDrawingBox, drawStart, dragHandle, dragStartBox, dragStartPos, updateBoundingBox, getRelativePosition]);
+
+    const handlePointerUp = useCallback((e: React.PointerEvent) => {
+        if (isDrawingBox && drawStart) {
+            (e.target as HTMLElement).releasePointerCapture(e.pointerId);
+            setDrawStart(null);
+            // Stay in draw mode so user can adjust with arrows
+        }
+        if (dragHandle) {
+            (e.target as HTMLElement).releasePointerCapture(e.pointerId);
+            setDragHandle(null);
+            setDragStartBox(null);
+            setDragStartPos(null);
+        }
+    }, [isDrawingBox, drawStart, dragHandle]);
+
     // Keyboard navigation
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
@@ -660,6 +773,18 @@ export const LabelingPage = () => {
             } else if (key === 'w') {
                 e.preventDefault();
                 setSelectedColor(null); // White/empty
+            } else if (key === 'a') {
+                e.preventDefault();
+                // Accept AI prediction and save as human labels
+                if (gridPrediction && currentSample) {
+                    setGridLabels(gridPrediction.grid);
+                    ML_API.saveGridLabel(currentSample.id, gridPrediction.grid).then(() => {
+                        toast.success('AI labels accepted and saved!');
+                        setIsGridModified(false);
+                    }).catch(() => {
+                        toast.error('Failed to save AI labels');
+                    });
+                }
             }
         };
 
@@ -675,157 +800,7 @@ export const LabelingPage = () => {
             window.removeEventListener('keydown', handleKeyDown);
             window.removeEventListener('keyup', handleKeyUp);
         };
-    }, [currentIndex, samples.length, labelData.correction, currentSample, currentDetection, updateCorrection, goToPrevious, goToNext, handleSaveAndNext, handleDeleteLabel, isDrawingBox, boundingBox, updateBoundingBox, saveAndNext, toggleCornerMode, savedCorners, toggleGridMode]);
-
-    const getRelativePosition = useCallback((clientX: number, clientY: number) => {
-        if (!imageContainerRef.current) {
-            return null;
-        }
-        const rect = imageContainerRef.current.getBoundingClientRect();
-        return {
-            x: Math.max(0, Math.min(1, (clientX - rect.left) / rect.width)),
-            y: Math.max(0, Math.min(1, (clientY - rect.top) / rect.height)),
-        };
-    }, []);
-
-    const handlePointerDown = (e: React.PointerEvent) => {
-        const pos = getRelativePosition(e.clientX, e.clientY);
-        if (!pos) {
-            return;
-        }
-
-        // Handle corner mode clicks
-        if (isCornerMode) {
-            e.preventDefault();
-            handleCornerClick(pos);
-            return;
-        }
-
-        // Check for handle interactions first (even in draw mode)
-        if (boundingBox) {
-            const handleSize = 0.03;
-            const box = boundingBox;
-            const corners: { handle: DragHandle; x: number; y: number }[] = [
-                { handle: 'nw', x: box.x, y: box.y },
-                { handle: 'ne', x: box.x + box.width, y: box.y },
-                { handle: 'sw', x: box.x, y: box.y + box.height },
-                { handle: 'se', x: box.x + box.width, y: box.y + box.height },
-            ];
-
-            for (const corner of corners) {
-                if (Math.abs(pos.x - corner.x) < handleSize && Math.abs(pos.y - corner.y) < handleSize) {
-                    e.preventDefault();
-                    setDragHandle(corner.handle);
-                    setDragStartBox({ ...box });
-                    setDragStartPos(pos);
-                    (e.target as HTMLElement).setPointerCapture(e.pointerId);
-                    return;
-                }
-            }
-
-            // Check for move (clicking inside the box)
-            if (pos.x >= box.x && pos.x <= box.x + box.width &&
-                pos.y >= box.y && pos.y <= box.y + box.height) {
-                e.preventDefault();
-                setDragHandle('move');
-                setDragStartBox({ ...box });
-                setDragStartPos(pos);
-                (e.target as HTMLElement).setPointerCapture(e.pointerId);
-                return;
-            }
-        }
-
-        // If in draw mode and clicked outside existing box, start drawing new box
-        if (isDrawingBox) {
-            e.preventDefault();
-            setDrawStart(pos);
-            (e.target as HTMLElement).setPointerCapture(e.pointerId);
-            return;
-        }
-    };
-
-    const handlePointerMove = (e: React.PointerEvent) => {
-        const pos = getRelativePosition(e.clientX, e.clientY);
-        if (!pos) {
-            return;
-        }
-
-        if (isDrawingBox && drawStart) {
-            e.preventDefault();
-            const x = Math.min(drawStart.x, pos.x);
-            const y = Math.min(drawStart.y, pos.y);
-            const width = Math.abs(pos.x - drawStart.x);
-            const height = Math.abs(pos.y - drawStart.y);
-            updateBoundingBox({ x, y, width, height });
-            return;
-        }
-
-        if (dragHandle && dragStartBox && dragStartPos) {
-            e.preventDefault();
-            const dx = pos.x - dragStartPos.x;
-            const dy = pos.y - dragStartPos.y;
-            let newBox: BoundingBox;
-
-            switch (dragHandle) {
-            case 'move':
-                newBox = {
-                    x: Math.max(0, Math.min(1 - dragStartBox.width, dragStartBox.x + dx)),
-                    y: Math.max(0, Math.min(1 - dragStartBox.height, dragStartBox.y + dy)),
-                    width: dragStartBox.width,
-                    height: dragStartBox.height,
-                };
-                break;
-            case 'nw':
-                newBox = { x: dragStartBox.x + dx, y: dragStartBox.y + dy, width: dragStartBox.width - dx, height: dragStartBox.height - dy };
-                break;
-            case 'ne':
-                newBox = { x: dragStartBox.x, y: dragStartBox.y + dy, width: dragStartBox.width + dx, height: dragStartBox.height - dy };
-                break;
-            case 'sw':
-                newBox = { x: dragStartBox.x + dx, y: dragStartBox.y, width: dragStartBox.width - dx, height: dragStartBox.height + dy };
-                break;
-            case 'se':
-                newBox = { x: dragStartBox.x, y: dragStartBox.y, width: dragStartBox.width + dx, height: dragStartBox.height + dy };
-                break;
-            default:
-                return;
-            }
-            updateBoundingBox(newBox);
-        }
-    };
-
-    const handlePointerUp = (e: React.PointerEvent) => {
-        if (isDrawingBox && drawStart) {
-            (e.target as HTMLElement).releasePointerCapture(e.pointerId);
-            setDrawStart(null);
-            // Stay in draw mode so user can adjust with arrows
-        }
-        if (dragHandle) {
-            (e.target as HTMLElement).releasePointerCapture(e.pointerId);
-            setDragHandle(null);
-            setDragStartBox(null);
-            setDragStartPos(null);
-        }
-    };
-
-    const getCursor = () => {
-        if (isCornerMode) {
-            return 'crosshair';
-        }
-        if (isDrawingBox) {
-            return 'crosshair';
-        }
-        if (dragHandle === 'move') {
-            return 'move';
-        }
-        if (dragHandle === 'nw' || dragHandle === 'se') {
-            return 'nwse-resize';
-        }
-        if (dragHandle === 'ne' || dragHandle === 'sw') {
-            return 'nesw-resize';
-        }
-        return 'default';
-    };
+    }, [currentIndex, samples.length, labelData.correction, currentSample, currentDetection, updateCorrection, goToPrevious, goToNext, handleSaveAndNext, handleDeleteLabel, isDrawingBox, boundingBox, updateBoundingBox, saveAndNext, toggleCornerMode, savedCorners, toggleGridMode, gridPrediction]);
 
     if (isLoading) {
         return (
@@ -862,10 +837,6 @@ export const LabelingPage = () => {
         );
     }
 
-    const isInteracting = isDrawingBox || dragHandle !== null || drawStart !== null;
-    // Show handles when there's a box and we're not actively drawing a new one with mouse
-    const isEditable = boundingBox && !drawStart;
-
     return (
         <div className="space-y-4">
             {/* Header */}
@@ -891,440 +862,105 @@ export const LabelingPage = () => {
                     <span className="text-sm text-secondary ml-1">
                         {currentIndex + 1} / {samples.length}
                     </span>
+                    <button
+                        onClick={() => navigate(`/admin/images/${currentSample.id}`)}
+                        className="p-1.5 rounded-lg hover:bg-surface-dim transition-colors text-secondary hover:text-foreground"
+                        title="View image details"
+                    >
+                        <ExternalLink className="w-4 h-4" />
+                    </button>
                 </div>
             </div>
 
-            {/* Main content */}
-            <div className="space-y-4 max-w-5xl mx-auto">
-                {/* Row 1: Images side by side */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    {/* Original image with navigation */}
-                    <div className="space-y-2">
-                        <h3 className="text-sm font-medium text-secondary">Original Image</h3>
-                        <div className="flex items-center gap-2">
-                            <button
-                                onClick={goToPrevious}
-                                disabled={currentIndex === 0}
-                                className="p-1.5 rounded-lg bg-surface-dim text-foreground enabled:hover:bg-primary enabled:hover:text-white disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-                            >
-                                <ChevronLeft className="w-4 h-4" />
-                            </button>
+            {/* Main content with navigation arrows outside, centered */}
+            <div className="flex items-center justify-center gap-4">
+                {/* Left navigation arrow */}
+                <button
+                    onClick={goToPrevious}
+                    disabled={currentIndex === 0}
+                    className="p-2 rounded-lg bg-surface-dim text-foreground enabled:hover:bg-primary enabled:hover:text-white disabled:opacity-30 disabled:cursor-not-allowed transition-colors shrink-0"
+                >
+                    <ChevronLeft className="w-5 h-5" />
+                </button>
 
-                            <div
-                                ref={imageContainerRef}
-                                className="flex-1 relative bg-surface rounded-lg border border-border overflow-hidden max-w-md"
+                {/* Content area */}
+                <div className="space-y-4 w-full max-w-6xl">
+                    {/* Row 1: Original image (1fr) + Grid panel with 2 grids (2fr) */}
+                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                        {/* Original image - takes 1 column */}
+                        <div className="space-y-2">
+                            <h3 className="text-sm font-medium text-secondary">Original Image</h3>
+                            <OriginalImagePanel
+                                currentSample={currentSample}
+                                labelData={labelData}
+                                boundingBox={boundingBox || null}
+                                hideBox={hideBox}
+                                isDrawingBox={isDrawingBox}
+                                drawStart={drawStart}
+                                dragHandle={dragHandle}
+                                isCornerMode={isCornerMode}
+                                cornerCount={cornerCount}
+                                pendingCorners={pendingCorners}
+                                savedCorners={savedCorners}
                                 onPointerDown={handlePointerDown}
                                 onPointerMove={handlePointerMove}
                                 onPointerUp={handlePointerUp}
-                                onPointerCancel={handlePointerUp}
-                                style={{
-                                    touchAction: isInteracting || isDrawingBox || boundingBox ? 'none' : 'auto',
-                                    cursor: getCursor(),
-                                }}
-                            >
-                        <img
-                            src={currentSample.thumbnailUrl || currentSample.imageUrl || `${API_URL}/api/ml/samples/${currentSample.id}/image`}
-                            alt={`Sample ${currentSample.id}`}
-                            className="w-full h-auto select-none"
-                            draggable={false}
-                        />
-                        {/* Bounding box overlay */}
-                        {boundingBox && !hideBox && (
-                            <div
-                                className={`absolute rounded-sm ${
-                                    labelData.correction?.boundingBox
-                                        ? 'border-2 border-success'
-                                        : 'border-2 border-primary border-dashed'
-                                } ${isEditable ? 'cursor-move' : ''}`}
-                                style={{
-                                    left: `${boundingBox.x * 100}%`,
-                                    top: `${boundingBox.y * 100}%`,
-                                    width: `${boundingBox.width * 100}%`,
-                                    height: `${boundingBox.height * 100}%`,
-                                    pointerEvents: drawStart ? 'none' : 'auto',
-                                }}
-                            >
-                                {isEditable && (
-                                    <>
-                                        <div className="absolute -left-2 -top-2 w-4 h-4 bg-white border-2 border-success rounded-full cursor-nwse-resize shadow-sm" />
-                                        <div className="absolute -right-2 -top-2 w-4 h-4 bg-white border-2 border-success rounded-full cursor-nesw-resize shadow-sm" />
-                                        <div className="absolute -left-2 -bottom-2 w-4 h-4 bg-white border-2 border-success rounded-full cursor-nesw-resize shadow-sm" />
-                                        <div className="absolute -right-2 -bottom-2 w-4 h-4 bg-white border-2 border-success rounded-full cursor-nwse-resize shadow-sm" />
-                                    </>
-                                )}
-                            </div>
-                        )}
-                        {isDrawingBox && (
-                            <div className="absolute inset-0 bg-black/10 pointer-events-none" />
-                        )}
-
-                        {/* Saved corners overlay */}
-                        {savedCorners && !isCornerMode && (
-                            <>
-                                {/* Dashed lines connecting corners */}
-                                <svg className="absolute inset-0 w-full h-full pointer-events-none" style={{ overflow: 'visible' }}>
-                                    <polygon
-                                        points={`${savedCorners.topLeft.x * 100}%,${savedCorners.topLeft.y * 100}% ${savedCorners.topRight.x * 100}%,${savedCorners.topRight.y * 100}% ${savedCorners.bottomRight.x * 100}%,${savedCorners.bottomRight.y * 100}% ${savedCorners.bottomLeft.x * 100}%,${savedCorners.bottomLeft.y * 100}%`}
-                                        fill="none"
-                                        stroke="cyan"
-                                        strokeWidth="2"
-                                        strokeDasharray="6,4"
-                                    />
-                                </svg>
-                                {/* Corner dots */}
-                                {CORNER_CONFIG.map(({ key, label, color }) => {
-                                    const corner = savedCorners[key];
-                                    return (
-                                        <div
-                                            key={key}
-                                            className="absolute pointer-events-none"
-                                            style={{
-                                                left: `${corner.x * 100}%`,
-                                                top: `${corner.y * 100}%`,
-                                                transform: 'translate(-50%, -50%)',
-                                            }}
-                                        >
-                                            <div
-                                                className="w-4 h-4 rounded-full border-2 border-white"
-                                                style={{ backgroundColor: color }}
-                                            />
-                                            <div
-                                                className="absolute -top-5 left-1/2 -translate-x-1/2 text-[10px] font-bold px-1 rounded"
-                                                style={{ backgroundColor: color, color: 'white' }}
-                                            >
-                                                {label}
-                                            </div>
-                                        </div>
-                                    );
-                                })}
-                            </>
-                        )}
-
-                        {/* Pending corners overlay (while labeling) */}
-                        {isCornerMode && Object.keys(pendingCorners).length > 0 && (
-                            <>
-                                {/* Partial lines connecting placed corners */}
-                                {cornerCount >= 2 && (
-                                    <svg className="absolute inset-0 w-full h-full pointer-events-none" style={{ overflow: 'visible' }}>
-                                        {cornerCount >= 2 && pendingCorners.topLeft && pendingCorners.topRight && (
-                                            <line
-                                                x1={`${pendingCorners.topLeft.x * 100}%`}
-                                                y1={`${pendingCorners.topLeft.y * 100}%`}
-                                                x2={`${pendingCorners.topRight.x * 100}%`}
-                                                y2={`${pendingCorners.topRight.y * 100}%`}
-                                                stroke="cyan"
-                                                strokeWidth="2"
-                                                strokeDasharray="6,4"
-                                            />
-                                        )}
-                                        {cornerCount >= 3 && pendingCorners.topRight && pendingCorners.bottomRight && (
-                                            <line
-                                                x1={`${pendingCorners.topRight.x * 100}%`}
-                                                y1={`${pendingCorners.topRight.y * 100}%`}
-                                                x2={`${pendingCorners.bottomRight.x * 100}%`}
-                                                y2={`${pendingCorners.bottomRight.y * 100}%`}
-                                                stroke="cyan"
-                                                strokeWidth="2"
-                                                strokeDasharray="6,4"
-                                            />
-                                        )}
-                                        {cornerCount >= 4 && pendingCorners.bottomRight && pendingCorners.bottomLeft && (
-                                            <line
-                                                x1={`${pendingCorners.bottomRight.x * 100}%`}
-                                                y1={`${pendingCorners.bottomRight.y * 100}%`}
-                                                x2={`${pendingCorners.bottomLeft.x * 100}%`}
-                                                y2={`${pendingCorners.bottomLeft.y * 100}%`}
-                                                stroke="cyan"
-                                                strokeWidth="2"
-                                                strokeDasharray="6,4"
-                                            />
-                                        )}
-                                        {cornerCount >= 4 && pendingCorners.bottomLeft && pendingCorners.topLeft && (
-                                            <line
-                                                x1={`${pendingCorners.bottomLeft.x * 100}%`}
-                                                y1={`${pendingCorners.bottomLeft.y * 100}%`}
-                                                x2={`${pendingCorners.topLeft.x * 100}%`}
-                                                y2={`${pendingCorners.topLeft.y * 100}%`}
-                                                stroke="cyan"
-                                                strokeWidth="2"
-                                                strokeDasharray="6,4"
-                                            />
-                                        )}
-                                    </svg>
-                                )}
-                                {/* Pending corner dots */}
-                                {CORNER_CONFIG.slice(0, cornerCount).map(({ key, label, color }) => {
-                                    const corner = pendingCorners[key];
-                                    if (!corner) {
-                                        return null;
-                                    }
-                                    return (
-                                        <div
-                                            key={key}
-                                            className="absolute pointer-events-none"
-                                            style={{
-                                                left: `${corner.x * 100}%`,
-                                                top: `${corner.y * 100}%`,
-                                                transform: 'translate(-50%, -50%)',
-                                            }}
-                                        >
-                                            <div
-                                                className="w-4 h-4 rounded-full border-2 border-white"
-                                                style={{ backgroundColor: color }}
-                                            />
-                                            <div
-                                                className="absolute -top-5 left-1/2 -translate-x-1/2 text-[10px] font-bold px-1 rounded"
-                                                style={{ backgroundColor: color, color: 'white' }}
-                                            >
-                                                {label}
-                                            </div>
-                                        </div>
-                                    );
-                                })}
-                            </>
-                        )}
-
-                        {/* Corner mode overlay */}
-                        {isCornerMode && (
-                            <div className="absolute inset-0 bg-warning/10 pointer-events-none" />
-                        )}
-                            </div>
-
-                            <button
-                                onClick={goToNext}
-                                disabled={currentIndex === samples.length - 1}
-                                className="p-1.5 rounded-lg bg-surface-dim text-foreground enabled:hover:bg-primary enabled:hover:text-white disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-                            >
-                                <ChevronRight className="w-4 h-4" />
-                            </button>
+                            />
                         </div>
-                        {/* Mode hints under image */}
-                        {isCornerMode && (
-                            <p className="text-xs text-warning text-center">
-                                Corner Mode: Click {CORNER_CONFIG[cornerCount]?.label || 'done'} · <kbd className="px-1 py-0.5 bg-surface-dim rounded text-[10px]">C</kbd> cancel
-                            </p>
-                        )}
-                        {isDrawingBox && (
-                            <p className="text-xs text-primary text-center">
-                                Draw Mode · <kbd className="px-1 py-0.5 bg-surface-dim rounded text-[10px]">Arrows</kbd> move · <kbd className="px-1 py-0.5 bg-surface-dim rounded text-[10px]">Shift</kbd> resize
-                            </p>
-                        )}
+
+                        {/* Grid labeling panel - takes 2 columns for the 2 grids */}
+                        <div className="lg:col-span-2">
+                            <GridLabelingPanel
+                                sampleId={currentSample.id}
+                                cornerDetection={cornerDetection}
+                                gridLabels={gridLabels}
+                                selectedColor={selectedColor}
+                                isGridMode={isGridMode}
+                                isGridModified={isGridModified}
+                                initialPrediction={gridPrediction}
+                                isEntireBoardVisible={currentDetection?.isEntireBoardVisible ?? false}
+                                onCellClick={handleGridCellClick}
+                                onColorSelect={setSelectedColor}
+                                onSave={saveGridLabels}
+                                setGridLabels={setGridLabels}
+                            />
+                        </div>
                     </div>
 
-                    {/* Grid labeling image - always shown */}
-                    <div className="space-y-2">
-                        <div className="flex items-center justify-between">
-                            <h3 className={`text-sm font-medium ${isGridMode ? 'text-success' : 'text-secondary'}`}>
-                                Grid Labeling {isGridMode && <span className="ml-1 px-1.5 py-0.5 bg-success/20 rounded text-[10px]">ACTIVE</span>}
-                            </h3>
-                            {/* Color palette */}
-                            <div className="flex gap-1">
-                                {CELL_COLORS.map(({ key, label, color }) => (
-                                    <button
-                                        key={label}
-                                        onClick={() => setSelectedColor(key)}
-                                        className={`w-6 h-6 rounded border-2 transition-all ${
-                                            selectedColor === key ? 'border-foreground scale-110 ring-2 ring-foreground/30' : 'border-border'
-                                        }`}
-                                        style={{ backgroundColor: color }}
-                                        title={label}
-                                    />
-                                ))}
-                            </div>
+                    {/* Row 2: Controls and Tags */}
+                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                        <div className="lg:col-span-2">
+                            <LabelingControls
+                                currentSample={currentSample}
+                                labelData={labelData}
+                                currentDetection={currentDetection || null}
+                                boundingBox={boundingBox || null}
+                                isDrawingBox={isDrawingBox}
+                                isCornerMode={isCornerMode}
+                                cornerCount={cornerCount}
+                                onDrawModeToggle={() => setIsDrawingBox(!isDrawingBox)}
+                                onDeleteLabel={handleDeleteLabel}
+                                onSaveAndNext={handleSaveAndNext}
+                                onToggleBoardDetected={toggleBoardDetected}
+                                onToggleEntireBoardVisible={toggleEntireBoardVisible}
+                                updateCorrection={updateCorrection}
+                                updateBoundingBox={updateBoundingBox}
+                            />
                         </div>
-                        {(() => {
-                            const croppedUrl = cornerDetection?.best.croppedUrl || cornerDetection?.hough.croppedUrl || cornerDetection?.edge.croppedUrl;
-                            if (!croppedUrl) {
-                                return (
-                                    <div className="aspect-square max-w-md bg-surface-dim rounded-lg border border-border flex items-center justify-center">
-                                        <p className="text-sm text-muted text-center px-4">Run corner detection to enable grid labeling</p>
-                                    </div>
-                                );
-                            }
-                            // Initialize grid if needed
-                            const grid = gridLabels || createEmptyGrid();
-                            return (
-                                <div
-                                    ref={gridContainerRef}
-                                    className={`relative aspect-square max-w-md bg-surface rounded-lg border-2 overflow-hidden ${isGridMode ? 'border-success' : 'border-border'}`}
-                                >
-                                    <img
-                                        src={croppedUrl}
-                                        alt="Cropped board"
-                                        className="absolute inset-0 w-full h-full object-cover"
-                                        draggable={false}
-                                    />
-                                    {/* 20x20 grid overlay */}
-                                    <div className="absolute inset-0 grid grid-cols-20 grid-rows-20">
-                                        {grid.map((row, ri) =>
-                                            row.map((cell, ci) => (
-                                                <button
-                                                    key={`${ri}-${ci}`}
-                                                    onClick={() => {
-                                                        if (!gridLabels) {
-                                                            setGridLabels(createEmptyGrid());
-                                                        }
-                                                        handleGridCellClick(ri, ci);
-                                                    }}
-                                                    className="border border-white/20 hover:border-white/60 transition-colors"
-                                                    style={{
-                                                        backgroundColor: cell ? `${PLAYER_COLORS[cell]}99` : 'transparent',
-                                                    }}
-                                                />
-                                            ))
-                                        )}
-                                    </div>
-                                </div>
-                            );
-                        })()}
-                        {isGridModified && (
-                            <Button
-                                variant="success"
-                                size="sm"
-                                className="w-full max-w-md"
-                                onClick={saveGridLabels}
-                            >
-                                Save Grid Labels
-                            </Button>
-                        )}
+                        <div>
+                            <SampleTagsSection sampleId={currentSample.id} allTags={allTags} />
+                        </div>
                     </div>
                 </div>
 
-                {/* Row 2: Controls */}
-                <div className="space-y-4">
-                    {/* Action buttons */}
-                    <div className="flex gap-2">
-                        {isDrawingBox ? (
-                            <Button onClick={() => setIsDrawingBox(false)} variant="secondary" className="flex-1">
-                                Cancel Drawing (Esc)
-                            </Button>
-                        ) : (
-                            <Button onClick={() => {
-                                setIsDrawingBox(true);
-                                if (!boundingBox) {
-                                    updateBoundingBox({ x: 0.25, y: 0.25, width: 0.5, height: 0.5 });
-                                }
-                            }} variant="secondary" className="flex-1">
-                                Draw Bounding Box (D)
-                            </Button>
-                        )}
-
-                        {!isUnlabeled(currentSample.status) && (
-                            <Button
-                                onClick={handleDeleteLabel}
-                                variant="danger"
-                                className="shrink-0"
-                            >
-                                Delete (X)
-                            </Button>
-                        )}
-                    </div>
-
-                    {labelData.correction && (
-                        <Button
-                            onClick={handleSaveAndNext}
-                            variant="success"
-                            className="w-full"
-                        >
-                            Save & Next (Enter)
-                        </Button>
-                    )}
-
-                    {/* Label toggles */}
-                    <div className="bg-surface rounded-lg border border-border p-4 space-y-3">
-                        <div className="flex items-center justify-between gap-4">
-                            <span className="text-sm text-secondary">Board detected</span>
-                            <div className="flex rounded-lg overflow-hidden border border-border shrink-0">
-                                <button
-                                    onClick={() => {
-                                        if (!currentDetection?.hasBoardDetected) {
-                                            toggleBoardDetected();
-                                        }
-                                    }}
-                                    className={`px-3 py-1 text-sm font-medium transition-colors ${
-                                        currentDetection?.hasBoardDetected === true ? 'bg-success text-white' : 'bg-surface hover:bg-surface-dim text-secondary'
-                                    }`}
-                                >
-                                    Yes (1)
-                                </button>
-                                <button
-                                    onClick={() => {
-                                        if (currentDetection?.hasBoardDetected !== false) {
-                                            updateCorrection({ hasBoardDetected: false, isEntireBoardVisible: false, boundingBox: null });
-                                        }
-                                    }}
-                                    className={`px-3 py-1 text-sm font-medium transition-colors ${
-                                        currentDetection?.hasBoardDetected === false ? 'bg-error text-white' : 'bg-surface hover:bg-surface-dim text-secondary'
-                                    }`}
-                                >
-                                    No (2)
-                                </button>
-                            </div>
-                        </div>
-
-                        <div className="flex items-center justify-between gap-4">
-                            <span className="text-sm text-secondary">Entire board visible</span>
-                            <div className={`flex rounded-lg overflow-hidden border border-border shrink-0 ${!currentDetection?.hasBoardDetected ? 'opacity-50 pointer-events-none' : ''}`}>
-                                <button
-                                    onClick={() => {
-                                        if (!currentDetection?.isEntireBoardVisible) {
-                                            toggleEntireBoardVisible();
-                                        }
-                                    }}
-                                    className={`px-3 py-1 text-sm font-medium transition-colors ${
-                                        currentDetection?.isEntireBoardVisible === true ? 'bg-success text-white' : 'bg-surface hover:bg-surface-dim text-secondary'
-                                    }`}
-                                >
-                                    Yes (3)
-                                </button>
-                                <button
-                                    onClick={() => {
-                                        if (currentDetection?.isEntireBoardVisible !== false) {
-                                            updateCorrection({ isEntireBoardVisible: false });
-                                        }
-                                    }}
-                                    className={`px-3 py-1 text-sm font-medium transition-colors ${
-                                        currentDetection?.hasBoardDetected && currentDetection?.isEntireBoardVisible === false ? 'bg-error text-white' : 'bg-surface hover:bg-surface-dim text-secondary'
-                                    }`}
-                                >
-                                    No (4)
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-
-                    {/* Shortcut hints */}
-                    <div className="bg-surface-dim rounded-lg p-3 text-xs text-muted space-y-1">
-                        <p className="font-medium text-secondary mb-2">Keyboard Shortcuts</p>
-                        <p>
-                            <kbd className="px-1.5 py-0.5 bg-surface rounded text-[10px]">←</kbd>
-                            <kbd className="px-1.5 py-0.5 bg-surface rounded text-[10px]">→</kbd> navigate ·
-                            <kbd className="px-1.5 py-0.5 bg-surface rounded text-[10px]">D</kbd> draw bbox ·
-                            <kbd className="px-1.5 py-0.5 bg-surface rounded text-[10px]">C</kbd> corners ·
-                            <kbd className="px-1.5 py-0.5 bg-surface rounded text-[10px]">Z</kbd> grid mode ·
-                            <kbd className="px-1.5 py-0.5 bg-surface rounded text-[10px]">H</kbd> hide overlays
-                        </p>
-                        <p>
-                            <kbd className="px-1.5 py-0.5 bg-surface rounded text-[10px]">1</kbd> board yes ·
-                            <kbd className="px-1.5 py-0.5 bg-surface rounded text-[10px]">2</kbd> board no ·
-                            <kbd className="px-1.5 py-0.5 bg-surface rounded text-[10px]">3</kbd> visible yes ·
-                            <kbd className="px-1.5 py-0.5 bg-surface rounded text-[10px]">4</kbd> visible no
-                        </p>
-                        <p>
-                            <kbd className="px-1.5 py-0.5 bg-surface rounded text-[10px]">Enter</kbd> save & next ·
-                            <kbd className="px-1.5 py-0.5 bg-surface rounded text-[10px]">X</kbd> delete label ·
-                            <kbd className="px-1.5 py-0.5 bg-surface rounded text-[10px]">Q</kbd> clear corners
-                        </p>
-                        <p>
-                            Grid colors:
-                            <kbd className="px-1.5 py-0.5 bg-blue-500 text-white rounded text-[10px] ml-1">B</kbd>
-                            <kbd className="px-1.5 py-0.5 bg-yellow-400 text-black rounded text-[10px]">Y</kbd>
-                            <kbd className="px-1.5 py-0.5 bg-green-600 text-white rounded text-[10px]">G</kbd>
-                            <kbd className="px-1.5 py-0.5 bg-red-500 text-white rounded text-[10px]">R</kbd>
-                            <kbd className="px-1.5 py-0.5 bg-gray-200 text-black rounded text-[10px]">W</kbd> empty
-                        </p>
-                    </div>
-                </div>
+                {/* Right navigation arrow */}
+                <button
+                    onClick={goToNext}
+                    disabled={currentIndex === samples.length - 1}
+                    className="p-2 rounded-lg bg-surface-dim text-foreground enabled:hover:bg-primary enabled:hover:text-white disabled:opacity-30 disabled:cursor-not-allowed transition-colors shrink-0"
+                >
+                    <ChevronRight className="w-5 h-5" />
+                </button>
             </div>
         </div>
     );

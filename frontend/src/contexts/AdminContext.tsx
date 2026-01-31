@@ -36,6 +36,13 @@ export interface CornerDetectionProgress {
     failedCount: number;
 }
 
+export interface GridPredictionProgress {
+    processedCount: number;
+    totalCount: number;
+    successCount: number;
+    failedCount: number;
+}
+
 export const [AdminProvider, useAdmin] = makeContext(() => {
     // Samples state
     const [samples, setSamples] = useState<Sample[]>([]);
@@ -72,6 +79,9 @@ export const [AdminProvider, useAdmin] = makeContext(() => {
     const [isLoadingCornerRuns, setIsLoadingCornerRuns] = useState(false);
     const [hasFetchedCornerRuns, setHasFetchedCornerRuns] = useState(false);
     const [cornerProgress, setCornerProgress] = useState<Record<string, CornerDetectionProgress>>({});
+
+    // Grid prediction progress state (no run entities, just progress tracking)
+    const [gridProgress, setGridProgress] = useState<GridPredictionProgress | null>(null);
 
     // Fetch samples with optional model and tag filters
     const fetchSamples = useCallback(async (forceFetch = false, modelId?: string | null, tagId?: string | null) => {
@@ -317,6 +327,33 @@ export const [AdminProvider, useAdmin] = makeContext(() => {
         });
     }, []);
 
+    // Socket listeners for grid prediction runs
+    useSocketEvent('grid-run-started', (data) => {
+        setGridProgress({
+            processedCount: 0,
+            totalCount: data.totalCount,
+            successCount: 0,
+            failedCount: 0,
+        });
+    }, []);
+
+    useSocketEvent('grid-run-progress', (data) => {
+        setGridProgress({
+            processedCount: data.processedCount,
+            totalCount: data.totalCount,
+            successCount: data.successCount,
+            failedCount: data.failedCount,
+        });
+    }, []);
+
+    useSocketEvent('grid-run-completed', () => {
+        setGridProgress(null);
+    }, []);
+
+    useSocketEvent('grid-run-failed', () => {
+        setGridProgress(null);
+    }, []);
+
     // Helper functions for modifying state
     const addSample = useCallback((sample: Sample) => {
         setSamples(prev => [sample, ...prev]);
@@ -431,5 +468,8 @@ export const [AdminProvider, useAdmin] = makeContext(() => {
         cornerProgress,
         addCornerRun,
         removeCornerRun,
+
+        // Grid prediction progress
+        gridProgress,
     };
 });

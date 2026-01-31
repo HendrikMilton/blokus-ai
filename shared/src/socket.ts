@@ -20,7 +20,11 @@ export type SocketEvent =
     | 'corner-run-started'
     | 'corner-run-progress'
     | 'corner-run-completed'
-    | 'corner-run-failed';
+    | 'corner-run-failed'
+    | 'grid-run-started'
+    | 'grid-run-progress'
+    | 'grid-run-completed'
+    | 'grid-run-failed';
 
 // Event payload types
 export interface UserCreatedPayload {
@@ -106,6 +110,28 @@ export interface CornerRunFailedPayload {
     run: CornerDetectionRun;
 }
 
+// Grid prediction run event payloads
+export interface GridRunStartedPayload {
+    totalCount: number;
+}
+
+export interface GridRunProgressPayload {
+    processedCount: number;
+    totalCount: number;
+    successCount: number;
+    failedCount: number;
+}
+
+export interface GridRunCompletedPayload {
+    successCount: number;
+    failedCount: number;
+    durationMs: number;
+}
+
+export interface GridRunFailedPayload {
+    errorMessage: string;
+}
+
 // Discriminated union of all event payloads
 // Using Record<SocketEvent, ...> ensures all events have corresponding payloads
 export type EventPayloads = Record<SocketEvent, unknown> & {
@@ -126,6 +152,10 @@ export type EventPayloads = Record<SocketEvent, unknown> & {
     'corner-run-progress': CornerRunProgressPayload;
     'corner-run-completed': CornerRunCompletedPayload;
     'corner-run-failed': CornerRunFailedPayload;
+    'grid-run-started': GridRunStartedPayload;
+    'grid-run-progress': GridRunProgressPayload;
+    'grid-run-completed': GridRunCompletedPayload;
+    'grid-run-failed': GridRunFailedPayload;
 };
 
 // Room names

@@ -17,6 +17,7 @@ from .detector_yolo import detect_board_yolo, detect_board_with_trained_model
 from .perspective import correct_perspective, correct_perspective_all_methods
 from .corner_detection import detect_corners_all_methods
 from .schemas import DetectResponse, BoardDetection, BoundingBox, BoardCorners, Corner
+from .grid_detection import detect_grid_colors, GridPrediction
 
 # API URL for callbacks
 API_URL = os.environ.get("API_URL", "http://localhost:3009")
@@ -406,6 +407,208 @@ async def bulk_corner_detect(request: BulkCornerDetectRequest, background_tasks:
     return BulkCornerDetectResponse(
         success=True,
         message=f"Started bulk corner detection for {len(request.sample_ids)} samples",
+    )
+
+
+# ============================================================================
+# Grid Color Detection
+# ============================================================================
+
+
+class GridPredictRequest(BaseModel):
+    image_url: str
+
+
+@router.post("/grid-predict", response_model=GridPrediction)
+async def predict_grid(request: GridPredictRequest):
+    """
+    Predict colors in a 20x20 grid from a cropped board image.
+    Uses HSV color space analysis to classify each cell.
+    """
+    try:
+        result = detect_grid_colors(request.image_url)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Grid prediction failed: {e}")
+
+
+# ============================================================================
+# Bulk Grid Prediction
+# ============================================================================
+
+
+class BulkGridSample(BaseModel):
+    sample_id: str
+    cropped_url: str
+
+
+class BulkGridPredictRequest(BaseModel):
+    samples: list[BulkGridSample]
+    api_base_url: str
+
+
+class BulkGridPredictResponse(BaseModel):
+    success: bool
+    message: str
+
+
+def store_grid_prediction(
+    api_base_url: str,
+    sample_id: str,
+    grid: list[list[Optional[str]]],
+    confidence: float,
+    processing_time_ms: float,
+) -> bool:
+    """Store a single grid prediction result by calling the API."""
+    try:
+        with httpx.Client(timeout=30.0) as client:
+            result = client.post(
+                f"{api_base_url}/api/ml/grid-predictions/{sample_id}",
+                json={
+                    "grid": grid,
+                    "confidence": confidence,
+                    "processingTimeMs": int(processing_time_ms),
+                },
+            )
+            return result.status_code == 200
+    except Exception as e:
+        print(f"[bulk_grid] Failed to store result for {sample_id}: {e}")
+        return False
+
+
+def report_grid_progress(
+    api_base_url: str,
+    processed_count: int,
+    total_count: int,
+    success_count: int,
+    failed_count: int,
+) -> None:
+    """Report progress to the API."""
+    try:
+        with httpx.Client(timeout=10.0) as client:
+            client.post(
+                f"{api_base_url}/api/ml/grid-runs/progress",
+                json={
+                    "processedCount": processed_count,
+                    "totalCount": total_count,
+                    "successCount": success_count,
+                    "failedCount": failed_count,
+                },
+            )
+    except Exception as e:
+        print(f"[bulk_grid] Failed to report progress: {e}")
+
+
+def report_grid_complete(
+    api_base_url: str,
+    success_count: int,
+    failed_count: int,
+    duration_ms: int,
+) -> None:
+    """Report completion to the API."""
+    try:
+        with httpx.Client(timeout=30.0) as client:
+            client.post(
+                f"{api_base_url}/api/ml/grid-runs/complete",
+                json={
+                    "successCount": success_count,
+                    "failedCount": failed_count,
+                    "durationMs": duration_ms,
+                },
+            )
+    except Exception as e:
+        print(f"[bulk_grid] Failed to report completion: {e}")
+
+
+def report_grid_failed(
+    api_base_url: str,
+    error_message: str,
+    duration_ms: int,
+) -> None:
+    """Report failure to the API."""
+    try:
+        with httpx.Client(timeout=30.0) as client:
+            client.post(
+                f"{api_base_url}/api/ml/grid-runs/failed",
+                json={
+                    "errorMessage": error_message,
+                    "durationMs": duration_ms,
+                },
+            )
+    except Exception as e:
+        print(f"[bulk_grid] Failed to report failure: {e}")
+
+
+def run_bulk_grid_prediction(samples: list[BulkGridSample], api_base_url: str) -> None:
+    """Run bulk grid prediction in the background."""
+    import sys
+    print(f"[bulk_grid] Starting bulk grid prediction: samples={len(samples)}", flush=True)
+    sys.stdout.flush()
+
+    start_time = time.perf_counter()
+    success_count = 0
+    failed_count = 0
+    total_count = len(samples)
+
+    try:
+        for sample in samples:
+            print(f"[bulk_grid] Processing sample {sample.sample_id}, url={sample.cropped_url[:50]}...", flush=True)
+            try:
+                # Run grid detection
+                result = detect_grid_colors(sample.cropped_url)
+                print(f"[bulk_grid] Got result, confidence={result.confidence}", flush=True)
+
+                # Store result via API callback
+                if store_grid_prediction(
+                    api_base_url,
+                    sample.sample_id,
+                    result.grid,
+                    result.confidence,
+                    result.processingTimeMs,
+                ):
+                    success_count += 1
+                else:
+                    failed_count += 1
+
+            except Exception as e:
+                print(f"[bulk_grid] Failed to process {sample.sample_id}: {e}")
+                failed_count += 1
+
+            # Report progress every 5 samples or on last sample
+            processed_count = success_count + failed_count
+            if processed_count % 5 == 0 or processed_count == total_count:
+                report_grid_progress(api_base_url, processed_count, total_count, success_count, failed_count)
+                print(f"[bulk_grid] Progress: {processed_count}/{total_count}")
+
+        # Report completion
+        duration_ms = int((time.perf_counter() - start_time) * 1000)
+        report_grid_complete(api_base_url, success_count, failed_count, duration_ms)
+        print(f"[bulk_grid] Completed: success={success_count}, failed={failed_count}, duration={duration_ms}ms")
+
+    except Exception as e:
+        duration_ms = int((time.perf_counter() - start_time) * 1000)
+        report_grid_failed(api_base_url, str(e), duration_ms)
+        print(f"[bulk_grid] Failed: {e}")
+
+
+@router.post("/bulk-grid-predict", response_model=BulkGridPredictResponse)
+async def bulk_grid_predict(request: BulkGridPredictRequest, background_tasks: BackgroundTasks):
+    """
+    Start bulk grid prediction on multiple samples.
+    Returns immediately and processes in the background.
+    """
+    print(f"[bulk_grid] Received request: samples={len(request.samples)}")
+
+    # Add background task
+    background_tasks.add_task(
+        run_bulk_grid_prediction,
+        request.samples,
+        request.api_base_url,
+    )
+
+    return BulkGridPredictResponse(
+        success=True,
+        message=f"Started bulk grid prediction for {len(request.samples)} samples",
     )
 
 

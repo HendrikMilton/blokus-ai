@@ -18,14 +18,31 @@ export interface GridLabel {
     labeledAt: string;
 }
 
+// AI grid prediction result
+export interface GridPrediction {
+    grid: GridLabels;
+    confidence: number;
+    cellConfidences: number[][];
+    processingTimeMs: number;
+}
+
+// AI grid prediction record stored in database
+export interface GridPredictionRecord {
+    sampleId: string;
+    grid: GridLabels;
+    confidence: number;
+    processingTimeMs: number;
+    createdAt: string;
+}
+
 // Constants
 export const BOARD_SIZE = 20;
 
 export const PLAYER_COLORS: Record<PlayerColor, string> = {
-    blue: '#0066CC',
-    yellow: '#FFD700',
-    red: '#DC143C',
-    green: '#228B22',
+    blue: '#0044AA',
+    yellow: '#CC9900',
+    red: '#AA1133',
+    green: '#116611',
 };
 
 // ============================================================================

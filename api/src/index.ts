@@ -44,7 +44,7 @@ initializeSocket(httpServer);
 // Rate limiting
 const limiter = rateLimit({
     windowMs: 60 * 1000,
-    limit: 500,
+    limit: 5000,
     message: 'Too many requests, please try again after 1 minute',
 });
 

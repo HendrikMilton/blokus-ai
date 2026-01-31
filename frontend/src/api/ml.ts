@@ -13,6 +13,8 @@ import {
     PerspectiveMethodResult,
     GridLabels,
     GridLabel,
+    GridPrediction,
+    GridPredictionRecord,
 } from '@blokus-ai/shared';
 
 // Re-export for convenience
@@ -185,12 +187,38 @@ export const ML_API = {
         return response.grid;
     },
 
+    getGridLabels: async (sampleIds: string[]): Promise<GridLabel[]> => {
+        if (sampleIds.length === 0) {
+            return [];
+        }
+        const response = await http.get<{ labels: GridLabel[] }>(
+            `/api/ml/grid-labels?sampleIds=${sampleIds.join(',')}`
+        );
+        return response.labels;
+    },
+
     saveGridLabel: async (sampleId: string, grid: GridLabels): Promise<GridLabel> => {
         return http.post<GridLabel>(`/api/ml/samples/${sampleId}/grid`, { grid });
     },
 
     clearGridLabel: async (sampleId: string): Promise<void> => {
         await http.delete(`/api/ml/samples/${sampleId}/grid`);
+    },
+
+    predictGrid: async (sampleId: string): Promise<GridPrediction> => {
+        return http.post<GridPrediction>(`/api/ml/samples/${sampleId}/grid/predict`, {});
+    },
+
+    // Grid prediction runs (bulk AI prediction)
+    startGridRun: async (sampleIds?: string[]): Promise<{ started: number; skipped: number }> => {
+        return http.post<{ started: number; skipped: number }>('/api/ml/grid-runs', { sampleIds });
+    },
+
+    getGridPredictions: async (sampleIds: string[]): Promise<GridPredictionRecord[]> => {
+        const response = await http.get<{ predictions: GridPredictionRecord[] }>(
+            `/api/ml/grid-predictions?sampleIds=${sampleIds.join(',')}`
+        );
+        return response.predictions;
     },
 };
 

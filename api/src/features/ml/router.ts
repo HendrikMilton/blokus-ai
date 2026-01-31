@@ -4,7 +4,7 @@ import { asyncHandler } from '../../lib/async-handler';
 import { mlHttp } from '../../lib/http';
 import type { DetectResponse, BoardCorners, PerspectiveFromCornersRequest } from '@blokus-ai/shared';
 import { BadRequestError, NotFoundError } from '../../error';
-import { getBoardDetectionWithCorrectionBySampleId, upsertModelDetection, deleteBoardDetection, deleteBoardDetections, saveBoardDetectionCorrection, CorrectionData, setVerificationStatus, saveManualLabel, ManualLabelData, getSampleStatusFlagsById, getSampleDetectionInfoMap, createTrainingRun, updateTrainingRun, listTrainingRuns, getTrainingRun, deleteTrainingRun, getHumanLabeledImageCount, getTrainingData, getClassifierTrainingData, getPoseTrainingData, getPoseTrainingImageCount, createDetectionRun, updateDetectionRun, listDetectionRuns, getDetectionRun, deleteDetectionRun, getSampleIdsForBulkDetection, calculateAverageIoU, createPipeline, listPipelines, getPipeline, getPipelineWithComponents, updatePipeline, deletePipeline, saveCorners, getCorners, clearCorners, getTagsForSamples, createCornerDetectionRun, updateCornerDetectionRun, listCornerDetectionRuns, getCornerDetectionRun, deleteCornerDetectionRun, upsertCornerDetection, getCornerDetectionsByRunId, getCornerDetectionsForSamples, getGridLabel, saveGridLabel, deleteGridLabel } from './database';
+import { getBoardDetectionWithCorrectionBySampleId, upsertModelDetection, deleteBoardDetection, deleteBoardDetections, saveBoardDetectionCorrection, CorrectionData, setVerificationStatus, saveManualLabel, ManualLabelData, getSampleStatusFlagsById, getSampleDetectionInfoMap, createTrainingRun, updateTrainingRun, listTrainingRuns, getTrainingRun, deleteTrainingRun, getHumanLabeledImageCount, getTrainingData, getClassifierTrainingData, getPoseTrainingData, getPoseTrainingImageCount, createDetectionRun, updateDetectionRun, listDetectionRuns, getDetectionRun, deleteDetectionRun, getSampleIdsForBulkDetection, calculateAverageIoU, createPipeline, listPipelines, getPipeline, getPipelineWithComponents, updatePipeline, deletePipeline, saveCorners, getCorners, clearCorners, getTagsForSamples, createCornerDetectionRun, updateCornerDetectionRun, listCornerDetectionRuns, getCornerDetectionRun, deleteCornerDetectionRun, upsertCornerDetection, getCornerDetectionsByRunId, getCornerDetectionsForSamples, getGridLabel, saveGridLabel, deleteGridLabel, getGridLabelsForSamples, getGridPredictionsForSamples, saveGridPrediction } from './database';
 import type { SampleStatusFlags } from '@blokus-ai/shared';
 import { listSamples, getSample, getUploadPresignedUrl, getCloudFrontUrl, getThumbnailUrl, generateThumbnail, deleteSamples } from './s3';
 import { emitEvent } from '../../lib/socket';
@@ -1292,5 +1292,190 @@ mlRouter.post('/samples/:id/grid', asyncHandler(async (req, res) => {
 mlRouter.delete('/samples/:id/grid', asyncHandler(async (req, res) => {
     const { id } = req.params;
     await deleteGridLabel(id);
+    res.json({ success: true });
+}));
+
+// GET /api/ml/grid-labels - Get grid labels for multiple samples (batch)
+mlRouter.get('/grid-labels', asyncHandler(async (req, res) => {
+    const sampleIdsParam = req.query.sampleIds as string | undefined;
+
+    if (!sampleIdsParam) {
+        throw new BadRequestError('sampleIds query parameter is required');
+    }
+
+    const sampleIds = sampleIdsParam.split(',');
+    const labels = await getGridLabelsForSamples(sampleIds);
+
+    // Convert Map to array
+    const labelsArray = Array.from(labels.values());
+    res.json({ labels: labelsArray });
+}));
+
+// POST /api/ml/samples/:id/grid/predict - Predict grid colors using AI
+mlRouter.post('/samples/:id/grid/predict', asyncHandler(async (req, res) => {
+    const { id } = req.params;
+
+    // Get corner detection result to find cropped image URL
+    const cornerResults = await getCornerDetectionsForSamples([id]);
+    const cornerResult = cornerResults.get(id);
+
+    if (!cornerResult) {
+        throw new NotFoundError('No corner detection found for this sample. Run corner detection first.');
+    }
+
+    // Find the best available cropped image URL
+    const croppedUrl = cornerResult.best?.croppedUrl ||
+                       cornerResult.hough?.croppedUrl ||
+                       cornerResult.edge?.croppedUrl;
+
+    if (!croppedUrl) {
+        throw new NotFoundError('No cropped image available. Run corner detection first.');
+    }
+
+    // Call ML service to predict grid colors
+    const prediction = await mlHttp.post<{
+        grid: (string | null)[][];
+        confidence: number;
+        cellConfidences: number[][];
+        processingTimeMs: number;
+            }>('/detect/grid-predict', {
+                image_url: croppedUrl,
+            });
+
+    res.json(prediction);
+}));
+
+// ============================================================================
+// Grid Predictions (Bulk AI Prediction)
+// ============================================================================
+
+// POST /api/ml/grid-runs - Start bulk grid prediction
+mlRouter.post('/grid-runs', asyncHandler(async (req, res) => {
+    const { sampleIds } = req.body as { sampleIds?: string[] };
+
+    // Get samples with corner detections (cropped images available)
+    const s3Samples = await listSamples();
+    const allSampleIds = s3Samples.map(s => s.id);
+
+    // Get corner detections to find which samples have cropped images
+    const cornerDetections = await getCornerDetectionsForSamples(allSampleIds);
+
+    // Get detection info to check isEntireBoardVisible
+    const detectionInfoMap = await getSampleDetectionInfoMap(null);
+
+    // Filter to samples that have a cropped image URL AND entire board is visible
+    let eligibleSampleIds = allSampleIds.filter(id => {
+        const cd = cornerDetections.get(id);
+        const hasCroppedImage = cd?.best?.croppedUrl || cd?.hough?.croppedUrl || cd?.edge?.croppedUrl;
+
+        // Check if entire board is visible (prefer human label, fall back to AI)
+        const info = detectionInfoMap.get(id);
+        const isEntireBoardVisible = info?.human?.isEntireBoardVisible ?? info?.ai?.isEntireBoardVisible ?? false;
+
+        return hasCroppedImage && isEntireBoardVisible;
+    });
+
+    // If specific sampleIds provided, filter to those
+    if (sampleIds && sampleIds.length > 0) {
+        const requestedSet = new Set(sampleIds);
+        eligibleSampleIds = eligibleSampleIds.filter(id => requestedSet.has(id));
+    }
+
+    if (eligibleSampleIds.length === 0) {
+        throw new BadRequestError('No eligible samples. Samples need cropped images and "Entire board visible" = Yes.');
+    }
+
+    // Build sample data for ML service
+    const sampleData = eligibleSampleIds.map(id => {
+        const cd = cornerDetections.get(id)!;
+        const croppedUrl = cd.best?.croppedUrl || cd.hough?.croppedUrl || cd.edge?.croppedUrl;
+        return { sample_id: id, cropped_url: croppedUrl };
+    });
+
+    const started = sampleData.length;
+
+    // Emit start event
+    emitEvent('grid-run-started', { totalCount: started });
+
+    // Return immediately
+    res.json({ started, skipped: allSampleIds.length - started });
+
+    // Fire-and-forget: ML service will call back with results
+    mlHttp.post('/detect/bulk-grid-predict', {
+        samples: sampleData,
+        api_base_url: process.env.API_URL || 'http://localhost:3009',
+    }).catch(err => {
+        log.warn(`Initial grid prediction request failed: ${err}`);
+        emitEvent('grid-run-failed', { errorMessage: `ML service request failed: ${err}` });
+    });
+}));
+
+// POST /api/ml/grid-runs/progress - ML service callback for progress
+mlRouter.post('/grid-runs/progress', asyncHandler(async (req, res) => {
+    const { processedCount, totalCount, successCount, failedCount } = req.body;
+
+    // Emit progress event via WebSocket
+    emitEvent('grid-run-progress', {
+        processedCount,
+        totalCount,
+        successCount,
+        failedCount,
+    });
+
+    res.json({ success: true });
+}));
+
+// POST /api/ml/grid-runs/complete - ML service callback on completion
+mlRouter.post('/grid-runs/complete', asyncHandler(async (req, res) => {
+    const { successCount, failedCount, durationMs } = req.body;
+
+    // Emit completion event
+    emitEvent('grid-run-completed', {
+        successCount,
+        failedCount,
+        durationMs,
+    });
+    log.info('Grid prediction completed', { successCount, failedCount, durationMs });
+
+    res.json({ success: true });
+}));
+
+// POST /api/ml/grid-runs/failed - ML service callback on failure
+mlRouter.post('/grid-runs/failed', asyncHandler(async (req, res) => {
+    const { errorMessage, durationMs } = req.body;
+
+    // Emit failure event
+    emitEvent('grid-run-failed', { errorMessage });
+    log.error('Grid prediction failed', { error: errorMessage, durationMs });
+
+    res.json({ success: true });
+}));
+
+// GET /api/ml/grid-predictions - Get AI predictions for samples (batch)
+mlRouter.get('/grid-predictions', asyncHandler(async (req, res) => {
+    const sampleIdsParam = req.query.sampleIds as string | undefined;
+
+    if (!sampleIdsParam) {
+        throw new BadRequestError('sampleIds query parameter is required');
+    }
+
+    const sampleIds = sampleIdsParam.split(',');
+    const predictions = await getGridPredictionsForSamples(sampleIds);
+
+    // Convert Map to array
+    const predictionsArray = Array.from(predictions.values());
+    res.json({ predictions: predictionsArray });
+}));
+
+// POST /api/ml/grid-predictions/:sampleId - Store grid prediction result (callback from ML service)
+mlRouter.post('/grid-predictions/:sampleId', asyncHandler(async (req, res) => {
+    const { sampleId } = req.params;
+    const { grid, confidence, processingTimeMs } = req.body;
+
+    if (!grid || typeof confidence !== 'number' || typeof processingTimeMs !== 'number') {
+        throw new BadRequestError('grid, confidence, and processingTimeMs are required');
+    }
+
+    await saveGridPrediction(sampleId, grid, confidence, processingTimeMs);
     res.json({ success: true });
 }));

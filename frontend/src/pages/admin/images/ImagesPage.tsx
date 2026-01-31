@@ -1,7 +1,7 @@
 import { useRef, useState, useEffect, useMemo } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { Plus, ChevronLeft, ChevronRight, Tag, Lightbulb, Trash2, Search, Image, LayoutGrid, List, X, Focus } from 'lucide-react';
+import { Plus, ChevronLeft, ChevronRight, Tag, Lightbulb, Trash2, Search, Image, LayoutGrid, List, X, Focus, Grid3X3 } from 'lucide-react';
 import { cn } from '../../../utils/cn';
 import { formatShortId } from '../../../utils/format';
 import { http, API_URL } from '../../../api/config';
@@ -24,7 +24,7 @@ import { CreateTagModal } from './CreateTagModal';
 import { ConfirmModal } from '../../../components/ui/ConfirmModal';
 import { useAdmin } from '../../../contexts/AdminContext';
 import { useSocketEvent } from '../../../hooks/useSocketEvent';
-import type { ModelPipeline, CornerDetectionResult } from '@blokus-ai/shared';
+import type { ModelPipeline, CornerDetectionResult, GridPredictionRecord, GridLabels, GridLabel, CellColor } from '@blokus-ai/shared';
 
 type Tab = 'images' | 'models' | 'detections' | 'test' | 'config';
 type FilterPreset = 'all' | 'selected' | 'unlabeled' | 'false-positives' | 'false-negatives' | 'low-iou' | 'disagreements';
@@ -46,6 +46,81 @@ const sortLabels: Record<SortOption, string> = {
     'default': 'Default',
     'lowest-iou': 'Lowest IoU',
     'lowest-confidence': 'Lowest Confidence',
+};
+
+interface GridMetrics {
+    accuracy: number;  // Overall accuracy (correct/400)
+    minF1: number;     // Minimum F1 score across colors
+    minRecall: number; // Minimum recall across colors
+}
+
+/**
+ * Calculate grid metrics by comparing AI prediction vs human label.
+ * Returns null if either is missing.
+ */
+const calculateGridMetrics = (
+    aiGrid: GridLabels | null | undefined,
+    humanGrid: GridLabels | null | undefined
+): GridMetrics | null => {
+    if (!aiGrid || !humanGrid) {
+        return null;
+    }
+
+    // Colors to track (null = empty)
+    const colors: (CellColor)[] = ['blue', 'yellow', 'red', 'green', null];
+
+    // Count TP, FP, FN for each color
+    const stats: Record<string, { tp: number; fp: number; fn: number }> = {};
+    for (const color of colors) {
+        const key = color ?? 'empty';
+        stats[key] = { tp: 0, fp: 0, fn: 0 };
+    }
+
+    let correct = 0;
+    const total = 400;
+
+    for (let row = 0; row < 20; row++) {
+        for (let col = 0; col < 20; col++) {
+            const ai = aiGrid[row]?.[col] ?? null;
+            const human = humanGrid[row]?.[col] ?? null;
+
+            if (ai === human) {
+                correct++;
+                const key = ai ?? 'empty';
+                stats[key].tp++;
+            } else {
+                // AI predicted `ai` but should have been `human`
+                const aiKey = ai ?? 'empty';
+                const humanKey = human ?? 'empty';
+                stats[aiKey].fp++;
+                stats[humanKey].fn++;
+            }
+        }
+    }
+
+    const accuracy = correct / total;
+
+    // Calculate F1 and recall for each color
+    const f1Scores: number[] = [];
+    const recalls: number[] = [];
+
+    for (const color of colors) {
+        const key = color ?? 'empty';
+        const { tp, fp, fn } = stats[key];
+
+        const precision = tp + fp > 0 ? tp / (tp + fp) : 0;
+        const recall = tp + fn > 0 ? tp / (tp + fn) : 1; // If no positives, recall is perfect
+        const f1 = precision + recall > 0 ? 2 * precision * recall / (precision + recall) : 0;
+
+        f1Scores.push(f1);
+        recalls.push(recall);
+    }
+
+    return {
+        accuracy,
+        minF1: Math.min(...f1Scores),
+        minRecall: Math.min(...recalls),
+    };
 };
 
 interface PresignResponse {
@@ -154,6 +229,7 @@ export const ImagesPage = () => {
         addTag,
         removeTag,
         cornerProgress,
+        gridProgress,
     } = useAdmin();
 
     // Local UI state
@@ -168,6 +244,9 @@ export const ImagesPage = () => {
     const [isRunningCorners, setIsRunningCorners] = useState(false);
     const [activeCornerRunId, setActiveCornerRunId] = useState<string | null>(null);
     const [cornerDetections, setCornerDetections] = useState<Map<string, CornerDetectionResult>>(new Map());
+    const [isRunningGridPrediction, setIsRunningGridPrediction] = useState(false);
+    const [gridPredictions, setGridPredictions] = useState<Map<string, GridPredictionRecord>>(new Map());
+    const [gridLabels, setGridLabels] = useState<Map<string, GridLabel>>(new Map());
 
     // Overlay visibility toggles
     const [overlayVisibility, setOverlayVisibility] = useState({
@@ -461,6 +540,19 @@ export const ImagesPage = () => {
         }
     };
 
+    // Grid prediction handler
+    const handleRunGridPrediction = async () => {
+        setIsRunningGridPrediction(true);
+        try {
+            const result = await ML_API.startGridRun(selectedIds.size > 0 ? Array.from(selectedIds) : undefined);
+            toast.success(`Grid prediction started for ${result.started} samples`);
+            // Progress and completion handled by socket events
+        } catch {
+            toast.error('Failed to start grid prediction');
+            setIsRunningGridPrediction(false);
+        }
+    };
+
     const handleSelect = (id: string, shiftKey: boolean = false, ctrlKey: boolean = false) => {
         const currentIndex = filteredSamples.findIndex(s => s.id === id);
 
@@ -578,6 +670,31 @@ export const ImagesPage = () => {
         toast.error(data.run.errorMessage || 'Corner detection failed');
     }, []);
 
+    // Socket event handlers for grid prediction
+    useSocketEvent('grid-run-completed', async (data) => {
+        setIsRunningGridPrediction(false);
+        toast.success(`Grid prediction completed: ${data.successCount} succeeded, ${data.failedCount} failed`);
+        // Reload grid predictions
+        const sampleIds = samples.map(s => s.id);
+        if (sampleIds.length > 0) {
+            try {
+                const predictions = await ML_API.getGridPredictions(sampleIds);
+                const newMap = new Map<string, GridPredictionRecord>();
+                for (const pred of predictions) {
+                    newMap.set(pred.sampleId, pred);
+                }
+                setGridPredictions(newMap);
+            } catch {
+                // Silently ignore
+            }
+        }
+    }, [samples]);
+
+    useSocketEvent('grid-run-failed', (data) => {
+        setIsRunningGridPrediction(false);
+        toast.error(data.errorMessage || 'Grid prediction failed');
+    }, []);
+
     // Refetch samples when selected model or tag changes (single model mode)
     useEffect(() => {
         if (selectedModelIds.length <= 1) {
@@ -602,6 +719,44 @@ export const ImagesPage = () => {
             })
             .catch(() => {
                 // Silently ignore errors - corner detections are optional
+            });
+    }, [samples]);
+
+    // Load grid predictions when samples change
+    useEffect(() => {
+        const sampleIds = samples.map(s => s.id);
+        if (sampleIds.length === 0) {
+            return;
+        }
+        ML_API.getGridPredictions(sampleIds)
+            .then(predictions => {
+                const newMap = new Map<string, GridPredictionRecord>();
+                for (const pred of predictions) {
+                    newMap.set(pred.sampleId, pred);
+                }
+                setGridPredictions(newMap);
+            })
+            .catch(() => {
+                // Silently ignore errors
+            });
+    }, [samples]);
+
+    // Load grid labels when samples change
+    useEffect(() => {
+        const sampleIds = samples.map(s => s.id);
+        if (sampleIds.length === 0) {
+            return;
+        }
+        ML_API.getGridLabels(sampleIds)
+            .then(labels => {
+                const newMap = new Map<string, GridLabel>();
+                for (const label of labels) {
+                    newMap.set(label.sampleId, label);
+                }
+                setGridLabels(newMap);
+            })
+            .catch(() => {
+                // Silently ignore errors
             });
     }, [samples]);
 
@@ -741,10 +896,28 @@ export const ImagesPage = () => {
             case 'edgeErr':
                 comparison = (cornerDetections.get(a.id)?.edge.error ?? -1) - (cornerDetections.get(b.id)?.edge.error ?? -1);
                 break;
+            case 'gridAcc': {
+                const metricsA = calculateGridMetrics(gridPredictions.get(a.id)?.grid, gridLabels.get(a.id)?.grid);
+                const metricsB = calculateGridMetrics(gridPredictions.get(b.id)?.grid, gridLabels.get(b.id)?.grid);
+                comparison = (metricsA?.accuracy ?? -1) - (metricsB?.accuracy ?? -1);
+                break;
+            }
+            case 'gridF1Min': {
+                const metricsA = calculateGridMetrics(gridPredictions.get(a.id)?.grid, gridLabels.get(a.id)?.grid);
+                const metricsB = calculateGridMetrics(gridPredictions.get(b.id)?.grid, gridLabels.get(b.id)?.grid);
+                comparison = (metricsA?.minF1 ?? -1) - (metricsB?.minF1 ?? -1);
+                break;
+            }
+            case 'gridRecallMin': {
+                const metricsA = calculateGridMetrics(gridPredictions.get(a.id)?.grid, gridLabels.get(a.id)?.grid);
+                const metricsB = calculateGridMetrics(gridPredictions.get(b.id)?.grid, gridLabels.get(b.id)?.grid);
+                comparison = (metricsA?.minRecall ?? -1) - (metricsB?.minRecall ?? -1);
+                break;
+            }
             }
             return listSortState.direction === 'asc' ? comparison : -comparison;
         });
-    }, [filteredSamples, viewType, listSortState, cornerDetections]);
+    }, [filteredSamples, viewType, listSortState, cornerDetections, gridPredictions, gridLabels]);
 
     // Calculate average corner errors for column headers
     const avgCornerErrors = useMemo(() => {
@@ -878,6 +1051,57 @@ export const ImagesPage = () => {
             ) : <span className="text-muted">—</span>,
         },
         {
+            key: 'gridAcc',
+            header: 'Grid Acc',
+            sortable: true,
+            width: '80px',
+            render: (sample) => {
+                const aiPred = gridPredictions.get(sample.id);
+                const humanLabel = gridLabels.get(sample.id);
+                const metrics = calculateGridMetrics(aiPred?.grid, humanLabel?.grid);
+                if (!metrics) {
+                    return <span className="text-muted">—</span>;
+                }
+                const pct = metrics.accuracy * 100;
+                const cls = pct >= 90 ? 'text-success' : pct >= 70 ? 'text-warning' : 'text-error';
+                return <span className={cls}>{pct.toFixed(0)}%</span>;
+            },
+        },
+        {
+            key: 'gridF1Min',
+            header: 'Grid F1 Min',
+            sortable: true,
+            width: '90px',
+            render: (sample) => {
+                const aiPred = gridPredictions.get(sample.id);
+                const humanLabel = gridLabels.get(sample.id);
+                const metrics = calculateGridMetrics(aiPred?.grid, humanLabel?.grid);
+                if (!metrics) {
+                    return <span className="text-muted">—</span>;
+                }
+                const pct = metrics.minF1 * 100;
+                const cls = pct >= 90 ? 'text-success' : pct >= 70 ? 'text-warning' : 'text-error';
+                return <span className={cls}>{pct.toFixed(0)}%</span>;
+            },
+        },
+        {
+            key: 'gridRecallMin',
+            header: 'Grid Recall Min',
+            sortable: true,
+            width: '110px',
+            render: (sample) => {
+                const aiPred = gridPredictions.get(sample.id);
+                const humanLabel = gridLabels.get(sample.id);
+                const metrics = calculateGridMetrics(aiPred?.grid, humanLabel?.grid);
+                if (!metrics) {
+                    return <span className="text-muted">—</span>;
+                }
+                const pct = metrics.minRecall * 100;
+                const cls = pct >= 90 ? 'text-success' : pct >= 70 ? 'text-warning' : 'text-error';
+                return <span className={cls}>{pct.toFixed(0)}%</span>;
+            },
+        },
+        {
             key: 'bestErr',
             header: avgCornerErrors.best !== null
                 ? `Best (${(avgCornerErrors.best * 100).toFixed(1)}%)`
@@ -892,52 +1116,6 @@ export const ImagesPage = () => {
                 const pct = cd.best.error * 100;
                 const cls = pct < 5 ? 'text-success' : pct < 10 ? 'text-warning' : 'text-error';
                 const q = cd.best.quality;
-                return (
-                    <span className={cls}>
-                        {pct.toFixed(1)}%
-                        {q && <span className="text-muted text-[10px] ml-1">({q.aspectRatio?.toFixed(2)}, {q.areaRatio?.toFixed(2)}, {q.avgAngle?.toFixed(0)}°)</span>}
-                    </span>
-                );
-            },
-        },
-        {
-            key: 'houghErr',
-            header: avgCornerErrors.hough !== null
-                ? `Hough (${(avgCornerErrors.hough * 100).toFixed(1)}%)`
-                : 'Hough Err',
-            sortable: true,
-            width: '180px',
-            render: (sample) => {
-                const cd = cornerDetections.get(sample.id);
-                if (!cd || cd.hough.error === null) {
-                    return <span className="text-muted">—</span>;
-                }
-                const pct = cd.hough.error * 100;
-                const cls = pct < 5 ? 'text-success' : pct < 10 ? 'text-warning' : 'text-error';
-                const q = cd.hough.quality;
-                return (
-                    <span className={cls}>
-                        {pct.toFixed(1)}%
-                        {q && <span className="text-muted text-[10px] ml-1">({q.aspectRatio?.toFixed(2)}, {q.areaRatio?.toFixed(2)}, {q.avgAngle?.toFixed(0)}°)</span>}
-                    </span>
-                );
-            },
-        },
-        {
-            key: 'edgeErr',
-            header: avgCornerErrors.edge !== null
-                ? `Edge (${(avgCornerErrors.edge * 100).toFixed(1)}%)`
-                : 'Edge Err',
-            sortable: true,
-            width: '180px',
-            render: (sample) => {
-                const cd = cornerDetections.get(sample.id);
-                if (!cd || cd.edge.error === null) {
-                    return <span className="text-muted">—</span>;
-                }
-                const pct = cd.edge.error * 100;
-                const cls = pct < 5 ? 'text-success' : pct < 10 ? 'text-warning' : 'text-error';
-                const q = cd.edge.quality;
                 return (
                     <span className={cls}>
                         {pct.toFixed(1)}%
@@ -1023,6 +1201,22 @@ export const ImagesPage = () => {
                     {isRunningCorners && activeCornerRunId && cornerProgress[activeCornerRunId]
                         ? `${cornerProgress[activeCornerRunId].processedCount}/${cornerProgress[activeCornerRunId].totalCount}`
                         : `Corners${selectedIds.size > 0 ? ` (${selectedIds.size})` : ''}`}
+                </Button>
+                <Button
+                    onClick={handleRunGridPrediction}
+                    loading={isRunningGridPrediction}
+                    disabled={selectedIds.size === 0 && !isRunningGridPrediction}
+                    leftIcon={<Grid3X3 className="w-4 h-4" />}
+                    size="sm"
+                    variant="secondary"
+                    className="justify-center"
+                    title={selectedIds.size === 0 ? 'Select samples first' : 'Run AI grid cell prediction on selected samples'}
+                >
+                    {isRunningGridPrediction && gridProgress
+                        ? `${gridProgress.processedCount}/${gridProgress.totalCount}`
+                        : isRunningGridPrediction
+                            ? 'Starting...'
+                            : `Cells${selectedIds.size > 0 ? ` (${selectedIds.size})` : ''}`}
                 </Button>
                 {tab === 'images' && (
                     <Button
@@ -1237,24 +1431,6 @@ export const ImagesPage = () => {
                                             className="w-3 h-3 rounded border-border"
                                         />
                                         <span className="text-xs text-yellow-500">B</span>
-                                    </label>
-                                    <label className="flex items-center gap-1 cursor-pointer" title="Hough+RANSAC detection">
-                                        <input
-                                            type="checkbox"
-                                            checked={overlayVisibility.houghCorners}
-                                            onChange={(e) => setOverlayVisibility(prev => ({ ...prev, houghCorners: e.target.checked }))}
-                                            className="w-3 h-3 rounded border-border"
-                                        />
-                                        <span className="text-xs text-purple-500">H</span>
-                                    </label>
-                                    <label className="flex items-center gap-1 cursor-pointer" title="Edge intersection detection">
-                                        <input
-                                            type="checkbox"
-                                            checked={overlayVisibility.edgeCorners}
-                                            onChange={(e) => setOverlayVisibility(prev => ({ ...prev, edgeCorners: e.target.checked }))}
-                                            className="w-3 h-3 rounded border-border"
-                                        />
-                                        <span className="text-xs text-cyan-500">E</span>
                                     </label>
                                 </div>
                             </div>
@@ -1492,32 +1668,6 @@ export const ImagesPage = () => {
                                                             points={`${c.topLeft.x * 100},${c.topLeft.y * 100} ${c.topRight.x * 100},${c.topRight.y * 100} ${c.bottomRight.x * 100},${c.bottomRight.y * 100} ${c.bottomLeft.x * 100},${c.bottomLeft.y * 100}`}
                                                             fill="none"
                                                             stroke="#eab308"
-                                                            strokeWidth="1"
-                                                            vectorEffect="non-scaling-stroke"
-                                                        />
-                                                    );
-                                                })()}
-                                                {/* Hough corners - purple */}
-                                                {overlayVisibility.houghCorners && cornerDetections.get(sample.id)?.hough.corners && (() => {
-                                                    const c = cornerDetections.get(sample.id)!.hough.corners!;
-                                                    return (
-                                                        <polygon
-                                                            points={`${c.topLeft.x * 100},${c.topLeft.y * 100} ${c.topRight.x * 100},${c.topRight.y * 100} ${c.bottomRight.x * 100},${c.bottomRight.y * 100} ${c.bottomLeft.x * 100},${c.bottomLeft.y * 100}`}
-                                                            fill="none"
-                                                            stroke="#a855f7"
-                                                            strokeWidth="1"
-                                                            vectorEffect="non-scaling-stroke"
-                                                        />
-                                                    );
-                                                })()}
-                                                {/* Edge corners - cyan */}
-                                                {overlayVisibility.edgeCorners && cornerDetections.get(sample.id)?.edge.corners && (() => {
-                                                    const c = cornerDetections.get(sample.id)!.edge.corners!;
-                                                    return (
-                                                        <polygon
-                                                            points={`${c.topLeft.x * 100},${c.topLeft.y * 100} ${c.topRight.x * 100},${c.topRight.y * 100} ${c.bottomRight.x * 100},${c.bottomRight.y * 100} ${c.bottomLeft.x * 100},${c.bottomLeft.y * 100}`}
-                                                            fill="none"
-                                                            stroke="#06b6d4"
                                                             strokeWidth="1"
                                                             vectorEffect="non-scaling-stroke"
                                                         />

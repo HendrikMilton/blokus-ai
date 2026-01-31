@@ -1,6 +1,6 @@
 import type { Knex } from 'knex';
 
-export async function up(knex: Knex): Promise<void> {
+export const up = async (knex: Knex): Promise<void> => {
     // Create corner_detection_runs table
     await knex.schema.createTable('corner_detection_runs', (table) => {
         table.uuid('id').primary().defaultTo(knex.fn.uuid());
@@ -67,9 +67,9 @@ export async function up(knex: Knex): Promise<void> {
 
     // Create index on sample_id for efficient lookups
     await knex.schema.raw('CREATE INDEX idx_corner_detections_sample_id ON corner_detections(sample_id)');
-}
+};
 
-export async function down(knex: Knex): Promise<void> {
+export const down = async (knex: Knex): Promise<void> => {
     await knex.schema.dropTableIfExists('corner_detections');
     await knex.schema.dropTableIfExists('corner_detection_runs');
-}
+};

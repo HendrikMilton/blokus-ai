@@ -1,6 +1,6 @@
 import type { Knex } from 'knex';
 
-export async function up(knex: Knex): Promise<void> {
+export const up = async (knex: Knex): Promise<void> => {
     await knex.schema.alterTable('corner_detections', (table) => {
         // Contour quality metrics
         table.float('contour_aspect_ratio').nullable();
@@ -17,9 +17,9 @@ export async function up(knex: Knex): Promise<void> {
         table.float('edge_area_ratio').nullable();
         table.float('edge_avg_angle').nullable();
     });
-}
+};
 
-export async function down(knex: Knex): Promise<void> {
+export const down = async (knex: Knex): Promise<void> => {
     await knex.schema.alterTable('corner_detections', (table) => {
         table.dropColumn('contour_aspect_ratio');
         table.dropColumn('contour_area_ratio');
@@ -31,4 +31,4 @@ export async function down(knex: Knex): Promise<void> {
         table.dropColumn('edge_area_ratio');
         table.dropColumn('edge_avg_angle');
     });
-}
+};

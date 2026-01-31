@@ -1,6 +1,6 @@
 import { Knex } from 'knex';
 import { knex } from '../../knex';
-import type { DetectResponse, DetectResponseWithCorrection, SampleStatusFlags, TrainingRun, TrainingRunStatus, BoardDetection, DetectionRun, DetectionRunStatus, SampleAiDetection, SampleHumanLabel, ModelPipeline, BoardCorners, CornerDetectionRun, CornerDetectionRunStatus, CornerDetectionResult, GridLabels, GridLabel } from '@blokus-ai/shared';
+import type { DetectResponse, DetectResponseWithCorrection, SampleStatusFlags, TrainingRun, TrainingRunStatus, BoardDetection, DetectionRun, DetectionRunStatus, SampleAiDetection, SampleHumanLabel, ModelPipeline, BoardCorners, CornerDetectionRun, CornerDetectionRunStatus, CornerDetectionResult, GridLabels, GridLabel, GridPredictionRecord } from '@blokus-ai/shared';
 
 // Shared corner fields used by both board_detections and model_detections
 interface CornerFields {
@@ -2129,4 +2129,121 @@ export const deleteGridLabel = async (
     trx: Knex.Transaction | Knex = knex
 ): Promise<void> => {
     await trx('grid_labels').where('sample_id', sampleId).delete();
+};
+
+export const getGridLabelsForSamples = async (
+    sampleIds: string[],
+    trx: Knex.Transaction | Knex = knex
+): Promise<Map<string, GridLabel>> => {
+    if (sampleIds.length === 0) {
+        return new Map();
+    }
+    const rows = await trx<GridLabelRow>('grid_labels')
+        .whereIn('sample_id', sampleIds);
+    const result = new Map<string, GridLabel>();
+    for (const row of rows) {
+        result.set(row.sample_id, rowToGridLabel(row));
+    }
+    return result;
+};
+
+// ============================================================================
+// Grid Predictions (AI predictions, separate from human labels)
+// ============================================================================
+
+interface GridPredictionRow {
+    sample_id: string;
+    grid: GridLabels;
+    confidence: number;
+    processing_time_ms: number;
+    created_at: Date;
+    updated_at: Date;
+}
+
+const rowToGridPrediction = (row: GridPredictionRow): GridPredictionRecord => ({
+    sampleId: row.sample_id,
+    grid: row.grid,
+    confidence: row.confidence,
+    processingTimeMs: row.processing_time_ms,
+    createdAt: row.created_at.toISOString(),
+});
+
+export const getGridPrediction = async (
+    sampleId: string,
+    trx: Knex.Transaction | Knex = knex
+): Promise<GridPredictionRecord | null> => {
+    const row = await trx<GridPredictionRow>('grid_predictions')
+        .where('sample_id', sampleId)
+        .first();
+    return row ? rowToGridPrediction(row) : null;
+};
+
+export const getGridPredictionsForSamples = async (
+    sampleIds: string[],
+    trx: Knex.Transaction | Knex = knex
+): Promise<Map<string, GridPredictionRecord>> => {
+    if (sampleIds.length === 0) {
+        return new Map();
+    }
+
+    const rows = await trx<GridPredictionRow>('grid_predictions')
+        .whereIn('sample_id', sampleIds);
+
+    const result = new Map<string, GridPredictionRecord>();
+    for (const row of rows) {
+        result.set(row.sample_id, rowToGridPrediction(row));
+    }
+    return result;
+};
+
+export const saveGridPrediction = async (
+    sampleId: string,
+    grid: GridLabels,
+    confidence: number,
+    processingTimeMs: number,
+    trx: Knex.Transaction | Knex = knex
+): Promise<GridPredictionRecord> => {
+    const now = new Date();
+
+    await trx('grid_predictions')
+        .insert({
+            sample_id: sampleId,
+            grid: JSON.stringify(grid),
+            confidence,
+            processing_time_ms: processingTimeMs,
+            created_at: now,
+            updated_at: now,
+        })
+        .onConflict('sample_id')
+        .merge({
+            grid: JSON.stringify(grid),
+            confidence,
+            processing_time_ms: processingTimeMs,
+            updated_at: now,
+        });
+
+    return {
+        sampleId,
+        grid,
+        confidence,
+        processingTimeMs,
+        createdAt: now.toISOString(),
+    };
+};
+
+export const deleteGridPrediction = async (
+    sampleId: string,
+    trx: Knex.Transaction | Knex = knex
+): Promise<void> => {
+    await trx('grid_predictions').where('sample_id', sampleId).delete();
+};
+
+/**
+ * Get sample IDs that have grid labels (human labels).
+ */
+export const getGridLabeledSampleIds = async (
+    trx: Knex.Transaction | Knex = knex
+): Promise<Set<string>> => {
+    const rows = await trx('grid_labels').select('sample_id');
+    return new Set(rows.map(r => r.sample_id));
 };

@@ -1,6 +1,6 @@
 import type { Knex } from 'knex';
 
-export async function up(knex: Knex): Promise<void> {
+export const up = async (knex: Knex): Promise<void> => {
     await knex.schema.alterTable('corner_detections', (table) => {
         // Rename contour columns to best
         table.renameColumn('contour_success', 'best_success');
@@ -17,9 +17,9 @@ export async function up(knex: Knex): Promise<void> {
         table.renameColumn('contour_area_ratio', 'best_area_ratio');
         table.renameColumn('contour_avg_angle', 'best_avg_angle');
     });
-}
+};
 
-export async function down(knex: Knex): Promise<void> {
+export const down = async (knex: Knex): Promise<void> => {
     await knex.schema.alterTable('corner_detections', (table) => {
         // Rename best columns back to contour
         table.renameColumn('best_success', 'contour_success');
@@ -36,4 +36,4 @@ export async function down(knex: Knex): Promise<void> {
         table.renameColumn('best_area_ratio', 'contour_area_ratio');
         table.renameColumn('best_avg_angle', 'contour_avg_angle');
     });
-}
+};
