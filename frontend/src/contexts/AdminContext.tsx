@@ -99,7 +99,7 @@ export const [AdminProvider, useAdmin] = makeContext(() => {
                 params.set('tagId', tagId);
             }
             const queryString = params.toString();
-            const url = queryString ? `/api/ml/samples?${queryString}` : '/api/ml/samples';
+            const url = queryString ? `/api/samples?${queryString}` : '/api/samples';
             const data = await http.get<SamplesResponse>(url);
             setSamples(data.samples || []);
             setHasFetchedSamples(true);

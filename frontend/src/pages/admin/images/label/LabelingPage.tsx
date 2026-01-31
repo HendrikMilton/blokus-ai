@@ -59,7 +59,7 @@ export const LabelingPage = () => {
     useEffect(() => {
         const loadSamples = async () => {
             try {
-                const data = await http.get<SamplesResponse>('/api/ml/samples');
+                const data = await http.get<SamplesResponse>('/api/samples');
                 const loadedSamples = data.samples || [];
                 // Sort: unlabeled first, then not human-labeled, then human-labeled
                 // Within each group, sort by created_at descending
@@ -209,7 +209,7 @@ export const LabelingPage = () => {
 
         try {
             // Save the manual label
-            await http.post(`/api/ml/samples/${currentSample.id}/label`, {
+            await http.post(`/api/samples/${currentSample.id}/label`, {
                 hasBoardDetected: labelToSave.hasBoardDetected,
                 isEntireBoardVisible: labelToSave.isEntireBoardVisible,
                 boundingBox: labelToSave.boundingBox,

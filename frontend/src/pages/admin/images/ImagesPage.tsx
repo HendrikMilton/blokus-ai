@@ -389,7 +389,7 @@ export const ImagesPage = () => {
         const uploadFile = async (file: File): Promise<boolean> => {
             try {
                 // Get presigned URL from API
-                const presign = await http.post<PresignResponse>('/api/ml/upload/presign', {});
+                const presign = await http.post<PresignResponse>('/api/samples/upload/presign', {});
 
                 // Upload directly to S3
                 const response = await fetch(presign.uploadUrl, {
@@ -405,7 +405,7 @@ export const ImagesPage = () => {
                 }
 
                 // Generate thumbnail
-                await http.post('/api/ml/upload/complete', { id: presign.id });
+                await http.post('/api/samples/upload/complete', { id: presign.id });
 
                 completedCount++;
                 setUploadProgress(prev => ({ ...prev, completed: completedCount }));
@@ -609,7 +609,7 @@ export const ImagesPage = () => {
 
         setIsDeleting(true);
         try {
-            await http.delete('/api/ml/samples', { ids: Array.from(selectedIds) });
+            await http.delete('/api/samples', { ids: Array.from(selectedIds) });
             toast.success(`Deleted ${selectedIds.size} image${selectedIds.size > 1 ? 's' : ''}`);
             removeSamples(Array.from(selectedIds));
             setSelectedIds(new Set());
@@ -773,7 +773,7 @@ export const ImagesPage = () => {
 
             for (const modelId of selectedModelIds) {
                 try {
-                    const response = await http.get<{ samples: Sample[] }>(`/api/ml/samples?modelId=${modelId}&filter=${preset}`);
+                    const response = await http.get<{ samples: Sample[] }>(`/api/samples?modelId=${modelId}&filter=${preset}`);
                     newMap.set(modelId, new Set(response.samples.map(s => s.id)));
                 } catch {
                     // Ignore errors
@@ -959,7 +959,7 @@ export const ImagesPage = () => {
             width: '64px',
             render: (sample) => (
                 <img
-                    src={sample.thumbnailUrl || sample.imageUrl || `${API_URL}/api/ml/samples/${sample.id}/image`}
+                    src={sample.thumbnailUrl || sample.imageUrl || `${API_URL}/api/samples/${sample.id}/image`}
                     alt={`Sample ${sample.id}`}
                     className="w-12 h-12 object-cover rounded"
                     loading="lazy"
@@ -1594,7 +1594,7 @@ export const ImagesPage = () => {
                                     >
                                         <div className="relative">
                                             <img
-                                                src={sample.thumbnailUrl || sample.imageUrl || `${API_URL}/api/ml/samples/${sample.id}/image`}
+                                                src={sample.thumbnailUrl || sample.imageUrl || `${API_URL}/api/samples/${sample.id}/image`}
                                                 alt={`Sample ${sample.id}`}
                                                 className="w-full h-auto"
                                                 loading="lazy"

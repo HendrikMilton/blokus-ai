@@ -8,6 +8,9 @@ import { knex, initDatabase } from './knex';
 import { pingRouter } from './features/ping/router';
 import { debugRouter } from './features/debug/router';
 import { mlRouter } from './features/ml/router';
+import { tagsRouter } from './features/tags/router';
+import { samplesRouter } from './features/samples/router';
+import { pipelinesRouter } from './features/pipelines/router';
 import { debugPath } from '@blokus-ai/shared';
 import { cidMiddleware } from './middleware/cid';
 import { errorHandler } from './error';
@@ -83,6 +86,9 @@ app.use(cidMiddleware);
 app.use('/ping', pingRouter);
 app.use(debugPath, debugRouter);
 app.use('/api/ml', mlRouter);
+app.use('/api/tags', tagsRouter);
+app.use('/api/samples', samplesRouter);
+app.use('/api/pipelines', pipelinesRouter);
 
 // Error handler (must be last)
 app.use(errorHandler);

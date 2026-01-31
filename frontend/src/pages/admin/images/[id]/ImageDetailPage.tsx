@@ -131,7 +131,7 @@ export const ImageDetailPage = () => {
     useEffect(() => {
         const loadSampleIds = async () => {
             try {
-                const data = await http.get<{ samples: SampleListItem[] }>('/api/ml/samples');
+                const data = await http.get<{ samples: SampleListItem[] }>('/api/samples');
                 const ids = data.samples.map(s => s.id);
                 setSampleIds(ids);
             } catch {
@@ -202,7 +202,7 @@ export const ImageDetailPage = () => {
         };
         const loadPipelines = async () => {
             try {
-                const data = await http.get<{ pipelines: ModelPipeline[] }>('/api/ml/pipelines');
+                const data = await http.get<{ pipelines: ModelPipeline[] }>('/api/pipelines');
                 setPipelines(data.pipelines);
             } catch {
                 // Ignore error
@@ -243,7 +243,7 @@ export const ImageDetailPage = () => {
             setPreviewDetection(null);
             setCornerDetection(null);
             try {
-                const data = await http.get<Sample>(`/api/ml/samples/${id}`);
+                const data = await http.get<Sample>(`/api/samples/${id}`);
                 setSample(data);
             } catch {
                 // Error toast shown by http client
@@ -531,7 +531,7 @@ export const ImageDetailPage = () => {
                     {/* Image with bounding box overlays (read-only) */}
                     <div className="relative bg-surface rounded-lg border overflow-hidden border-border">
                         <img
-                            src={sample.thumbnailUrl || sample.imageUrl || `${API_URL}/api/ml/samples/${sample.id}/image`}
+                            src={sample.thumbnailUrl || sample.imageUrl || `${API_URL}/api/samples/${sample.id}/image`}
                             alt={`Sample ${sample.id}`}
                             className="w-full h-auto select-none"
                             draggable={false}

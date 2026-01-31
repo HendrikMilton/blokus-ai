@@ -72,24 +72,24 @@ export const ML_API = {
 
     // Pipeline CRUD
     getPipelines: async (): Promise<ModelPipeline[]> => {
-        const response = await http.get<{ pipelines: ModelPipeline[] }>('/api/ml/pipelines');
+        const response = await http.get<{ pipelines: ModelPipeline[] }>('/api/pipelines');
         return response.pipelines;
     },
 
     getPipeline: async (id: string): Promise<ModelPipeline> => {
-        return http.get<ModelPipeline>(`/api/ml/pipelines/${id}`);
+        return http.get<ModelPipeline>(`/api/pipelines/${id}`);
     },
 
     createPipeline: async (name: string, componentIds: string[]): Promise<ModelPipeline> => {
-        return http.post<ModelPipeline>('/api/ml/pipelines', { name, componentIds });
+        return http.post<ModelPipeline>('/api/pipelines', { name, componentIds });
     },
 
     updatePipeline: async (id: string, data: { name?: string; componentIds?: string[] }): Promise<ModelPipeline> => {
-        return http.put<ModelPipeline>(`/api/ml/pipelines/${id}`, data);
+        return http.put<ModelPipeline>(`/api/pipelines/${id}`, data);
     },
 
     deletePipeline: async (id: string): Promise<void> => {
-        await http.delete(`/api/ml/pipelines/${id}`);
+        await http.delete(`/api/pipelines/${id}`);
     },
 
     // Perspective correction for stored samples (old method using bbox)
@@ -115,42 +115,42 @@ export const ML_API = {
 
     // Corner labeling
     getCorners: async (sampleId: string): Promise<{ corners: BoardCorners | null }> => {
-        return http.get<{ corners: BoardCorners | null }>(`/api/ml/samples/${sampleId}/corners`);
+        return http.get<{ corners: BoardCorners | null }>(`/api/samples/${sampleId}/corners`);
     },
 
     saveCorners: async (sampleId: string, corners: BoardCorners): Promise<void> => {
-        await http.post(`/api/ml/samples/${sampleId}/corners`, corners);
+        await http.post(`/api/samples/${sampleId}/corners`, corners);
     },
 
     clearCorners: async (sampleId: string): Promise<void> => {
-        await http.delete(`/api/ml/samples/${sampleId}/corners`);
+        await http.delete(`/api/samples/${sampleId}/corners`);
     },
 
     // Tags
     getTags: async (): Promise<Tag[]> => {
-        const response = await http.get<{ tags: Tag[] }>('/api/ml/tags');
+        const response = await http.get<{ tags: Tag[] }>('/api/tags');
         return response.tags;
     },
 
     createTag: async (name: string): Promise<Tag> => {
-        return http.post<Tag>('/api/ml/tags', { name });
+        return http.post<Tag>('/api/tags', { name });
     },
 
     deleteTag: async (id: string): Promise<void> => {
-        await http.delete(`/api/ml/tags/${id}`);
+        await http.delete(`/api/tags/${id}`);
     },
 
     getTagsForSample: async (sampleId: string): Promise<Tag[]> => {
-        const response = await http.get<{ tags: Tag[] }>(`/api/ml/samples/${sampleId}/tags`);
+        const response = await http.get<{ tags: Tag[] }>(`/api/tags/samples/${sampleId}`);
         return response.tags;
     },
 
     addTagToSample: async (sampleId: string, tagId: string): Promise<void> => {
-        await http.post(`/api/ml/samples/${sampleId}/tags`, { tagId });
+        await http.post(`/api/tags/samples/${sampleId}`, { tagId });
     },
 
     removeTagFromSample: async (sampleId: string, tagId: string): Promise<void> => {
-        await http.delete(`/api/ml/samples/${sampleId}/tags/${tagId}`);
+        await http.delete(`/api/tags/samples/${sampleId}/${tagId}`);
     },
 
     // Corner detection runs
@@ -183,7 +183,7 @@ export const ML_API = {
 
     // Grid labels
     getGridLabel: async (sampleId: string): Promise<GridLabels | null> => {
-        const response = await http.get<{ grid: GridLabels | null }>(`/api/ml/samples/${sampleId}/grid`);
+        const response = await http.get<{ grid: GridLabels | null }>(`/api/samples/${sampleId}/grid`);
         return response.grid;
     },
 
@@ -198,15 +198,15 @@ export const ML_API = {
     },
 
     saveGridLabel: async (sampleId: string, grid: GridLabels): Promise<GridLabel> => {
-        return http.post<GridLabel>(`/api/ml/samples/${sampleId}/grid`, { grid });
+        return http.post<GridLabel>(`/api/samples/${sampleId}/grid`, { grid });
     },
 
     clearGridLabel: async (sampleId: string): Promise<void> => {
-        await http.delete(`/api/ml/samples/${sampleId}/grid`);
+        await http.delete(`/api/samples/${sampleId}/grid`);
     },
 
     predictGrid: async (sampleId: string): Promise<GridPrediction> => {
-        return http.post<GridPrediction>(`/api/ml/samples/${sampleId}/grid/predict`, {});
+        return http.post<GridPrediction>(`/api/samples/${sampleId}/grid/predict`, {});
     },
 
     // Grid prediction runs (bulk AI prediction)

@@ -81,7 +81,7 @@ export const OriginalImagePanel = ({
             }}
         >
             <img
-                src={currentSample.thumbnailUrl || currentSample.imageUrl || `${API_URL}/api/ml/samples/${currentSample.id}/image`}
+                src={currentSample.thumbnailUrl || currentSample.imageUrl || `${API_URL}/api/samples/${currentSample.id}/image`}
                 alt={`Sample ${currentSample.id}`}
                 className="w-full h-auto select-none"
                 draggable={false}
