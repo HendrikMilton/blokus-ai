@@ -4,7 +4,7 @@ import { asyncHandler } from '../../lib/async-handler';
 import { mlHttp } from '../../lib/http';
 import type { DetectResponse, BoardCorners, PerspectiveFromCornersRequest } from '@blokus-ai/shared';
 import { BadRequestError, NotFoundError } from '../../error';
-import { getBoardDetectionWithCorrectionBySampleId, upsertModelDetection, deleteBoardDetection, deleteBoardDetections, saveBoardDetectionCorrection, CorrectionData, setVerificationStatus, saveManualLabel, ManualLabelData, getSampleStatusFlagsById, getSampleDetectionInfoMap, createTrainingRun, updateTrainingRun, listTrainingRuns, getTrainingRun, deleteTrainingRun, getHumanLabeledImageCount, getTrainingData, getClassifierTrainingData, getPoseTrainingData, getPoseTrainingImageCount, createDetectionRun, updateDetectionRun, listDetectionRuns, getDetectionRun, deleteDetectionRun, getSampleIdsForBulkDetection, calculateAverageIoU, createPipeline, listPipelines, getPipeline, getPipelineWithComponents, updatePipeline, deletePipeline, saveCorners, getCorners, clearCorners, getTagsForSamples, createCornerDetectionRun, updateCornerDetectionRun, listCornerDetectionRuns, getCornerDetectionRun, deleteCornerDetectionRun, upsertCornerDetection, getCornerDetectionsByRunId, getCornerDetectionsForSamples } from './database';
+import { getBoardDetectionWithCorrectionBySampleId, upsertModelDetection, deleteBoardDetection, deleteBoardDetections, saveBoardDetectionCorrection, CorrectionData, setVerificationStatus, saveManualLabel, ManualLabelData, getSampleStatusFlagsById, getSampleDetectionInfoMap, createTrainingRun, updateTrainingRun, listTrainingRuns, getTrainingRun, deleteTrainingRun, getHumanLabeledImageCount, getTrainingData, getClassifierTrainingData, getPoseTrainingData, getPoseTrainingImageCount, createDetectionRun, updateDetectionRun, listDetectionRuns, getDetectionRun, deleteDetectionRun, getSampleIdsForBulkDetection, calculateAverageIoU, createPipeline, listPipelines, getPipeline, getPipelineWithComponents, updatePipeline, deletePipeline, saveCorners, getCorners, clearCorners, getTagsForSamples, createCornerDetectionRun, updateCornerDetectionRun, listCornerDetectionRuns, getCornerDetectionRun, deleteCornerDetectionRun, upsertCornerDetection, getCornerDetectionsByRunId, getCornerDetectionsForSamples, getGridLabel, saveGridLabel, deleteGridLabel } from './database';
 import type { SampleStatusFlags } from '@blokus-ai/shared';
 import { listSamples, getSample, getUploadPresignedUrl, getCloudFrontUrl, getThumbnailUrl, generateThumbnail, deleteSamples } from './s3';
 import { emitEvent } from '../../lib/socket';
@@ -1252,4 +1252,45 @@ mlRouter.get('/corner-detections', asyncHandler(async (req, res) => {
     } else {
         throw new BadRequestError('runId or sampleIds query param required');
     }
+}));
+
+// ============================================================================
+// Grid Labels
+// ============================================================================
+
+// GET /api/ml/samples/:id/grid - Get grid label for a sample
+mlRouter.get('/samples/:id/grid', asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const label = await getGridLabel(id);
+    res.json({ grid: label?.grid ?? null });
+}));
+
+// POST /api/ml/samples/:id/grid - Save grid label for a sample
+mlRouter.post('/samples/:id/grid', asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const { grid } = req.body;
+
+    if (!grid || !Array.isArray(grid)) {
+        throw new BadRequestError('grid must be a 20x20 array');
+    }
+
+    // Validate grid dimensions
+    if (grid.length !== 20) {
+        throw new BadRequestError('grid must have 20 rows');
+    }
+    for (const row of grid) {
+        if (!Array.isArray(row) || row.length !== 20) {
+            throw new BadRequestError('each row must have 20 cells');
+        }
+    }
+
+    const label = await saveGridLabel(id, grid);
+    res.json(label);
+}));
+
+// DELETE /api/ml/samples/:id/grid - Delete grid label for a sample
+mlRouter.delete('/samples/:id/grid', asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    await deleteGridLabel(id);
+    res.json({ success: true });
 }));

@@ -1,6 +1,6 @@
 import { Knex } from 'knex';
 import { knex } from '../../knex';
-import type { DetectResponse, DetectResponseWithCorrection, SampleStatusFlags, TrainingRun, TrainingRunStatus, BoardDetection, DetectionRun, DetectionRunStatus, SampleAiDetection, SampleHumanLabel, ModelPipeline, BoardCorners, CornerDetectionRun, CornerDetectionRunStatus, CornerDetectionResult } from '@blokus-ai/shared';
+import type { DetectResponse, DetectResponseWithCorrection, SampleStatusFlags, TrainingRun, TrainingRunStatus, BoardDetection, DetectionRun, DetectionRunStatus, SampleAiDetection, SampleHumanLabel, ModelPipeline, BoardCorners, CornerDetectionRun, CornerDetectionRunStatus, CornerDetectionResult, GridLabels, GridLabel } from '@blokus-ai/shared';
 
 // Shared corner fields used by both board_detections and model_detections
 interface CornerFields {
@@ -1871,6 +1871,9 @@ interface CornerDetectionRow {
     edge_aspect_ratio: number | null;
     edge_area_ratio: number | null;
     edge_avg_angle: number | null;
+    best_cropped_url: string | null;
+    hough_cropped_url: string | null;
+    edge_cropped_url: string | null;
     created_at: Date;
 }
 
@@ -1891,6 +1894,7 @@ const rowToCornerDetectionResult = (row: CornerDetectionRow): CornerDetectionRes
             areaRatio: row.best_area_ratio,
             avgAngle: row.best_avg_angle,
         } : null,
+        croppedUrl: row.best_cropped_url,
     },
     hough: {
         success: row.hough_success ?? false,
@@ -1906,6 +1910,7 @@ const rowToCornerDetectionResult = (row: CornerDetectionRow): CornerDetectionRes
             areaRatio: row.hough_area_ratio,
             avgAngle: row.hough_avg_angle,
         } : null,
+        croppedUrl: row.hough_cropped_url,
     },
     edge: {
         success: row.edge_success ?? false,
@@ -1921,6 +1926,7 @@ const rowToCornerDetectionResult = (row: CornerDetectionRow): CornerDetectionRes
             areaRatio: row.edge_area_ratio,
             avgAngle: row.edge_avg_angle,
         } : null,
+        croppedUrl: row.edge_cropped_url,
     },
 });
 
@@ -1938,18 +1944,21 @@ export interface CornerDetectionData {
         corners: BoardCorners | null;
         error: number | null;
         quality?: CornerQualityData | null;
+        croppedUrl?: string | null;
     };
     hough: {
         success: boolean;
         corners: BoardCorners | null;
         error: number | null;
         quality?: CornerQualityData | null;
+        croppedUrl?: string | null;
     };
     edge: {
         success: boolean;
         corners: BoardCorners | null;
         error: number | null;
         quality?: CornerQualityData | null;
+        croppedUrl?: string | null;
     };
 }
 
@@ -2000,6 +2009,9 @@ export const upsertCornerDetection = async (
             edge_aspect_ratio: data.edge.quality?.aspectRatio ?? null,
             edge_area_ratio: data.edge.quality?.areaRatio ?? null,
             edge_avg_angle: data.edge.quality?.avgAngle ?? null,
+            best_cropped_url: data.best.croppedUrl ?? null,
+            hough_cropped_url: data.hough.croppedUrl ?? null,
+            edge_cropped_url: data.edge.croppedUrl ?? null,
         })
         .onConflict(['sample_id', 'run_id'])
         .merge();
@@ -2052,4 +2064,69 @@ export const getCornerDetectionsForSamples = async (
         result.set(row.sample_id, rowToCornerDetectionResult(row));
     }
     return result;
+};
+
+// ============================================================================
+// Grid Labels
+// ============================================================================
+
+interface GridLabelRow {
+    sample_id: string;
+    grid: GridLabels;
+    labeled_at: Date;
+    created_at: Date;
+    updated_at: Date;
+}
+
+const rowToGridLabel = (row: GridLabelRow): GridLabel => ({
+    sampleId: row.sample_id,
+    grid: row.grid,
+    labeledAt: row.labeled_at.toISOString(),
+});
+
+export const getGridLabel = async (
+    sampleId: string,
+    trx: Knex.Transaction | Knex = knex
+): Promise<GridLabel | null> => {
+    const row = await trx<GridLabelRow>('grid_labels')
+        .where('sample_id', sampleId)
+        .first();
+    return row ? rowToGridLabel(row) : null;
+};
+
+export const saveGridLabel = async (
+    sampleId: string,
+    grid: GridLabels,
+    trx: Knex.Transaction | Knex = knex
+): Promise<GridLabel> => {
+    const now = new Date();
+
+    // Upsert the grid label
+    await trx('grid_labels')
+        .insert({
+            sample_id: sampleId,
+            grid: JSON.stringify(grid),
+            labeled_at: now,
+            created_at: now,
+            updated_at: now,
+        })
+        .onConflict('sample_id')
+        .merge({
+            grid: JSON.stringify(grid),
+            labeled_at: now,
+            updated_at: now,
+        });
+
+    return {
+        sampleId,
+        grid,
+        labeledAt: now.toISOString(),
+    };
+};
+
+export const deleteGridLabel = async (
+    sampleId: string,
+    trx: Knex.Transaction | Knex = knex
+): Promise<void> => {
+    await trx('grid_labels').where('sample_id', sampleId).delete();
 };

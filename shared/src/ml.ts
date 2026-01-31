@@ -5,6 +5,19 @@ export interface BoardCell {
     color: PlayerColor | null;
 }
 
+// Grid cell color for labeling (null = empty)
+export type CellColor = PlayerColor | null;
+
+// 20x20 grid of cell colors
+export type GridLabels = CellColor[][];
+
+// Grid label record from database
+export interface GridLabel {
+    sampleId: string;
+    grid: GridLabels;
+    labeledAt: string;
+}
+
 // Constants
 export const BOARD_SIZE = 20;
 
@@ -236,6 +249,7 @@ export interface CornerMethodResult {
     corners: BoardCorners | null;
     error: number | null;
     quality: CornerQualityMetrics | null;
+    croppedUrl?: string | null;
 }
 
 // Corner detection result for a single sample (3 methods: best, hough, edge)

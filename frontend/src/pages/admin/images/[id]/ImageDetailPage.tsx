@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
-import { ChevronLeft, ChevronRight, Pencil, Play, Grid3X3 } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Pencil, Play } from 'lucide-react';
 import { http, API_URL } from '../../../../api/config';
-import { ML_API, PerspectiveFromCornersResponse, PerspectiveMethodResult } from '../../../../api/ml';
+import { ML_API } from '../../../../api/ml';
 import { Button } from '../../../../components/ui/Button';
 import { Select } from '../../../../components/ui/Select';
 import { formatShortDate, formatShortId } from '../../../../utils/format';
@@ -59,6 +59,12 @@ interface SampleListItem {
     id: string;
 }
 
+interface BoardCorners {
+    topLeft: { x: number; y: number };
+    topRight: { x: number; y: number };
+    bottomRight: { x: number; y: number };
+    bottomLeft: { x: number; y: number };
+}
 
 export const ImageDetailPage = () => {
     const { id } = useParams<{ id: string }>();
@@ -73,8 +79,6 @@ export const ImageDetailPage = () => {
     const [pipelines, setPipelines] = useState<ModelPipeline[]>([]);
     const [isDetecting, setIsDetecting] = useState(false);
     const [previewDetection, setPreviewDetection] = useState<DetectResponseWithCorrection['detection'] | null>(null);
-    const [perspectiveCorrections, setPerspectiveCorrections] = useState<PerspectiveFromCornersResponse | null>(null);
-    const [isCorrectingPerspective, setIsCorrectingPerspective] = useState(false);
 
     // Corner detection results from database
     const [cornerDetection, setCornerDetection] = useState<CornerDetectionResult | null>(null);
@@ -233,31 +237,10 @@ export const ImageDetailPage = () => {
         }
     }, [id, selectedModelId]);
 
-    const runPerspectiveCorrection = useCallback(async () => {
-        if (!id || !cornerDetection) {
-            return;
-        }
-
-        setIsCorrectingPerspective(true);
-        try {
-            const result = await ML_API.correctPerspectiveFromCorners(id, {
-                best: cornerDetection.best.corners,
-                hough: cornerDetection.hough.corners,
-                edge: cornerDetection.edge.corners,
-            });
-            setPerspectiveCorrections(result);
-        } catch {
-            // Error toast shown by http client
-        } finally {
-            setIsCorrectingPerspective(false);
-        }
-    }, [id, cornerDetection]);
-
     useEffect(() => {
         const loadSample = async () => {
-            // Clear preview and perspective corrections when navigating to a different sample
+            // Clear preview when navigating to a different sample
             setPreviewDetection(null);
-            setPerspectiveCorrections(null);
             setCornerDetection(null);
             try {
                 const data = await http.get<Sample>(`/api/ml/samples/${id}`);
@@ -349,7 +332,7 @@ export const ImageDetailPage = () => {
         return `x: ${(bbox.x * 100).toFixed(1)}%, y: ${(bbox.y * 100).toFixed(1)}%, w: ${(bbox.width * 100).toFixed(1)}%, h: ${(bbox.height * 100).toFixed(1)}%`;
     };
 
-    const renderCorrectionMethod = (title: string, method: PerspectiveMethodResult, error: number | null) => {
+    const renderCroppedImage = (title: string, croppedUrl: string | null | undefined, error: number | null) => {
         const errorStr = error !== null ? `${(error * 100).toFixed(1)}%` : '—';
         const errorColor = error !== null
             ? (error * 100 < 1 ? 'text-success' : error * 100 < 3 ? 'text-warning' : 'text-error')
@@ -358,16 +341,16 @@ export const ImageDetailPage = () => {
         return (
             <div className="relative bg-surface-dim rounded-lg overflow-hidden">
                 <div className={`absolute top-2 left-2 z-10 text-xs px-2 py-1 rounded ${
-                    method.success ? 'bg-success/80 text-white' : 'bg-error/80 text-white'
+                    croppedUrl ? 'bg-success/80 text-white' : 'bg-error/80 text-white'
                 }`}>
-                    {title} {method.success ? '✓' : '✗'}
+                    {title}
                 </div>
                 <div className={`absolute top-2 right-2 z-10 text-xs px-2 py-1 rounded bg-black/60 ${errorColor}`}>
                     err: {errorStr}
                 </div>
-                {method.image ? (
+                {croppedUrl ? (
                     <img
-                        src={`data:image/jpeg;base64,${method.image}`}
+                        src={croppedUrl}
                         alt={title}
                         className="w-full aspect-square object-contain"
                     />
@@ -468,285 +451,412 @@ export const ImageDetailPage = () => {
                 </div>
             </div>
 
-            {/* Content container - centered with max width */}
-            <div className="max-w-2xl mx-auto space-y-6">
+            {/* Two-column layout */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                {/* Left Column: Original image and overlays */}
+                <div className="space-y-4">
+                    {/* Tags Section */}
+                    <SampleTagsSection sampleId={sample.id} allTags={allTags} />
 
-                {/* Tags Section */}
-                <SampleTagsSection sampleId={sample.id} allTags={allTags} />
-
-                {/* Visibility toggles for overlays */}
-                <div className="flex items-center gap-3 px-2 py-2 border border-border rounded-md bg-surface">
-                    <span className="text-xs text-muted">Box:</span>
-                    <label className="flex items-center gap-1 cursor-pointer" title="Human bounding box">
-                        <input
-                            type="checkbox"
-                            checked={overlayVisibility.humanBox}
-                            onChange={(e) => setOverlayVisibility(prev => ({ ...prev, humanBox: e.target.checked }))}
-                            className="w-3 h-3 rounded border-border"
-                        />
-                        <span className="text-xs text-green-500">H</span>
-                    </label>
-                    <label className="flex items-center gap-1 cursor-pointer" title="AI bounding box">
-                        <input
-                            type="checkbox"
-                            checked={overlayVisibility.aiBox}
-                            onChange={(e) => setOverlayVisibility(prev => ({ ...prev, aiBox: e.target.checked }))}
-                            className="w-3 h-3 rounded border-border"
-                        />
-                        <span className="text-xs text-blue-500">AI</span>
-                    </label>
-                    <div className="w-px h-4 bg-border" />
-                    <span className="text-xs text-muted">Corners:</span>
-                    <label className="flex items-center gap-1 cursor-pointer" title="Human corners">
-                        <input
-                            type="checkbox"
-                            checked={overlayVisibility.humanCorners}
-                            onChange={(e) => setOverlayVisibility(prev => ({ ...prev, humanCorners: e.target.checked }))}
-                            className="w-3 h-3 rounded border-border"
-                        />
-                        <span className="text-xs text-green-500">H</span>
-                    </label>
-                    <label className="flex items-center gap-1 cursor-pointer" title="AI corners">
-                        <input
-                            type="checkbox"
-                            checked={overlayVisibility.aiCorners}
-                            onChange={(e) => setOverlayVisibility(prev => ({ ...prev, aiCorners: e.target.checked }))}
-                            className="w-3 h-3 rounded border-border"
-                        />
-                        <span className="text-xs text-blue-500">AI</span>
-                    </label>
-                    <label className="flex items-center gap-1 cursor-pointer" title="Best (auto-selected)">
-                        <input
-                            type="checkbox"
-                            checked={overlayVisibility.bestCorners}
-                            onChange={(e) => setOverlayVisibility(prev => ({ ...prev, bestCorners: e.target.checked }))}
-                            className="w-3 h-3 rounded border-border"
-                        />
-                        <span className="text-xs text-yellow-500">B</span>
-                    </label>
-                    <label className="flex items-center gap-1 cursor-pointer" title="Hough+RANSAC detection">
-                        <input
-                            type="checkbox"
-                            checked={overlayVisibility.houghCorners}
-                            onChange={(e) => setOverlayVisibility(prev => ({ ...prev, houghCorners: e.target.checked }))}
-                            className="w-3 h-3 rounded border-border"
-                        />
-                        <span className="text-xs text-purple-500">H</span>
-                    </label>
-                    <label className="flex items-center gap-1 cursor-pointer" title="Edge intersection detection">
-                        <input
-                            type="checkbox"
-                            checked={overlayVisibility.edgeCorners}
-                            onChange={(e) => setOverlayVisibility(prev => ({ ...prev, edgeCorners: e.target.checked }))}
-                            className="w-3 h-3 rounded border-border"
-                        />
-                        <span className="text-xs text-cyan-500">E</span>
-                    </label>
-                </div>
-
-                {/* Image with bounding box overlays (read-only) */}
-                <div className="relative bg-surface rounded-lg border overflow-hidden border-border">
-                    <img
-                        src={sample.thumbnailUrl || sample.imageUrl || `${API_URL}/api/ml/samples/${sample.id}/image`}
-                        alt={`Sample ${sample.id}`}
-                        className="w-full h-auto select-none"
-                        draggable={false}
-                    />
-                    {/* AI Detection bounding box (dashed, blue) */}
-                    {overlayVisibility.aiBox && detection?.detection?.boundingBox && detection.detection.confidence > 0 && (
-                        <div
-                            className="absolute rounded-sm pointer-events-none border-2 border-blue-500 border-dashed"
-                            style={{
-                                left: `${detection.detection.boundingBox.x * 100}%`,
-                                top: `${detection.detection.boundingBox.y * 100}%`,
-                                width: `${detection.detection.boundingBox.width * 100}%`,
-                                height: `${detection.detection.boundingBox.height * 100}%`,
-                            }}
-                        />
-                    )}
-                    {/* Human Label bounding box (solid, green) */}
-                    {overlayVisibility.humanBox && detection?.correction?.boundingBox && (
-                        <div
-                            className="absolute rounded-sm pointer-events-none border-2 border-green-500"
-                            style={{
-                                left: `${detection.correction.boundingBox.x * 100}%`,
-                                top: `${detection.correction.boundingBox.y * 100}%`,
-                                width: `${detection.correction.boundingBox.width * 100}%`,
-                                height: `${detection.correction.boundingBox.height * 100}%`,
-                            }}
-                        />
-                    )}
-                    {/* Preview Detection bounding box (dashed, warning color) */}
-                    {previewDetection?.boundingBox && (
-                        <div
-                            className="absolute rounded-sm pointer-events-none border-2 border-warning border-dashed"
-                            style={{
-                                left: `${previewDetection.boundingBox.x * 100}%`,
-                                top: `${previewDetection.boundingBox.y * 100}%`,
-                                width: `${previewDetection.boundingBox.width * 100}%`,
-                                height: `${previewDetection.boundingBox.height * 100}%`,
-                            }}
-                        >
-                            <div className="absolute -top-6 left-0 text-white text-xs px-1.5 py-0.5 rounded bg-warning">
-                                Preview
-                            </div>
-                        </div>
-                    )}
-
-                    {/* Corner overlays (SVG polygons) */}
-                    <svg className="absolute inset-0 w-full h-full pointer-events-none" viewBox="0 0 100 100" preserveAspectRatio="none">
-                        {/* Human corners - green */}
-                        {overlayVisibility.humanCorners && savedCorners && (
-                            <polygon
-                                points={`${savedCorners.topLeft.x * 100},${savedCorners.topLeft.y * 100} ${savedCorners.topRight.x * 100},${savedCorners.topRight.y * 100} ${savedCorners.bottomRight.x * 100},${savedCorners.bottomRight.y * 100} ${savedCorners.bottomLeft.x * 100},${savedCorners.bottomLeft.y * 100}`}
-                                fill="none"
-                                stroke="#22c55e"
-                                strokeWidth="1"
-                                vectorEffect="non-scaling-stroke"
+                    {/* Visibility toggles for overlays */}
+                    <div className="flex items-center gap-3 px-2 py-2 border border-border rounded-md bg-surface">
+                        <span className="text-xs text-muted">Box:</span>
+                        <label className="flex items-center gap-1 cursor-pointer" title="Human bounding box">
+                            <input
+                                type="checkbox"
+                                checked={overlayVisibility.humanBox}
+                                onChange={(e) => setOverlayVisibility(prev => ({ ...prev, humanBox: e.target.checked }))}
+                                className="w-3 h-3 rounded border-border"
                             />
-                        )}
-                        {/* AI corners - blue */}
-                        {overlayVisibility.aiCorners && detection?.detection?.corners && (
-                            <polygon
-                                points={`${detection.detection.corners.topLeft.x * 100},${detection.detection.corners.topLeft.y * 100} ${detection.detection.corners.topRight.x * 100},${detection.detection.corners.topRight.y * 100} ${detection.detection.corners.bottomRight.x * 100},${detection.detection.corners.bottomRight.y * 100} ${detection.detection.corners.bottomLeft.x * 100},${detection.detection.corners.bottomLeft.y * 100}`}
-                                fill="none"
-                                stroke="#3b82f6"
-                                strokeWidth="1"
-                                strokeDasharray="2 1"
-                                vectorEffect="non-scaling-stroke"
+                            <span className="text-xs text-green-500">H</span>
+                        </label>
+                        <label className="flex items-center gap-1 cursor-pointer" title="AI bounding box">
+                            <input
+                                type="checkbox"
+                                checked={overlayVisibility.aiBox}
+                                onChange={(e) => setOverlayVisibility(prev => ({ ...prev, aiBox: e.target.checked }))}
+                                className="w-3 h-3 rounded border-border"
                             />
-                        )}
-                        {/* Best corners - yellow */}
-                        {overlayVisibility.bestCorners && cornerDetection?.best.corners && (
-                            <polygon
-                                points={`${cornerDetection.best.corners.topLeft.x * 100},${cornerDetection.best.corners.topLeft.y * 100} ${cornerDetection.best.corners.topRight.x * 100},${cornerDetection.best.corners.topRight.y * 100} ${cornerDetection.best.corners.bottomRight.x * 100},${cornerDetection.best.corners.bottomRight.y * 100} ${cornerDetection.best.corners.bottomLeft.x * 100},${cornerDetection.best.corners.bottomLeft.y * 100}`}
-                                fill="none"
-                                stroke="#eab308"
-                                strokeWidth="1"
-                                vectorEffect="non-scaling-stroke"
+                            <span className="text-xs text-blue-500">AI</span>
+                        </label>
+                        <div className="w-px h-4 bg-border" />
+                        <span className="text-xs text-muted">Corners:</span>
+                        <label className="flex items-center gap-1 cursor-pointer" title="Human corners">
+                            <input
+                                type="checkbox"
+                                checked={overlayVisibility.humanCorners}
+                                onChange={(e) => setOverlayVisibility(prev => ({ ...prev, humanCorners: e.target.checked }))}
+                                className="w-3 h-3 rounded border-border"
                             />
-                        )}
-                        {/* Hough corners - purple */}
-                        {overlayVisibility.houghCorners && cornerDetection?.hough.corners && (
-                            <polygon
-                                points={`${cornerDetection.hough.corners.topLeft.x * 100},${cornerDetection.hough.corners.topLeft.y * 100} ${cornerDetection.hough.corners.topRight.x * 100},${cornerDetection.hough.corners.topRight.y * 100} ${cornerDetection.hough.corners.bottomRight.x * 100},${cornerDetection.hough.corners.bottomRight.y * 100} ${cornerDetection.hough.corners.bottomLeft.x * 100},${cornerDetection.hough.corners.bottomLeft.y * 100}`}
-                                fill="none"
-                                stroke="#a855f7"
-                                strokeWidth="1"
-                                vectorEffect="non-scaling-stroke"
+                            <span className="text-xs text-green-500">H</span>
+                        </label>
+                        <label className="flex items-center gap-1 cursor-pointer" title="AI corners">
+                            <input
+                                type="checkbox"
+                                checked={overlayVisibility.aiCorners}
+                                onChange={(e) => setOverlayVisibility(prev => ({ ...prev, aiCorners: e.target.checked }))}
+                                className="w-3 h-3 rounded border-border"
                             />
-                        )}
-                        {/* Edge corners - cyan */}
-                        {overlayVisibility.edgeCorners && cornerDetection?.edge.corners && (
-                            <polygon
-                                points={`${cornerDetection.edge.corners.topLeft.x * 100},${cornerDetection.edge.corners.topLeft.y * 100} ${cornerDetection.edge.corners.topRight.x * 100},${cornerDetection.edge.corners.topRight.y * 100} ${cornerDetection.edge.corners.bottomRight.x * 100},${cornerDetection.edge.corners.bottomRight.y * 100} ${cornerDetection.edge.corners.bottomLeft.x * 100},${cornerDetection.edge.corners.bottomLeft.y * 100}`}
-                                fill="none"
-                                stroke="#06b6d4"
-                                strokeWidth="1"
-                                vectorEffect="non-scaling-stroke"
+                            <span className="text-xs text-blue-500">AI</span>
+                        </label>
+                        <label className="flex items-center gap-1 cursor-pointer" title="Best (auto-selected)">
+                            <input
+                                type="checkbox"
+                                checked={overlayVisibility.bestCorners}
+                                onChange={(e) => setOverlayVisibility(prev => ({ ...prev, bestCorners: e.target.checked }))}
+                                className="w-3 h-3 rounded border-border"
                             />
-                        )}
-                    </svg>
-                </div>
-
-                {/* Run Detection Controls */}
-                {(trainingRuns.length > 0 || pipelines.length > 0) && (
-                    <div className="bg-surface rounded-lg border border-border p-4">
-                        <h2 className="text-sm font-medium text-foreground mb-3">Run Detection</h2>
-                        <div className="flex items-center gap-3">
-                            <Select
-                                value={selectedModelId}
-                                onChange={(value) => setSelectedModelId(String(value))}
-                                placeholder="Select a model..."
-                                options={[
-                                    ...trainingRuns.map((run) => ({
-                                        value: run.id,
-                                        label: `${formatShortId(run.id)} - ${formatShortDate(run.createdAt)} - ${run.imageCount} imgs${run.accuracy !== null ? ` - ${(run.accuracy * 100).toFixed(1)}% acc` : ''}`,
-                                    })),
-                                    ...pipelines.map((pipeline) => ({
-                                        value: `pipeline:${pipeline.id}`,
-                                        label: `\u{1F517} ${pipeline.name} (${pipeline.componentIds.length} models)`,
-                                    })),
-                                ]}
-                                className="flex-1"
+                            <span className="text-xs text-yellow-500">B</span>
+                        </label>
+                        <label className="flex items-center gap-1 cursor-pointer" title="Hough+RANSAC detection">
+                            <input
+                                type="checkbox"
+                                checked={overlayVisibility.houghCorners}
+                                onChange={(e) => setOverlayVisibility(prev => ({ ...prev, houghCorners: e.target.checked }))}
+                                className="w-3 h-3 rounded border-border"
                             />
-                            <Button
-                                onClick={runDetection}
-                                disabled={isDetecting || !selectedModelId}
-                                leftIcon={<Play className="w-4 h-4" />}
-                            >
-                                {isDetecting ? 'Running...' : 'Detect'}
-                            </Button>
-                        </div>
-
-                        {/* Preview Detection Result */}
-                        {previewDetection && (
-                            <div className="mt-4 pt-4 border-t border-border space-y-3">
-                                <div className="flex items-center justify-between gap-4">
-                                    <span className="text-sm text-secondary">Board detected</span>
-                                    <span className={`px-2 py-0.5 text-xs font-medium rounded ${
-                                        previewDetection.hasBoardDetected
-                                            ? 'bg-success/20 text-success'
-                                            : 'bg-error/20 text-error'
-                                    }`}>
-                                        {previewDetection.hasBoardDetected ? 'Yes' : 'No'}
-                                    </span>
-                                </div>
-                                <div className="flex items-center justify-between gap-4">
-                                    <span className="text-sm text-secondary">Entire board visible</span>
-                                    <span className={`px-2 py-0.5 text-xs font-medium rounded ${
-                                        previewDetection.isEntireBoardVisible
-                                            ? 'bg-success/20 text-success'
-                                            : 'bg-error/20 text-error'
-                                    }`}>
-                                        {previewDetection.isEntireBoardVisible ? 'Yes' : 'No'}
-                                    </span>
-                                </div>
-                                <div className="flex items-center justify-between gap-4">
-                                    <span className="text-sm text-secondary">Confidence</span>
-                                    <span className="text-sm font-mono text-foreground">
-                                        {(previewDetection.confidence * 100).toFixed(0)}%
-                                    </span>
-                                </div>
-                                {previewDetection.boundingBox && (
-                                    <div className="pt-2 border-t border-border">
-                                        <span className="text-xs text-muted">Bounding box</span>
-                                        <p className="text-xs font-mono text-foreground mt-1">
-                                            {formatBbox(previewDetection.boundingBox)}
-                                        </p>
-                                    </div>
-                                )}
-                            </div>
-                        )}
+                            <span className="text-xs text-purple-500">H</span>
+                        </label>
+                        <label className="flex items-center gap-1 cursor-pointer" title="Edge intersection detection">
+                            <input
+                                type="checkbox"
+                                checked={overlayVisibility.edgeCorners}
+                                onChange={(e) => setOverlayVisibility(prev => ({ ...prev, edgeCorners: e.target.checked }))}
+                                className="w-3 h-3 rounded border-border"
+                            />
+                            <span className="text-xs text-cyan-500">E</span>
+                        </label>
                     </div>
-                )}
 
-                {/* AI Detection Info */}
-                {trainingRuns.length > 0 && (
-                    <div className="bg-surface rounded-lg border border-border p-4">
-                        <div className="flex items-center justify-between gap-3 mb-3">
-                            <h2 className="text-sm font-medium text-foreground">AI Detection</h2>
-                            <Select
-                                value={viewModelId}
-                                onChange={(value) => setViewModelId(String(value))}
-                                options={trainingRuns.map((run) => ({
-                                    value: run.id,
-                                    label: `${formatShortId(run.id)} - ${run.imageCount} imgs${run.accuracy !== null ? ` - ${(run.accuracy * 100).toFixed(1)}%` : ''}`,
-                                }))}
-                                className="w-56"
+                    {/* Image with bounding box overlays (read-only) */}
+                    <div className="relative bg-surface rounded-lg border overflow-hidden border-border">
+                        <img
+                            src={sample.thumbnailUrl || sample.imageUrl || `${API_URL}/api/ml/samples/${sample.id}/image`}
+                            alt={`Sample ${sample.id}`}
+                            className="w-full h-auto select-none"
+                            draggable={false}
+                        />
+                        {/* AI Detection bounding box (dashed, blue) */}
+                        {overlayVisibility.aiBox && detection?.detection?.boundingBox && detection.detection.confidence > 0 && (
+                            <div
+                                className="absolute rounded-sm pointer-events-none border-2 border-blue-500 border-dashed"
+                                style={{
+                                    left: `${detection.detection.boundingBox.x * 100}%`,
+                                    top: `${detection.detection.boundingBox.y * 100}%`,
+                                    width: `${detection.detection.boundingBox.width * 100}%`,
+                                    height: `${detection.detection.boundingBox.height * 100}%`,
+                                }}
                             />
+                        )}
+                        {/* Human Label bounding box (solid, green) */}
+                        {overlayVisibility.humanBox && detection?.correction?.boundingBox && (
+                            <div
+                                className="absolute rounded-sm pointer-events-none border-2 border-green-500"
+                                style={{
+                                    left: `${detection.correction.boundingBox.x * 100}%`,
+                                    top: `${detection.correction.boundingBox.y * 100}%`,
+                                    width: `${detection.correction.boundingBox.width * 100}%`,
+                                    height: `${detection.correction.boundingBox.height * 100}%`,
+                                }}
+                            />
+                        )}
+                        {/* Preview Detection bounding box (dashed, warning color) */}
+                        {previewDetection?.boundingBox && (
+                            <div
+                                className="absolute rounded-sm pointer-events-none border-2 border-warning border-dashed"
+                                style={{
+                                    left: `${previewDetection.boundingBox.x * 100}%`,
+                                    top: `${previewDetection.boundingBox.y * 100}%`,
+                                    width: `${previewDetection.boundingBox.width * 100}%`,
+                                    height: `${previewDetection.boundingBox.height * 100}%`,
+                                }}
+                            >
+                                <div className="absolute -top-6 left-0 text-white text-xs px-1.5 py-0.5 rounded bg-warning">
+                                    Preview
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Corner overlays (SVG polygons) */}
+                        <svg className="absolute inset-0 w-full h-full pointer-events-none" viewBox="0 0 100 100" preserveAspectRatio="none">
+                            {/* Human corners - green */}
+                            {overlayVisibility.humanCorners && savedCorners && (
+                                <polygon
+                                    points={`${savedCorners.topLeft.x * 100},${savedCorners.topLeft.y * 100} ${savedCorners.topRight.x * 100},${savedCorners.topRight.y * 100} ${savedCorners.bottomRight.x * 100},${savedCorners.bottomRight.y * 100} ${savedCorners.bottomLeft.x * 100},${savedCorners.bottomLeft.y * 100}`}
+                                    fill="none"
+                                    stroke="#22c55e"
+                                    strokeWidth="1"
+                                    vectorEffect="non-scaling-stroke"
+                                />
+                            )}
+                            {/* AI corners - blue */}
+                            {overlayVisibility.aiCorners && detection?.detection?.corners && (
+                                <polygon
+                                    points={`${detection.detection.corners.topLeft.x * 100},${detection.detection.corners.topLeft.y * 100} ${detection.detection.corners.topRight.x * 100},${detection.detection.corners.topRight.y * 100} ${detection.detection.corners.bottomRight.x * 100},${detection.detection.corners.bottomRight.y * 100} ${detection.detection.corners.bottomLeft.x * 100},${detection.detection.corners.bottomLeft.y * 100}`}
+                                    fill="none"
+                                    stroke="#3b82f6"
+                                    strokeWidth="1"
+                                    strokeDasharray="2 1"
+                                    vectorEffect="non-scaling-stroke"
+                                />
+                            )}
+                            {/* Best corners - yellow */}
+                            {overlayVisibility.bestCorners && cornerDetection?.best.corners && (
+                                <polygon
+                                    points={`${cornerDetection.best.corners.topLeft.x * 100},${cornerDetection.best.corners.topLeft.y * 100} ${cornerDetection.best.corners.topRight.x * 100},${cornerDetection.best.corners.topRight.y * 100} ${cornerDetection.best.corners.bottomRight.x * 100},${cornerDetection.best.corners.bottomRight.y * 100} ${cornerDetection.best.corners.bottomLeft.x * 100},${cornerDetection.best.corners.bottomLeft.y * 100}`}
+                                    fill="none"
+                                    stroke="#eab308"
+                                    strokeWidth="1"
+                                    vectorEffect="non-scaling-stroke"
+                                />
+                            )}
+                            {/* Hough corners - purple */}
+                            {overlayVisibility.houghCorners && cornerDetection?.hough.corners && (
+                                <polygon
+                                    points={`${cornerDetection.hough.corners.topLeft.x * 100},${cornerDetection.hough.corners.topLeft.y * 100} ${cornerDetection.hough.corners.topRight.x * 100},${cornerDetection.hough.corners.topRight.y * 100} ${cornerDetection.hough.corners.bottomRight.x * 100},${cornerDetection.hough.corners.bottomRight.y * 100} ${cornerDetection.hough.corners.bottomLeft.x * 100},${cornerDetection.hough.corners.bottomLeft.y * 100}`}
+                                    fill="none"
+                                    stroke="#a855f7"
+                                    strokeWidth="1"
+                                    vectorEffect="non-scaling-stroke"
+                                />
+                            )}
+                            {/* Edge corners - cyan */}
+                            {overlayVisibility.edgeCorners && cornerDetection?.edge.corners && (
+                                <polygon
+                                    points={`${cornerDetection.edge.corners.topLeft.x * 100},${cornerDetection.edge.corners.topLeft.y * 100} ${cornerDetection.edge.corners.topRight.x * 100},${cornerDetection.edge.corners.topRight.y * 100} ${cornerDetection.edge.corners.bottomRight.x * 100},${cornerDetection.edge.corners.bottomRight.y * 100} ${cornerDetection.edge.corners.bottomLeft.x * 100},${cornerDetection.edge.corners.bottomLeft.y * 100}`}
+                                    fill="none"
+                                    stroke="#06b6d4"
+                                    strokeWidth="1"
+                                    vectorEffect="non-scaling-stroke"
+                                />
+                            )}
+                        </svg>
+                    </div>
+
+                    {/* Cropped Images Section */}
+                    {cornerDetection && (cornerDetection.best.croppedUrl || cornerDetection.hough.croppedUrl || cornerDetection.edge.croppedUrl) && (
+                        <div className="bg-surface rounded-lg border border-border p-4">
+                            <h2 className="text-sm font-medium text-foreground mb-3">Cropped Board Images</h2>
+                            <div className="grid grid-cols-3 gap-3">
+                                {renderCroppedImage('Best', cornerDetection.best.croppedUrl, cornerDetection.best.error)}
+                                {renderCroppedImage('Hough', cornerDetection.hough.croppedUrl, cornerDetection.hough.error)}
+                                {renderCroppedImage('Edge', cornerDetection.edge.croppedUrl, cornerDetection.edge.error)}
+                            </div>
                         </div>
-                        {detection && detection.detection ? (
+                    )}
+                </div>
+
+                {/* Right Column: Detection info panels */}
+                <div className="space-y-4">
+                    {/* Run Detection Controls */}
+                    {(trainingRuns.length > 0 || pipelines.length > 0) && (
+                        <div className="bg-surface rounded-lg border border-border p-4">
+                            <h2 className="text-sm font-medium text-foreground mb-3">Run Detection</h2>
+                            <div className="flex items-center gap-3">
+                                <Select
+                                    value={selectedModelId}
+                                    onChange={(value) => setSelectedModelId(String(value))}
+                                    placeholder="Select a model..."
+                                    options={[
+                                        ...trainingRuns.map((run) => ({
+                                            value: run.id,
+                                            label: `${formatShortId(run.id)} - ${formatShortDate(run.createdAt)} - ${run.imageCount} imgs${run.accuracy !== null ? ` - ${(run.accuracy * 100).toFixed(1)}% acc` : ''}`,
+                                        })),
+                                        ...pipelines.map((pipeline) => ({
+                                            value: `pipeline:${pipeline.id}`,
+                                            label: `\u{1F517} ${pipeline.name} (${pipeline.componentIds.length} models)`,
+                                        })),
+                                    ]}
+                                    className="flex-1"
+                                />
+                                <Button
+                                    onClick={runDetection}
+                                    disabled={isDetecting || !selectedModelId}
+                                    leftIcon={<Play className="w-4 h-4" />}
+                                >
+                                    {isDetecting ? 'Running...' : 'Detect'}
+                                </Button>
+                            </div>
+
+                            {/* Preview Detection Result */}
+                            {previewDetection && (
+                                <div className="mt-4 pt-4 border-t border-border space-y-3">
+                                    <div className="flex items-center justify-between gap-4">
+                                        <span className="text-sm text-secondary">Board detected</span>
+                                        <span className={`px-2 py-0.5 text-xs font-medium rounded ${
+                                            previewDetection.hasBoardDetected
+                                                ? 'bg-success/20 text-success'
+                                                : 'bg-error/20 text-error'
+                                        }`}>
+                                            {previewDetection.hasBoardDetected ? 'Yes' : 'No'}
+                                        </span>
+                                    </div>
+                                    <div className="flex items-center justify-between gap-4">
+                                        <span className="text-sm text-secondary">Entire board visible</span>
+                                        <span className={`px-2 py-0.5 text-xs font-medium rounded ${
+                                            previewDetection.isEntireBoardVisible
+                                                ? 'bg-success/20 text-success'
+                                                : 'bg-error/20 text-error'
+                                        }`}>
+                                            {previewDetection.isEntireBoardVisible ? 'Yes' : 'No'}
+                                        </span>
+                                    </div>
+                                    <div className="flex items-center justify-between gap-4">
+                                        <span className="text-sm text-secondary">Confidence</span>
+                                        <span className="text-sm font-mono text-foreground">
+                                            {(previewDetection.confidence * 100).toFixed(0)}%
+                                        </span>
+                                    </div>
+                                    {previewDetection.boundingBox && (
+                                        <div className="pt-2 border-t border-border">
+                                            <span className="text-xs text-muted">Bounding box</span>
+                                            <p className="text-xs font-mono text-foreground mt-1">
+                                                {formatBbox(previewDetection.boundingBox)}
+                                            </p>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+                        </div>
+                    )}
+
+                    {/* AI Detection Info */}
+                    {trainingRuns.length > 0 && (
+                        <div className="bg-surface rounded-lg border border-border p-4">
+                            <div className="flex items-center justify-between gap-3 mb-3">
+                                <h2 className="text-sm font-medium text-foreground">AI Detection</h2>
+                                <Select
+                                    value={viewModelId}
+                                    onChange={(value) => setViewModelId(String(value))}
+                                    options={trainingRuns.map((run) => ({
+                                        value: run.id,
+                                        label: `${formatShortId(run.id)} - ${run.imageCount} imgs${run.accuracy !== null ? ` - ${(run.accuracy * 100).toFixed(1)}%` : ''}`,
+                                    }))}
+                                    className="w-56"
+                                />
+                            </div>
+                            {detection && detection.detection ? (
+                                <div className="space-y-3">
+                                    {/* Board detected */}
+                                    <div className="flex items-center justify-between gap-4">
+                                        <span className="text-sm text-secondary">Board detected</span>
+                                        <span className={`px-2 py-0.5 text-xs font-medium rounded ${
+                                            detection.detection.hasBoardDetected
+                                                ? 'bg-success/20 text-success'
+                                                : 'bg-error/20 text-error'
+                                        }`}>
+                                            {detection.detection.hasBoardDetected ? 'Yes' : 'No'}
+                                        </span>
+                                    </div>
+
+                                    {/* Entire board visible */}
+                                    <div className="flex items-center justify-between gap-4">
+                                        <span className="text-sm text-secondary">Entire board visible</span>
+                                        <span className={`px-2 py-0.5 text-xs font-medium rounded ${
+                                            detection.detection.isEntireBoardVisible
+                                                ? 'bg-success/20 text-success'
+                                                : 'bg-error/20 text-error'
+                                        }`}>
+                                            {detection.detection.isEntireBoardVisible ? 'Yes' : 'No'}
+                                        </span>
+                                    </div>
+
+                                    {/* Confidence */}
+                                    <div className="flex items-center justify-between gap-4">
+                                        <span className="text-sm text-secondary">Confidence</span>
+                                        <span className="text-sm font-mono text-foreground">
+                                            {(detection.detection.confidence * 100).toFixed(0)}%
+                                        </span>
+                                    </div>
+
+                                    {/* Classifier Confidence */}
+                                    {detection.detection.classifierConfidence !== undefined && detection.detection.classifierConfidence !== null && (
+                                        <div className="flex items-center justify-between gap-4">
+                                            <span className="text-sm text-secondary">Classifier confidence</span>
+                                            <span className="text-sm font-mono text-foreground">
+                                                {(detection.detection.classifierConfidence * 100).toFixed(0)}%
+                                            </span>
+                                        </div>
+                                    )}
+
+                                    {/* IoU vs Ground Truth */}
+                                    {iou !== null && (
+                                        <div className="flex items-center justify-between gap-4">
+                                            <span className="text-sm text-secondary">IoU vs Ground Truth</span>
+                                            <span className={`text-sm font-mono ${
+                                                iou >= 0.75 ? 'text-success' : iou >= 0.5 ? 'text-warning' : 'text-error'
+                                            }`}>
+                                                {(iou * 100).toFixed(1)}%
+                                            </span>
+                                        </div>
+                                    )}
+
+                                    {/* Bounding box coordinates */}
+                                    {detection.detection.boundingBox && (
+                                        <div className="pt-2 border-t border-border">
+                                            <span className="text-xs text-muted">Bounding box</span>
+                                            <p className="text-xs font-mono text-foreground mt-1">
+                                                {formatBbox(detection.detection.boundingBox)}
+                                            </p>
+                                        </div>
+                                    )}
+
+                                    {/* Corner detection info */}
+                                    {detection.detection.corners && (
+                                        <div className="pt-2 border-t border-border space-y-1">
+                                            <div className="flex items-center justify-between">
+                                                <span className="text-xs text-muted">Corners detected</span>
+                                                {detection.detection.cornerConfidence !== undefined && detection.detection.cornerConfidence !== null && (
+                                                    <span className="text-xs font-mono text-foreground">
+                                                        {(detection.detection.cornerConfidence * 100).toFixed(0)}% conf
+                                                    </span>
+                                                )}
+                                            </div>
+                                            {/* Corner accuracy vs ground truth */}
+                                            {savedCorners && (() => {
+                                                const aiCorners = detection.detection.corners!;
+                                                const humanCorners = savedCorners;
+                                                // Calculate average corner error (euclidean distance)
+                                                const errors = [
+                                                    Math.sqrt(Math.pow(aiCorners.topLeft.x - humanCorners.topLeft.x, 2) + Math.pow(aiCorners.topLeft.y - humanCorners.topLeft.y, 2)),
+                                                    Math.sqrt(Math.pow(aiCorners.topRight.x - humanCorners.topRight.x, 2) + Math.pow(aiCorners.topRight.y - humanCorners.topRight.y, 2)),
+                                                    Math.sqrt(Math.pow(aiCorners.bottomRight.x - humanCorners.bottomRight.x, 2) + Math.pow(aiCorners.bottomRight.y - humanCorners.bottomRight.y, 2)),
+                                                    Math.sqrt(Math.pow(aiCorners.bottomLeft.x - humanCorners.bottomLeft.x, 2) + Math.pow(aiCorners.bottomLeft.y - humanCorners.bottomLeft.y, 2)),
+                                                ];
+                                                const avgError = errors.reduce((a, b) => a + b, 0) / 4;
+                                                const allWithinThreshold = errors.every(e => e < 0.05);
+                                                return (
+                                                    <div className="flex items-center justify-between">
+                                                        <span className="text-xs text-muted">Corner vs Ground Truth</span>
+                                                        <span className={`text-xs font-mono ${allWithinThreshold ? 'text-success' : avgError < 0.1 ? 'text-warning' : 'text-error'}`}>
+                                                            {(avgError * 100).toFixed(1)}% err
+                                                        </span>
+                                                    </div>
+                                                );
+                                            })()}
+                                        </div>
+                                    )}
+                                </div>
+                            ) : (
+                                <p className="text-sm text-muted">No AI detection for this model</p>
+                            )}
+                        </div>
+                    )}
+
+                    {/* Human Label Info */}
+                    {detection && detection.correction && (
+                        <div className="bg-surface rounded-lg border border-info/50 p-4">
+                            <h2 className="text-sm font-medium text-foreground mb-3">Human Label (Ground Truth)</h2>
                             <div className="space-y-3">
                                 {/* Board detected */}
                                 <div className="flex items-center justify-between gap-4">
                                     <span className="text-sm text-secondary">Board detected</span>
                                     <span className={`px-2 py-0.5 text-xs font-medium rounded ${
-                                        detection.detection.hasBoardDetected
+                                        detection.correction.hasBoardDetected
                                             ? 'bg-success/20 text-success'
                                             : 'bg-error/20 text-error'
                                     }`}>
-                                        {detection.detection.hasBoardDetected ? 'Yes' : 'No'}
+                                        {detection.correction.hasBoardDetected ? 'Yes' : 'No'}
                                     </span>
                                 </div>
 
@@ -754,175 +864,35 @@ export const ImageDetailPage = () => {
                                 <div className="flex items-center justify-between gap-4">
                                     <span className="text-sm text-secondary">Entire board visible</span>
                                     <span className={`px-2 py-0.5 text-xs font-medium rounded ${
-                                        detection.detection.isEntireBoardVisible
+                                        detection.correction.isEntireBoardVisible
                                             ? 'bg-success/20 text-success'
                                             : 'bg-error/20 text-error'
                                     }`}>
-                                        {detection.detection.isEntireBoardVisible ? 'Yes' : 'No'}
+                                        {detection.correction.isEntireBoardVisible ? 'Yes' : 'No'}
                                     </span>
                                 </div>
-
-                                {/* Confidence */}
-                                <div className="flex items-center justify-between gap-4">
-                                    <span className="text-sm text-secondary">Confidence</span>
-                                    <span className="text-sm font-mono text-foreground">
-                                        {(detection.detection.confidence * 100).toFixed(0)}%
-                                    </span>
-                                </div>
-
-                                {/* Classifier Confidence */}
-                                {detection.detection.classifierConfidence !== undefined && detection.detection.classifierConfidence !== null && (
-                                    <div className="flex items-center justify-between gap-4">
-                                        <span className="text-sm text-secondary">Classifier confidence</span>
-                                        <span className="text-sm font-mono text-foreground">
-                                            {(detection.detection.classifierConfidence * 100).toFixed(0)}%
-                                        </span>
-                                    </div>
-                                )}
-
-                                {/* IoU vs Ground Truth */}
-                                {iou !== null && (
-                                    <div className="flex items-center justify-between gap-4">
-                                        <span className="text-sm text-secondary">IoU vs Ground Truth</span>
-                                        <span className={`text-sm font-mono ${
-                                            iou >= 0.75 ? 'text-success' : iou >= 0.5 ? 'text-warning' : 'text-error'
-                                        }`}>
-                                            {(iou * 100).toFixed(1)}%
-                                        </span>
-                                    </div>
-                                )}
 
                                 {/* Bounding box coordinates */}
-                                {detection.detection.boundingBox && (
+                                {detection.correction.boundingBox && (
                                     <div className="pt-2 border-t border-border">
                                         <span className="text-xs text-muted">Bounding box</span>
                                         <p className="text-xs font-mono text-foreground mt-1">
-                                            {formatBbox(detection.detection.boundingBox)}
+                                            {formatBbox(detection.correction.boundingBox)}
                                         </p>
                                     </div>
                                 )}
-
-                                {/* Corner detection info */}
-                                {detection.detection.corners && (
-                                    <div className="pt-2 border-t border-border space-y-1">
-                                        <div className="flex items-center justify-between">
-                                            <span className="text-xs text-muted">Corners detected</span>
-                                            {detection.detection.cornerConfidence !== undefined && detection.detection.cornerConfidence !== null && (
-                                                <span className="text-xs font-mono text-foreground">
-                                                    {(detection.detection.cornerConfidence * 100).toFixed(0)}% conf
-                                                </span>
-                                            )}
-                                        </div>
-                                        {/* Corner accuracy vs ground truth */}
-                                        {savedCorners && (() => {
-                                            const aiCorners = detection.detection.corners!;
-                                            const humanCorners = savedCorners;
-                                            // Calculate average corner error (euclidean distance)
-                                            const errors = [
-                                                Math.sqrt(Math.pow(aiCorners.topLeft.x - humanCorners.topLeft.x, 2) + Math.pow(aiCorners.topLeft.y - humanCorners.topLeft.y, 2)),
-                                                Math.sqrt(Math.pow(aiCorners.topRight.x - humanCorners.topRight.x, 2) + Math.pow(aiCorners.topRight.y - humanCorners.topRight.y, 2)),
-                                                Math.sqrt(Math.pow(aiCorners.bottomRight.x - humanCorners.bottomRight.x, 2) + Math.pow(aiCorners.bottomRight.y - humanCorners.bottomRight.y, 2)),
-                                                Math.sqrt(Math.pow(aiCorners.bottomLeft.x - humanCorners.bottomLeft.x, 2) + Math.pow(aiCorners.bottomLeft.y - humanCorners.bottomLeft.y, 2)),
-                                            ];
-                                            const avgError = errors.reduce((a, b) => a + b, 0) / 4;
-                                            const allWithinThreshold = errors.every(e => e < 0.05);
-                                            return (
-                                                <div className="flex items-center justify-between">
-                                                    <span className="text-xs text-muted">Corner vs Ground Truth</span>
-                                                    <span className={`text-xs font-mono ${allWithinThreshold ? 'text-success' : avgError < 0.1 ? 'text-warning' : 'text-error'}`}>
-                                                        {(avgError * 100).toFixed(1)}% err
-                                                    </span>
-                                                </div>
-                                            );
-                                        })()}
-                                    </div>
-                                )}
                             </div>
-                        ) : (
-                            <p className="text-sm text-muted">No AI detection for this model</p>
-                        )}
-                    </div>
-                )}
-
-                {/* Human Label Info */}
-                {detection && detection.correction && (
-                    <div className="bg-surface rounded-lg border border-info/50 p-4">
-                        <h2 className="text-sm font-medium text-foreground mb-3">Human Label (Ground Truth)</h2>
-                        <div className="space-y-3">
-                            {/* Board detected */}
-                            <div className="flex items-center justify-between gap-4">
-                                <span className="text-sm text-secondary">Board detected</span>
-                                <span className={`px-2 py-0.5 text-xs font-medium rounded ${
-                                    detection.correction.hasBoardDetected
-                                        ? 'bg-success/20 text-success'
-                                        : 'bg-error/20 text-error'
-                                }`}>
-                                    {detection.correction.hasBoardDetected ? 'Yes' : 'No'}
-                                </span>
-                            </div>
-
-                            {/* Entire board visible */}
-                            <div className="flex items-center justify-between gap-4">
-                                <span className="text-sm text-secondary">Entire board visible</span>
-                                <span className={`px-2 py-0.5 text-xs font-medium rounded ${
-                                    detection.correction.isEntireBoardVisible
-                                        ? 'bg-success/20 text-success'
-                                        : 'bg-error/20 text-error'
-                                }`}>
-                                    {detection.correction.isEntireBoardVisible ? 'Yes' : 'No'}
-                                </span>
-                            </div>
-
-                            {/* Bounding box coordinates */}
-                            {detection.correction.boundingBox && (
-                                <div className="pt-2 border-t border-border">
-                                    <span className="text-xs text-muted">Bounding box</span>
-                                    <p className="text-xs font-mono text-foreground mt-1">
-                                        {formatBbox(detection.correction.boundingBox)}
-                                    </p>
-                                </div>
-                            )}
                         </div>
-                    </div>
-                )}
+                    )}
 
-                {/* No labels message - only show when no training runs exist */}
-                {trainingRuns.length === 0 && !detection?.correction && (
-                    <div className="bg-surface rounded-lg border border-border p-6 text-center">
-                        <p className="text-secondary">No labels yet</p>
-                        <p className="text-sm text-muted mt-1">Use labeling mode to add labels to this image</p>
-                    </div>
-                )}
-
-                {/* Perspective Correction */}
-                {cornerDetection && (
-                    <div className="bg-surface rounded-lg border border-border p-4">
-                        <div className="flex items-center justify-between gap-3 mb-3">
-                            <h2 className="text-sm font-medium text-foreground">Perspective Correction</h2>
-                            <Button
-                                onClick={runPerspectiveCorrection}
-                                disabled={isCorrectingPerspective || !cornerDetection}
-                                loading={isCorrectingPerspective}
-                                leftIcon={<Grid3X3 className="w-4 h-4" />}
-                                size="sm"
-                            >
-                                {isCorrectingPerspective ? 'Correcting...' : 'Generate from Corners'}
-                            </Button>
+                    {/* No labels message - only show when no training runs exist */}
+                    {trainingRuns.length === 0 && !detection?.correction && (
+                        <div className="bg-surface rounded-lg border border-border p-6 text-center">
+                            <p className="text-secondary">No labels yet</p>
+                            <p className="text-sm text-muted mt-1">Use labeling mode to add labels to this image</p>
                         </div>
-                        <p className="text-xs text-muted mb-3">
-                            Using saved corner detection results (Best, Hough, Edge)
-                        </p>
-
-                        {perspectiveCorrections && (
-                            <div className="flex flex-col gap-4" style={{ maxWidth: '500px' }}>
-                                {renderCorrectionMethod('Best (auto-selected)', perspectiveCorrections.best, cornerDetection.best.error)}
-                                {renderCorrectionMethod('Hough + RANSAC', perspectiveCorrections.hough, cornerDetection.hough.error)}
-                                {renderCorrectionMethod('Edge Intersection', perspectiveCorrections.edge, cornerDetection.edge.error)}
-                            </div>
-                        )}
-                    </div>
-                )}
-
+                    )}
+                </div>
             </div>
         </div>
     );

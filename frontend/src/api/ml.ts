@@ -11,6 +11,8 @@ import {
     PerspectiveFromCornersRequest,
     PerspectiveFromCornersResponse,
     PerspectiveMethodResult,
+    GridLabels,
+    GridLabel,
 } from '@blokus-ai/shared';
 
 // Re-export for convenience
@@ -175,6 +177,20 @@ export const ML_API = {
     getCornerDetectionsForSamples: async (sampleIds: string[]): Promise<CornerDetectionResult[]> => {
         const response = await http.get<{ results: CornerDetectionResult[] }>(`/api/ml/corner-detections?sampleIds=${sampleIds.join(',')}`);
         return response.results;
+    },
+
+    // Grid labels
+    getGridLabel: async (sampleId: string): Promise<GridLabels | null> => {
+        const response = await http.get<{ grid: GridLabels | null }>(`/api/ml/samples/${sampleId}/grid`);
+        return response.grid;
+    },
+
+    saveGridLabel: async (sampleId: string, grid: GridLabels): Promise<GridLabel> => {
+        return http.post<GridLabel>(`/api/ml/samples/${sampleId}/grid`, { grid });
+    },
+
+    clearGridLabel: async (sampleId: string): Promise<void> => {
+        await http.delete(`/api/ml/samples/${sampleId}/grid`);
     },
 };
 

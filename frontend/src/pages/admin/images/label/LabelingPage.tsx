@@ -5,9 +5,22 @@ import { ChevronLeft, ChevronRight, Image } from 'lucide-react';
 import { http, API_URL } from '../../../../api/config';
 import { ML_API, BoardCorners } from '../../../../api/ml';
 import { Button } from '../../../../components/ui/Button';
-import type { BoundingBox, BoardDetection, SampleStatusFlags } from '@blokus-ai/shared';
-import { getStatusLabels } from '@blokus-ai/shared';
+import type { BoundingBox, BoardDetection, SampleStatusFlags, CornerDetectionResult, GridLabels, PlayerColor } from '@blokus-ai/shared';
+import { getStatusLabels, PLAYER_COLORS } from '@blokus-ai/shared';
 import { statusColors, statusLabels, isUnlabeled } from '../../../../lib/status';
+
+// Grid cell colors for labeling
+const CELL_COLORS: { key: PlayerColor | null; label: string; color: string }[] = [
+    { key: null, label: 'Empty', color: '#e5e7eb' },      // gray-200
+    { key: 'blue', label: 'Blue', color: PLAYER_COLORS.blue },
+    { key: 'yellow', label: 'Yellow', color: PLAYER_COLORS.yellow },
+    { key: 'red', label: 'Red', color: PLAYER_COLORS.red },
+    { key: 'green', label: 'Green', color: PLAYER_COLORS.green },
+];
+
+// Create empty 20x20 grid
+const createEmptyGrid = (): GridLabels =>
+    Array.from({ length: 20 }, () => Array.from({ length: 20 }, () => null));
 
 // Corner labels and colors
 const CORNER_CONFIG = [
@@ -66,6 +79,16 @@ export const LabelingPage = () => {
     const [pendingCorners, setPendingCorners] = useState<PartialCorners>({});
     const [savedCorners, setSavedCorners] = useState<BoardCorners | null>(null);
     const [cornerCount, setCornerCount] = useState(0);
+
+    // Corner detection result with cropped images
+    const [cornerDetection, setCornerDetection] = useState<CornerDetectionResult | null>(null);
+
+    // Grid labeling state
+    const [isGridMode, setIsGridMode] = useState(false);
+    const [gridLabels, setGridLabels] = useState<GridLabels | null>(null);
+    const [selectedColor, setSelectedColor] = useState<PlayerColor | null>(null);
+    const [isGridModified, setIsGridModified] = useState(false);
+    const gridContainerRef = useRef<HTMLDivElement>(null);
 
     const currentSample = samples[currentIndex] || null;
     const currentDetection = labelData.correction || labelData.prediction;
@@ -134,6 +157,10 @@ export const LabelingPage = () => {
             setIsCornerMode(false);
             setPendingCorners({});
             setCornerCount(0);
+            // Reset grid mode
+            setIsGridMode(false);
+            setGridLabels(null);
+            setIsGridModified(false);
 
             // If sample has any labels, load the existing detection
             if (!isUnlabeled(currentSample.status)) {
@@ -157,6 +184,22 @@ export const LabelingPage = () => {
                 setSavedCorners(result.corners);
             } catch {
                 setSavedCorners(null);
+            }
+
+            // Load corner detection result (with cropped images)
+            try {
+                const results = await ML_API.getCornerDetectionsForSamples([currentSample.id]);
+                setCornerDetection(results.length > 0 ? results[0] : null);
+            } catch {
+                setCornerDetection(null);
+            }
+
+            // Load grid labels
+            try {
+                const grid = await ML_API.getGridLabel(currentSample.id);
+                setGridLabels(grid);
+            } catch {
+                setGridLabels(null);
             }
         };
         loadExistingLabel();
@@ -321,6 +364,72 @@ export const LabelingPage = () => {
             setCornerCount(0);
         }
     }, [isCornerMode, currentDetection?.isEntireBoardVisible]);
+
+    // Grid mode toggle - saves when exiting if modified
+    const toggleGridMode = useCallback(async () => {
+        if (isGridMode) {
+            // Exit grid mode - save if modified
+            if (isGridModified && currentSample && gridLabels) {
+                try {
+                    await ML_API.saveGridLabel(currentSample.id, gridLabels);
+                    toast.success('Grid labels saved!');
+                    setIsGridModified(false);
+                } catch {
+                    toast.error('Failed to save grid labels');
+                }
+            }
+            setIsGridMode(false);
+        } else {
+            // Check if we have a cropped image to show
+            const croppedUrl = cornerDetection?.best.croppedUrl || cornerDetection?.hough.croppedUrl || cornerDetection?.edge.croppedUrl;
+            if (!croppedUrl) {
+                toast.error('Run corner detection first to get cropped board image');
+                return;
+            }
+            // Enter grid mode
+            setIsGridMode(true);
+            setIsDrawingBox(false);
+            setIsCornerMode(false);
+            // Initialize grid if not loaded
+            if (!gridLabels) {
+                setGridLabels(createEmptyGrid());
+            }
+        }
+    }, [isGridMode, cornerDetection, gridLabels, isGridModified, currentSample]);
+
+    // Handle grid cell click - toggle: if cell has selected color, clear it; otherwise set selected color
+    const handleGridCellClick = useCallback((row: number, col: number) => {
+        if (!gridLabels) {
+            return;
+        }
+        const currentCell = gridLabels[row][col];
+        // If clicking a cell that already has the selected color, clear it (set to null)
+        // Otherwise, set it to the selected color
+        const newColor = currentCell === selectedColor ? null : selectedColor;
+        const newGrid = gridLabels.map((r, ri) =>
+            ri === row ? r.map((c, ci) => ci === col ? newColor : c) : r
+        );
+        setGridLabels(newGrid);
+        setIsGridModified(true);
+        // Auto-enable grid mode when clicking
+        if (!isGridMode) {
+            setIsGridMode(true);
+        }
+    }, [gridLabels, selectedColor, isGridMode]);
+
+    // Save grid labels
+    const saveGridLabels = useCallback(async () => {
+        if (!currentSample || !gridLabels) {
+            return;
+        }
+        try {
+            await ML_API.saveGridLabel(currentSample.id, gridLabels);
+            toast.success('Grid labels saved!');
+            setIsGridModified(false);
+        } catch {
+            toast.error('Failed to save grid labels');
+        }
+    }, [currentSample, gridLabels]);
 
     // Handle corner click
     const handleCornerClick = useCallback((pos: { x: number; y: number }) => {
@@ -533,6 +642,24 @@ export const LabelingPage = () => {
                         toast.error('Failed to clear corners');
                     });
                 }
+            } else if (key === 'z') {
+                e.preventDefault();
+                toggleGridMode();
+            } else if (key === 'b') {
+                e.preventDefault();
+                setSelectedColor('blue');
+            } else if (key === 'y') {
+                e.preventDefault();
+                setSelectedColor('yellow');
+            } else if (key === 'g') {
+                e.preventDefault();
+                setSelectedColor('green');
+            } else if (key === 'r') {
+                e.preventDefault();
+                setSelectedColor('red');
+            } else if (key === 'w') {
+                e.preventDefault();
+                setSelectedColor(null); // White/empty
             }
         };
 
@@ -548,7 +675,7 @@ export const LabelingPage = () => {
             window.removeEventListener('keydown', handleKeyDown);
             window.removeEventListener('keyup', handleKeyUp);
         };
-    }, [currentIndex, samples.length, labelData.correction, currentSample, currentDetection, updateCorrection, goToPrevious, goToNext, handleSaveAndNext, handleDeleteLabel, isDrawingBox, boundingBox, updateBoundingBox, saveAndNext, toggleCornerMode, savedCorners]);
+    }, [currentIndex, samples.length, labelData.correction, currentSample, currentDetection, updateCorrection, goToPrevious, goToNext, handleSaveAndNext, handleDeleteLabel, isDrawingBox, boundingBox, updateBoundingBox, saveAndNext, toggleCornerMode, savedCorners, toggleGridMode]);
 
     const getRelativePosition = useCallback((clientX: number, clientY: number) => {
         if (!imageContainerRef.current) {
@@ -768,29 +895,33 @@ export const LabelingPage = () => {
             </div>
 
             {/* Main content */}
-            <div className="max-w-2xl mx-auto space-y-4">
-                {/* Navigation and image */}
-                <div className="flex items-center gap-2">
-                    <button
-                        onClick={goToPrevious}
-                        disabled={currentIndex === 0}
-                        className="p-2 rounded-lg bg-surface-dim text-foreground enabled:hover:bg-primary enabled:hover:text-white disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-                    >
-                        <ChevronLeft className="w-5 h-5" />
-                    </button>
+            <div className="space-y-4 max-w-5xl mx-auto">
+                {/* Row 1: Images side by side */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {/* Original image with navigation */}
+                    <div className="space-y-2">
+                        <h3 className="text-sm font-medium text-secondary">Original Image</h3>
+                        <div className="flex items-center gap-2">
+                            <button
+                                onClick={goToPrevious}
+                                disabled={currentIndex === 0}
+                                className="p-1.5 rounded-lg bg-surface-dim text-foreground enabled:hover:bg-primary enabled:hover:text-white disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                            >
+                                <ChevronLeft className="w-4 h-4" />
+                            </button>
 
-                    <div
-                        ref={imageContainerRef}
-                        className="flex-1 relative bg-surface rounded-lg border border-border overflow-hidden"
-                        onPointerDown={handlePointerDown}
-                        onPointerMove={handlePointerMove}
-                        onPointerUp={handlePointerUp}
-                        onPointerCancel={handlePointerUp}
-                        style={{
-                            touchAction: isInteracting || isDrawingBox || boundingBox ? 'none' : 'auto',
-                            cursor: getCursor(),
-                        }}
-                    >
+                            <div
+                                ref={imageContainerRef}
+                                className="flex-1 relative bg-surface rounded-lg border border-border overflow-hidden max-w-md"
+                                onPointerDown={handlePointerDown}
+                                onPointerMove={handlePointerMove}
+                                onPointerUp={handlePointerUp}
+                                onPointerCancel={handlePointerUp}
+                                style={{
+                                    touchAction: isInteracting || isDrawingBox || boundingBox ? 'none' : 'auto',
+                                    cursor: getCursor(),
+                                }}
+                            >
                         <img
                             src={currentSample.thumbnailUrl || currentSample.imageUrl || `${API_URL}/api/ml/samples/${currentSample.id}/image`}
                             alt={`Sample ${currentSample.id}`}
@@ -957,136 +1088,241 @@ export const LabelingPage = () => {
                         {isCornerMode && (
                             <div className="absolute inset-0 bg-warning/10 pointer-events-none" />
                         )}
+                            </div>
+
+                            <button
+                                onClick={goToNext}
+                                disabled={currentIndex === samples.length - 1}
+                                className="p-1.5 rounded-lg bg-surface-dim text-foreground enabled:hover:bg-primary enabled:hover:text-white disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                            >
+                                <ChevronRight className="w-4 h-4" />
+                            </button>
+                        </div>
+                        {/* Mode hints under image */}
+                        {isCornerMode && (
+                            <p className="text-xs text-warning text-center">
+                                Corner Mode: Click {CORNER_CONFIG[cornerCount]?.label || 'done'} · <kbd className="px-1 py-0.5 bg-surface-dim rounded text-[10px]">C</kbd> cancel
+                            </p>
+                        )}
+                        {isDrawingBox && (
+                            <p className="text-xs text-primary text-center">
+                                Draw Mode · <kbd className="px-1 py-0.5 bg-surface-dim rounded text-[10px]">Arrows</kbd> move · <kbd className="px-1 py-0.5 bg-surface-dim rounded text-[10px]">Shift</kbd> resize
+                            </p>
+                        )}
                     </div>
 
-                    <button
-                        onClick={goToNext}
-                        disabled={currentIndex === samples.length - 1}
-                        className="p-2 rounded-lg bg-surface-dim text-foreground enabled:hover:bg-primary enabled:hover:text-white disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-                    >
-                        <ChevronRight className="w-5 h-5" />
-                    </button>
-                </div>
-
-                {/* Keyboard hints */}
-                {isCornerMode ? (
-                    <div className="text-xs text-center space-y-1">
-                        <p className="text-warning font-medium">Corner Mode: Click {CORNER_CONFIG[cornerCount]?.label || 'done'} ({['top-left', 'top-right', 'bottom-right', 'bottom-left'][cornerCount] || 'saving...'})</p>
-                        <p className="text-muted">
-                            <kbd className="px-1.5 py-0.5 bg-surface-dim rounded text-[10px]">C</kbd> cancel
-                        </p>
-                    </div>
-                ) : isDrawingBox ? (
-                    <div className="text-xs text-center space-y-1">
-                        <p className="text-primary font-medium">Draw Mode</p>
-                        <p className="text-muted">
-                            <kbd className="px-1.5 py-0.5 bg-surface-dim rounded text-[10px]">Arrows</kbd> move · <kbd className="px-1.5 py-0.5 bg-surface-dim rounded text-[10px]">Shift</kbd> resize · <kbd className="px-1.5 py-0.5 bg-surface-dim rounded text-[10px]">Ctrl+Shift</kbd> resize top/left · <kbd className="px-1.5 py-0.5 bg-surface-dim rounded text-[10px]">Enter</kbd> confirm · <kbd className="px-1.5 py-0.5 bg-surface-dim rounded text-[10px]">Esc</kbd> cancel
-                        </p>
-                    </div>
-                ) : (
-                    <p className="text-xs text-muted text-center">
-                        <kbd className="px-1.5 py-0.5 bg-surface-dim rounded text-[10px]">←</kbd> <kbd className="px-1.5 py-0.5 bg-surface-dim rounded text-[10px]">→</kbd> navigate · <kbd className="px-1.5 py-0.5 bg-surface-dim rounded text-[10px]">D</kbd> draw · <kbd className="px-1.5 py-0.5 bg-surface-dim rounded text-[10px]">C</kbd> corners · <kbd className="px-1.5 py-0.5 bg-surface-dim rounded text-[10px]">Q</kbd> clear corners · <kbd className="px-1.5 py-0.5 bg-surface-dim rounded text-[10px]">H</kbd> hide · <kbd className="px-1.5 py-0.5 bg-surface-dim rounded text-[10px]">1</kbd><kbd className="px-1.5 py-0.5 bg-surface-dim rounded text-[10px]">2</kbd> board · <kbd className="px-1.5 py-0.5 bg-surface-dim rounded text-[10px]">3</kbd><kbd className="px-1.5 py-0.5 bg-surface-dim rounded text-[10px]">4</kbd> visible · <kbd className="px-1.5 py-0.5 bg-surface-dim rounded text-[10px]">Enter</kbd> save · <kbd className="px-1.5 py-0.5 bg-surface-dim rounded text-[10px]">X</kbd> delete
-                    </p>
-                )}
-
-                {/* Action buttons */}
-                <div className="flex gap-2">
-                    {isDrawingBox ? (
-                        <Button onClick={() => setIsDrawingBox(false)} variant="secondary" className="flex-1">
-                            Cancel Drawing (Esc)
-                        </Button>
-                    ) : (
-                        <Button onClick={() => {
-                            setIsDrawingBox(true);
-                            if (!boundingBox) {
-                                updateBoundingBox({ x: 0.25, y: 0.25, width: 0.5, height: 0.5 });
+                    {/* Grid labeling image - always shown */}
+                    <div className="space-y-2">
+                        <div className="flex items-center justify-between">
+                            <h3 className={`text-sm font-medium ${isGridMode ? 'text-success' : 'text-secondary'}`}>
+                                Grid Labeling {isGridMode && <span className="ml-1 px-1.5 py-0.5 bg-success/20 rounded text-[10px]">ACTIVE</span>}
+                            </h3>
+                            {/* Color palette */}
+                            <div className="flex gap-1">
+                                {CELL_COLORS.map(({ key, label, color }) => (
+                                    <button
+                                        key={label}
+                                        onClick={() => setSelectedColor(key)}
+                                        className={`w-6 h-6 rounded border-2 transition-all ${
+                                            selectedColor === key ? 'border-foreground scale-110 ring-2 ring-foreground/30' : 'border-border'
+                                        }`}
+                                        style={{ backgroundColor: color }}
+                                        title={label}
+                                    />
+                                ))}
+                            </div>
+                        </div>
+                        {(() => {
+                            const croppedUrl = cornerDetection?.best.croppedUrl || cornerDetection?.hough.croppedUrl || cornerDetection?.edge.croppedUrl;
+                            if (!croppedUrl) {
+                                return (
+                                    <div className="aspect-square max-w-md bg-surface-dim rounded-lg border border-border flex items-center justify-center">
+                                        <p className="text-sm text-muted text-center px-4">Run corner detection to enable grid labeling</p>
+                                    </div>
+                                );
                             }
-                        }} variant="secondary" className="flex-1">
-                            Draw Bounding Box (D)
-                        </Button>
-                    )}
-
-                    {!isUnlabeled(currentSample.status) && (
-                        <Button
-                            onClick={handleDeleteLabel}
-                            variant="danger"
-                            className="shrink-0"
-                        >
-                            Delete (X)
-                        </Button>
-                    )}
+                            // Initialize grid if needed
+                            const grid = gridLabels || createEmptyGrid();
+                            return (
+                                <div
+                                    ref={gridContainerRef}
+                                    className={`relative aspect-square max-w-md bg-surface rounded-lg border-2 overflow-hidden ${isGridMode ? 'border-success' : 'border-border'}`}
+                                >
+                                    <img
+                                        src={croppedUrl}
+                                        alt="Cropped board"
+                                        className="absolute inset-0 w-full h-full object-cover"
+                                        draggable={false}
+                                    />
+                                    {/* 20x20 grid overlay */}
+                                    <div className="absolute inset-0 grid grid-cols-20 grid-rows-20">
+                                        {grid.map((row, ri) =>
+                                            row.map((cell, ci) => (
+                                                <button
+                                                    key={`${ri}-${ci}`}
+                                                    onClick={() => {
+                                                        if (!gridLabels) {
+                                                            setGridLabels(createEmptyGrid());
+                                                        }
+                                                        handleGridCellClick(ri, ci);
+                                                    }}
+                                                    className="border border-white/20 hover:border-white/60 transition-colors"
+                                                    style={{
+                                                        backgroundColor: cell ? `${PLAYER_COLORS[cell]}99` : 'transparent',
+                                                    }}
+                                                />
+                                            ))
+                                        )}
+                                    </div>
+                                </div>
+                            );
+                        })()}
+                        {isGridModified && (
+                            <Button
+                                variant="success"
+                                size="sm"
+                                className="w-full max-w-md"
+                                onClick={saveGridLabels}
+                            >
+                                Save Grid Labels
+                            </Button>
+                        )}
+                    </div>
                 </div>
 
-                {labelData.correction && (
-                    <Button
-                        onClick={handleSaveAndNext}
-                        variant="success"
-                        className="w-full"
-                    >
-                        Save & Next (Enter)
-                    </Button>
-                )}
+                {/* Row 2: Controls */}
+                <div className="space-y-4">
+                    {/* Action buttons */}
+                    <div className="flex gap-2">
+                        {isDrawingBox ? (
+                            <Button onClick={() => setIsDrawingBox(false)} variant="secondary" className="flex-1">
+                                Cancel Drawing (Esc)
+                            </Button>
+                        ) : (
+                            <Button onClick={() => {
+                                setIsDrawingBox(true);
+                                if (!boundingBox) {
+                                    updateBoundingBox({ x: 0.25, y: 0.25, width: 0.5, height: 0.5 });
+                                }
+                            }} variant="secondary" className="flex-1">
+                                Draw Bounding Box (D)
+                            </Button>
+                        )}
 
-                {/* Label toggles */}
-                <div className="bg-surface rounded-lg border border-border p-4 space-y-3">
-                    <div className="flex items-center justify-between gap-4">
-                        <span className="text-sm text-secondary">Board detected</span>
-                        <div className="flex rounded-lg overflow-hidden border border-border shrink-0">
-                            <button
-                                onClick={() => {
-                                    if (!currentDetection?.hasBoardDetected) {
-                                        toggleBoardDetected();
-                                    } 
-                                }}
-                                className={`px-3 py-1 text-sm font-medium transition-colors ${
-                                    currentDetection?.hasBoardDetected === true ? 'bg-success text-white' : 'bg-surface hover:bg-surface-dim text-secondary'
-                                }`}
+                        {!isUnlabeled(currentSample.status) && (
+                            <Button
+                                onClick={handleDeleteLabel}
+                                variant="danger"
+                                className="shrink-0"
                             >
-                                Yes (1)
-                            </button>
-                            <button
-                                onClick={() => {
-                                    if (currentDetection?.hasBoardDetected !== false) {
-                                        updateCorrection({ hasBoardDetected: false, isEntireBoardVisible: false, boundingBox: null });
-                                    } 
-                                }}
-                                className={`px-3 py-1 text-sm font-medium transition-colors ${
-                                    currentDetection?.hasBoardDetected === false ? 'bg-error text-white' : 'bg-surface hover:bg-surface-dim text-secondary'
-                                }`}
-                            >
-                                No (2)
-                            </button>
+                                Delete (X)
+                            </Button>
+                        )}
+                    </div>
+
+                    {labelData.correction && (
+                        <Button
+                            onClick={handleSaveAndNext}
+                            variant="success"
+                            className="w-full"
+                        >
+                            Save & Next (Enter)
+                        </Button>
+                    )}
+
+                    {/* Label toggles */}
+                    <div className="bg-surface rounded-lg border border-border p-4 space-y-3">
+                        <div className="flex items-center justify-between gap-4">
+                            <span className="text-sm text-secondary">Board detected</span>
+                            <div className="flex rounded-lg overflow-hidden border border-border shrink-0">
+                                <button
+                                    onClick={() => {
+                                        if (!currentDetection?.hasBoardDetected) {
+                                            toggleBoardDetected();
+                                        }
+                                    }}
+                                    className={`px-3 py-1 text-sm font-medium transition-colors ${
+                                        currentDetection?.hasBoardDetected === true ? 'bg-success text-white' : 'bg-surface hover:bg-surface-dim text-secondary'
+                                    }`}
+                                >
+                                    Yes (1)
+                                </button>
+                                <button
+                                    onClick={() => {
+                                        if (currentDetection?.hasBoardDetected !== false) {
+                                            updateCorrection({ hasBoardDetected: false, isEntireBoardVisible: false, boundingBox: null });
+                                        }
+                                    }}
+                                    className={`px-3 py-1 text-sm font-medium transition-colors ${
+                                        currentDetection?.hasBoardDetected === false ? 'bg-error text-white' : 'bg-surface hover:bg-surface-dim text-secondary'
+                                    }`}
+                                >
+                                    No (2)
+                                </button>
+                            </div>
+                        </div>
+
+                        <div className="flex items-center justify-between gap-4">
+                            <span className="text-sm text-secondary">Entire board visible</span>
+                            <div className={`flex rounded-lg overflow-hidden border border-border shrink-0 ${!currentDetection?.hasBoardDetected ? 'opacity-50 pointer-events-none' : ''}`}>
+                                <button
+                                    onClick={() => {
+                                        if (!currentDetection?.isEntireBoardVisible) {
+                                            toggleEntireBoardVisible();
+                                        }
+                                    }}
+                                    className={`px-3 py-1 text-sm font-medium transition-colors ${
+                                        currentDetection?.isEntireBoardVisible === true ? 'bg-success text-white' : 'bg-surface hover:bg-surface-dim text-secondary'
+                                    }`}
+                                >
+                                    Yes (3)
+                                </button>
+                                <button
+                                    onClick={() => {
+                                        if (currentDetection?.isEntireBoardVisible !== false) {
+                                            updateCorrection({ isEntireBoardVisible: false });
+                                        }
+                                    }}
+                                    className={`px-3 py-1 text-sm font-medium transition-colors ${
+                                        currentDetection?.hasBoardDetected && currentDetection?.isEntireBoardVisible === false ? 'bg-error text-white' : 'bg-surface hover:bg-surface-dim text-secondary'
+                                    }`}
+                                >
+                                    No (4)
+                                </button>
+                            </div>
                         </div>
                     </div>
 
-                    <div className="flex items-center justify-between gap-4">
-                        <span className="text-sm text-secondary">Entire board visible</span>
-                        <div className={`flex rounded-lg overflow-hidden border border-border shrink-0 ${!currentDetection?.hasBoardDetected ? 'opacity-50 pointer-events-none' : ''}`}>
-                            <button
-                                onClick={() => {
-                                    if (!currentDetection?.isEntireBoardVisible) {
-                                        toggleEntireBoardVisible();
-                                    } 
-                                }}
-                                className={`px-3 py-1 text-sm font-medium transition-colors ${
-                                    currentDetection?.isEntireBoardVisible === true ? 'bg-success text-white' : 'bg-surface hover:bg-surface-dim text-secondary'
-                                }`}
-                            >
-                                Yes (3)
-                            </button>
-                            <button
-                                onClick={() => {
-                                    if (currentDetection?.isEntireBoardVisible !== false) {
-                                        updateCorrection({ isEntireBoardVisible: false });
-                                    } 
-                                }}
-                                className={`px-3 py-1 text-sm font-medium transition-colors ${
-                                    currentDetection?.hasBoardDetected && currentDetection?.isEntireBoardVisible === false ? 'bg-error text-white' : 'bg-surface hover:bg-surface-dim text-secondary'
-                                }`}
-                            >
-                                No (4)
-                            </button>
-                        </div>
+                    {/* Shortcut hints */}
+                    <div className="bg-surface-dim rounded-lg p-3 text-xs text-muted space-y-1">
+                        <p className="font-medium text-secondary mb-2">Keyboard Shortcuts</p>
+                        <p>
+                            <kbd className="px-1.5 py-0.5 bg-surface rounded text-[10px]">←</kbd>
+                            <kbd className="px-1.5 py-0.5 bg-surface rounded text-[10px]">→</kbd> navigate ·
+                            <kbd className="px-1.5 py-0.5 bg-surface rounded text-[10px]">D</kbd> draw bbox ·
+                            <kbd className="px-1.5 py-0.5 bg-surface rounded text-[10px]">C</kbd> corners ·
+                            <kbd className="px-1.5 py-0.5 bg-surface rounded text-[10px]">Z</kbd> grid mode ·
+                            <kbd className="px-1.5 py-0.5 bg-surface rounded text-[10px]">H</kbd> hide overlays
+                        </p>
+                        <p>
+                            <kbd className="px-1.5 py-0.5 bg-surface rounded text-[10px]">1</kbd> board yes ·
+                            <kbd className="px-1.5 py-0.5 bg-surface rounded text-[10px]">2</kbd> board no ·
+                            <kbd className="px-1.5 py-0.5 bg-surface rounded text-[10px]">3</kbd> visible yes ·
+                            <kbd className="px-1.5 py-0.5 bg-surface rounded text-[10px]">4</kbd> visible no
+                        </p>
+                        <p>
+                            <kbd className="px-1.5 py-0.5 bg-surface rounded text-[10px]">Enter</kbd> save & next ·
+                            <kbd className="px-1.5 py-0.5 bg-surface rounded text-[10px]">X</kbd> delete label ·
+                            <kbd className="px-1.5 py-0.5 bg-surface rounded text-[10px]">Q</kbd> clear corners
+                        </p>
+                        <p>
+                            Grid colors:
+                            <kbd className="px-1.5 py-0.5 bg-blue-500 text-white rounded text-[10px] ml-1">B</kbd>
+                            <kbd className="px-1.5 py-0.5 bg-yellow-400 text-black rounded text-[10px]">Y</kbd>
+                            <kbd className="px-1.5 py-0.5 bg-green-600 text-white rounded text-[10px]">G</kbd>
+                            <kbd className="px-1.5 py-0.5 bg-red-500 text-white rounded text-[10px]">R</kbd>
+                            <kbd className="px-1.5 py-0.5 bg-gray-200 text-black rounded text-[10px]">W</kbd> empty
+                        </p>
                     </div>
                 </div>
             </div>

@@ -11,7 +11,7 @@ import numpy as np
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
 from pydantic import BaseModel
 
-from app.lib.s3 import download_sample_image
+from app.lib.s3 import download_sample_image, upload_cropped_image
 
 from .detector_yolo import detect_board_yolo, detect_board_with_trained_model
 from .perspective import correct_perspective, correct_perspective_all_methods
@@ -781,6 +781,63 @@ def report_corner_failed(
         print(f"[bulk_corners] Failed to report failure: {e}")
 
 
+def generate_and_upload_cropped_image(
+    sample_id: str,
+    filepath: Path,
+    corners: Optional[BoardCorners],
+    method: str,
+) -> Optional[str]:
+    """
+    Generate a cropped/perspective-corrected image and upload to S3.
+
+    Args:
+        sample_id: The sample ID
+        filepath: Path to the source image
+        corners: Detected corners (normalized 0-1)
+        method: The corner detection method (best, hough, edge)
+
+    Returns:
+        CloudFront URL for the cropped image, or None if failed
+    """
+    from .perspective import apply_perspective_transform
+
+    if corners is None:
+        return None
+
+    try:
+        # Load image
+        img = cv2.imread(str(filepath))
+        if img is None:
+            return None
+
+        h, w = img.shape[:2]
+        output_size = 400
+
+        # Convert normalized corners to pixel coordinates
+        pixel_corners = np.array([
+            [corners.topLeft.x * w, corners.topLeft.y * h],
+            [corners.topRight.x * w, corners.topRight.y * h],
+            [corners.bottomRight.x * w, corners.bottomRight.y * h],
+            [corners.bottomLeft.x * w, corners.bottomLeft.y * h],
+        ], dtype=np.float32)
+
+        # Apply perspective transform
+        warped = apply_perspective_transform(img, pixel_corners, output_size)
+
+        # Encode as JPEG
+        encode_params = [cv2.IMWRITE_JPEG_QUALITY, 90]
+        _, buffer = cv2.imencode('.jpg', warped, encode_params)
+        image_bytes = buffer.tobytes()
+
+        # Upload to S3
+        url = upload_cropped_image(sample_id, method, image_bytes)
+        return url
+
+    except Exception as e:
+        print(f"[bulk_corners] Failed to generate cropped image for {sample_id}/{method}: {e}")
+        return None
+
+
 def store_corner_result(
     run_id: str,
     sample_id: str,
@@ -788,6 +845,7 @@ def store_corner_result(
     hough_result,
     edge_result,
     human_corners: Optional[dict],
+    cropped_urls: Optional[dict] = None,
 ) -> bool:
     """Store a single corner detection result by calling the API."""
     try:
@@ -830,18 +888,21 @@ def store_corner_result(
                         "corners": corners_to_dict(best_result.corners),
                         "error": calculate_corner_error(best_result.corners, human_bc),
                         "quality": quality_to_dict(best_result),
+                        "croppedUrl": cropped_urls.get("best") if cropped_urls else None,
                     },
                     "hough": {
                         "success": hough_result.success,
                         "corners": corners_to_dict(hough_result.corners),
                         "error": calculate_corner_error(hough_result.corners, human_bc),
                         "quality": quality_to_dict(hough_result),
+                        "croppedUrl": cropped_urls.get("hough") if cropped_urls else None,
                     },
                     "edge": {
                         "success": edge_result.success,
                         "corners": corners_to_dict(edge_result.corners),
                         "error": calculate_corner_error(edge_result.corners, human_bc),
                         "quality": quality_to_dict(edge_result),
+                        "croppedUrl": cropped_urls.get("edge") if cropped_urls else None,
                     },
                 },
             )
@@ -928,6 +989,29 @@ def run_bulk_corner_detection(run_id: str, sample_ids: list[str]) -> None:
                 # Run corner detection
                 all_results = detect_corners_all_methods(filepath, bbox)
 
+                # Generate and upload cropped images for each method
+                cropped_urls = {}
+                if all_results.best.success and all_results.best.corners:
+                    url = generate_and_upload_cropped_image(
+                        sample_id, filepath, all_results.best.corners, "best"
+                    )
+                    if url:
+                        cropped_urls["best"] = url
+
+                if all_results.hough_ransac.success and all_results.hough_ransac.corners:
+                    url = generate_and_upload_cropped_image(
+                        sample_id, filepath, all_results.hough_ransac.corners, "hough"
+                    )
+                    if url:
+                        cropped_urls["hough"] = url
+
+                if all_results.edge_intersection.success and all_results.edge_intersection.corners:
+                    url = generate_and_upload_cropped_image(
+                        sample_id, filepath, all_results.edge_intersection.corners, "edge"
+                    )
+                    if url:
+                        cropped_urls["edge"] = url
+
                 # Store result
                 if store_corner_result(
                     run_id,
@@ -936,6 +1020,7 @@ def run_bulk_corner_detection(run_id: str, sample_ids: list[str]) -> None:
                     all_results.hough_ransac,
                     all_results.edge_intersection,
                     human_corners,
+                    cropped_urls,
                 ):
                     success_count += 1
                 else:

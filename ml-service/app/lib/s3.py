@@ -70,3 +70,38 @@ def sample_exists(sample_id: str) -> bool:
         return True
     except s3.exceptions.ClientError:
         return False
+
+
+CROPPED_PREFIX = "cropped/"
+CLOUDFRONT_DOMAIN = os.environ.get("CLOUDFRONT_DOMAIN", "d26azxov2byjpl.cloudfront.net")
+
+
+def upload_cropped_image(sample_id: str, method: str, image_bytes: bytes) -> str:
+    """
+    Upload a cropped/perspective-corrected image to S3.
+
+    Args:
+        sample_id: The sample ID
+        method: The corner detection method used (best, hough, edge)
+        image_bytes: JPEG image bytes
+
+    Returns:
+        CloudFront URL for the uploaded image
+    """
+    s3 = get_s3_client()
+    key = f"{CROPPED_PREFIX}{method}/{sample_id}.jpg"
+
+    s3.put_object(
+        Bucket=S3_BUCKET,
+        Key=key,
+        Body=image_bytes,
+        ContentType="image/jpeg",
+    )
+
+    return f"https://{CLOUDFRONT_DOMAIN}/{key}"
+
+
+def get_cropped_image_url(sample_id: str, method: str) -> str:
+    """Get the CloudFront URL for a cropped image."""
+    key = f"{CROPPED_PREFIX}{method}/{sample_id}.jpg"
+    return f"https://{CLOUDFRONT_DOMAIN}/{key}"
