@@ -297,3 +297,29 @@ export interface PerspectiveFromCornersResponse {
     hough: PerspectiveMethodResult;
     edge: PerspectiveMethodResult;
 }
+
+// ============================================================================
+// Piece Detection types
+// ============================================================================
+
+// Result of analyzing which pieces are on/off board for a single color
+export interface PieceAnalysis {
+    onBoard: string[];   // Piece IDs found on board
+    offBoard: string[];  // Piece IDs not found
+}
+
+// Result of analyzing a full grid (all 4 colors)
+export interface GridAnalysisResult {
+    blue: PieceAnalysis;
+    yellow: PieceAnalysis;
+    red: PieceAnalysis;
+    green: PieceAnalysis;
+}
+
+// Piece definition for display
+export interface PieceDefinition {
+    id: string;
+    name: string;
+    size: number;
+    shape: [number, number][]; // Base shape coordinates [row, col]
+}

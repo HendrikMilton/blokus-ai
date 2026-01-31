@@ -10,6 +10,7 @@ import { statusColors, statusLabels, isUnlabeled } from '../../../../lib/status'
 import { OriginalImagePanel } from './OriginalImagePanel';
 import { GridLabelingPanel } from './GridLabelingPanel';
 import { LabelingControls } from './LabelingControls';
+import { PiecesPanel } from './PiecesPanel';
 import { SampleTagsSection } from '../[id]/SampleTagsSection';
 import { CORNER_CONFIG, createEmptyGrid, type Sample, type SamplesResponse, type LabelData, type DragHandle, type PartialCorners } from './types';
 
@@ -927,9 +928,9 @@ export const LabelingPage = () => {
                         </div>
                     </div>
 
-                    {/* Row 2: Controls and Tags */}
+                    {/* Row 2: Controls, Tags, and Pieces */}
                     <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-                        <div className="lg:col-span-2">
+                        <div>
                             <LabelingControls
                                 currentSample={currentSample}
                                 labelData={labelData}
@@ -949,6 +950,12 @@ export const LabelingPage = () => {
                         </div>
                         <div>
                             <SampleTagsSection sampleId={currentSample.id} allTags={allTags} />
+                        </div>
+                        <div>
+                            <PiecesPanel
+                                gridLabels={gridLabels}
+                                aiPrediction={gridPrediction?.grid ?? null}
+                            />
                         </div>
                     </div>
                 </div>

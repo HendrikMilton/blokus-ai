@@ -1,18 +1,45 @@
-import { BrowserRouter, Routes, Route, Link } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Link, useLocation } from 'react-router-dom';
 import { Toaster } from 'react-hot-toast';
-import { Sun, Moon } from 'lucide-react';
+import { Sun, Moon, Image, Gamepad2 } from 'lucide-react';
 import { ThemeProvider } from './contexts/ThemeProvider';
 import { useTheme } from './hooks/useTheme';
 import { routes } from './routes';
 
+const navItems = [
+    { to: '/admin/images', icon: Image, label: 'Images' },
+    { to: '/admin/gymnasium', icon: Gamepad2, label: 'Gymnasium' },
+];
+
 const Header = () => {
     const { theme, toggleTheme } = useTheme();
+    const location = useLocation();
 
     return (
         <header className="h-14 bg-surface border-b border-border px-6 flex items-center justify-between shadow-gcp sticky top-0 z-50">
-            <Link to="/admin" className="text-xl font-medium text-foreground">
-                Blokus AI
-            </Link>
+            <div className="flex items-center gap-6">
+                <Link to="/admin" className="text-xl font-medium text-foreground">
+                    Blokus AI
+                </Link>
+                <nav className="flex items-center gap-1">
+                    {navItems.map(({ to, icon: Icon, label }) => {
+                        const isActive = location.pathname.startsWith(to);
+                        return (
+                            <Link
+                                key={to}
+                                to={to}
+                                className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm transition-colors ${
+                                    isActive
+                                        ? 'bg-primary/10 text-primary'
+                                        : 'text-secondary hover:text-foreground hover:bg-surface-dim'
+                                }`}
+                            >
+                                <Icon className="w-4 h-4" />
+                                {label}
+                            </Link>
+                        );
+                    })}
+                </nav>
+            </div>
             <div className="flex items-center gap-4">
                 <button
                     onClick={toggleTheme}

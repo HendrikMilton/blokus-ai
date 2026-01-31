@@ -4,6 +4,7 @@ import { AdminPage } from './pages/admin/AdminPage';
 import { ImagesPage } from './pages/admin/images/ImagesPage';
 import { ImageDetailPage } from './pages/admin/images/[id]/ImageDetailPage';
 import { LabelingPage } from './pages/admin/images/label/LabelingPage';
+import { GymnasiumPage } from './pages/admin/gymnasium/GymnasiumPage';
 import { AdminProvider } from './contexts/AdminContext';
 
 // Wrapper for admin pages that provides AdminContext
@@ -46,6 +47,11 @@ export const routes: RouteConfig[] = [
     {
         path: '/admin/images/:id',
         element: withAdmin(<ImageDetailPage />),
+        layout: true,
+    },
+    {
+        path: '/admin/gymnasium',
+        element: <GymnasiumPage />,
         layout: true,
     },
 ];

@@ -1,8 +1,9 @@
 import { Link } from 'react-router-dom';
-import { ChevronRight, Image } from 'lucide-react';
+import { ChevronRight, Image, Gamepad2 } from 'lucide-react';
 
 const navItems = [
     { to: '/admin/images', icon: Image, label: 'Training Images', description: 'Upload and manage board images' },
+    { to: '/admin/gymnasium', icon: Gamepad2, label: 'Gymnasium', description: 'Play Blokus and train AI agents' },
 ];
 
 export const AdminPage = () => (

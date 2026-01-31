@@ -4,3 +4,4 @@ export * from './ping';
 export * from './socket';
 export * from './debug';
 export * from './ml';
+export * from './game';
