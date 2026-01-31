@@ -1,13 +1,5 @@
 import { http } from './config';
 import {
-    DetectBoardRequest,
-    DetectBoardResponse,
-    AnalyzeBoardRequest,
-    AnalyzeBoardResponse,
-    mlDetectBoardPath,
-    mlAnalyzeBoardPath,
-    BoardCell,
-    PlayerColor,
     TrainingRun,
     DetectionRun,
     BoardDetection,
@@ -46,16 +38,6 @@ export interface TestDetectResponse {
 }
 
 export const ML_API = {
-    detectBoard: async (image: string): Promise<DetectBoardResponse> => {
-        const request: DetectBoardRequest = { image };
-        return http.post<DetectBoardResponse>(mlDetectBoardPath, request);
-    },
-
-    analyze: async (boardState: BoardCell[][], selectedColor: PlayerColor): Promise<AnalyzeBoardResponse> => {
-        const request: AnalyzeBoardRequest = { boardState, selectedColor };
-        return http.post<AnalyzeBoardResponse>(mlAnalyzeBoardPath, request);
-    },
-
     startTraining: async (sampleIds?: string[]): Promise<TrainingRun> => {
         return http.post<TrainingRun>('/api/ml/train', { sampleIds });
     },

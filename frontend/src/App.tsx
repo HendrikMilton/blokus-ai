@@ -1,7 +1,6 @@
 import { BrowserRouter, Routes, Route, Link } from 'react-router-dom';
 import { Toaster } from 'react-hot-toast';
 import { Sun, Moon } from 'lucide-react';
-import { GameProvider } from './contexts/GameContext';
 import { ThemeProvider } from './contexts/ThemeProvider';
 import { useTheme } from './hooks/useTheme';
 import { routes } from './routes';
@@ -11,7 +10,7 @@ const Header = () => {
 
     return (
         <header className="h-14 bg-surface border-b border-border px-6 flex items-center justify-between shadow-gcp sticky top-0 z-50">
-            <Link to="/" className="text-xl font-medium text-foreground">
+            <Link to="/admin" className="text-xl font-medium text-foreground">
                 Blokus AI
             </Link>
             <div className="flex items-center gap-4">
@@ -26,12 +25,6 @@ const Header = () => {
                         <Moon className="w-5 h-5" />
                     )}
                 </button>
-                <Link
-                    to="/admin"
-                    className="text-sm text-secondary hover:text-foreground transition-colors"
-                >
-                    Admin
-                </Link>
             </div>
         </header>
     );
@@ -47,24 +40,22 @@ const Layout = ({ children }: { children: React.ReactNode }) => (
 const App = () => {
     return (
         <ThemeProvider>
-            <GameProvider>
-                <BrowserRouter>
-                    <Toaster />
-                    <Routes>
-                        {routes.map((route) => (
-                            <Route
-                                key={route.path}
-                                path={route.path}
-                                element={
-                                    route.layout
-                                        ? <Layout>{route.element}</Layout>
-                                        : route.element
-                                }
-                            />
-                        ))}
-                    </Routes>
-                </BrowserRouter>
-            </GameProvider>
+            <BrowserRouter>
+                <Toaster />
+                <Routes>
+                    {routes.map((route) => (
+                        <Route
+                            key={route.path}
+                            path={route.path}
+                            element={
+                                route.layout
+                                    ? <Layout>{route.element}</Layout>
+                                    : route.element
+                            }
+                        />
+                    ))}
+                </Routes>
+            </BrowserRouter>
         </ThemeProvider>
     );
 };

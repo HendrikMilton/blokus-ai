@@ -1,8 +1,5 @@
 import { ReactElement } from 'react';
-import { ColorSelectionPage } from './pages/color-selection/ColorSelectionPage';
-import { CameraCapturePage } from './pages/camera-capture/CameraCapturePage';
-import { BoardConfirmPage } from './pages/board-confirm/BoardConfirmPage';
-import { ResultsPage } from './pages/results/ResultsPage';
+import { Navigate } from 'react-router-dom';
 import { AdminPage } from './pages/admin/AdminPage';
 import { ImagesPage } from './pages/admin/images/ImagesPage';
 import { ImageDetailPage } from './pages/admin/images/[id]/ImageDetailPage';
@@ -23,22 +20,7 @@ export interface RouteConfig {
 export const routes: RouteConfig[] = [
     {
         path: '/',
-        element: <ColorSelectionPage />,
-        layout: true,
-    },
-    {
-        path: '/capture',
-        element: <CameraCapturePage />,
-        layout: false,
-    },
-    {
-        path: '/confirm',
-        element: <BoardConfirmPage />,
-        layout: false,
-    },
-    {
-        path: '/results',
-        element: <ResultsPage />,
+        element: <Navigate to="/admin" replace />,
         layout: false,
     },
     {
