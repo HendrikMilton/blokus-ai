@@ -40,3 +40,7 @@ ml-service/rust_mcts/Cargo.lock
 *.tfstate
 *.tfstate.backup
 .terraform.lock.hcl
+
+# Lambda setup files (sensitive/large)
+.ssh-key
+*.dump
