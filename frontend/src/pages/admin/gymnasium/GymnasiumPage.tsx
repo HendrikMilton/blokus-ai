@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import toast from 'react-hot-toast';
-import { Play, RotateCcw, FlipHorizontal2, Trophy, Users, Brain, Gamepad2, Plus, Square, X } from 'lucide-react';
+import { Play, RotateCcw, FlipHorizontal2, Trophy, Users, Brain, Gamepad2, Plus, Square, X, Download } from 'lucide-react';
 import { PLAYER_COLORS } from '@blokus-ai/shared';
 import type {
     GameState,
@@ -410,6 +410,20 @@ export const GymnasiumPage = () => {
             loadAlphaZeroData();
         } catch {
             toast.error('Failed to delete training run');
+        }
+    };
+
+    // Export model to ONNX
+    const [isExporting, setIsExporting] = useState(false);
+    const handleExportOnnx = async (runId: string) => {
+        setIsExporting(true);
+        try {
+            const result = await ALPHAZERO_API.exportOnnx(runId);
+            toast.success(`Model exported: ${result.file_size_mb.toFixed(1)} MB`);
+        } catch {
+            toast.error('Failed to export model to ONNX');
+        } finally {
+            setIsExporting(false);
         }
     };
 
@@ -1403,6 +1417,16 @@ export const GymnasiumPage = () => {
                                 </div>
                             </div>
                             <div className="flex justify-end gap-2 mt-4">
+                                {(selectedRunForDetails.status === 'completed' || selectedRunForDetails.status === 'stopped') && (
+                                    <Button
+                                        variant="secondary"
+                                        onClick={() => handleExportOnnx(selectedRunForDetails.id)}
+                                        disabled={isExporting}
+                                    >
+                                        <Download className="w-4 h-4 mr-2" />
+                                        {isExporting ? 'Exporting...' : 'Export ONNX'}
+                                    </Button>
+                                )}
                                 {selectedRunForDetails.status === 'running' && (
                                     <Button
                                         variant="secondary"
@@ -1571,6 +1595,25 @@ export const GymnasiumPage = () => {
                                     })}
                                 >
                                 Large
+                                </Button>
+                                <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    onClick={() => setTrainConfig({
+                                        mctsSimulations: 1600,
+                                        gamesPerGeneration: 400,
+                                        maxGenerations: 200,
+                                        batchSize: 8192,
+                                        numResBlocks: 20,
+                                        channels: 256,
+                                        evalGames: 100,
+                                        numParallelGames: 128,
+                                        mctsBatchSize: 128,
+                                        inferenceBatchSize: 512,
+                                        trainingStepsPerGen: 4000,
+                                    })}
+                                >
+                                GH200
                                 </Button>
                             </div>
                         </div>

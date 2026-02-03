@@ -189,4 +189,17 @@ export const ALPHAZERO_API = {
     activateCheckpoint: async (checkpointId: string): Promise<void> => {
         await http.post(`/api/ml/alphazero/checkpoints/${checkpointId}/activate`, {});
     },
+
+    // Export model to ONNX format
+    exportOnnx: async (runId: string, checkpointId?: string): Promise<{
+        run_id: string;
+        onnx_path: string;
+        file_size_mb: number;
+        input_shapes: Record<string, number[]>;
+        output_shapes: Record<string, number[]>;
+        output_names: string[];
+    }> => {
+        const params = checkpointId ? `?checkpointId=${checkpointId}` : '';
+        return http.get(`/api/ml/alphazero/runs/${runId}/export/onnx${params}`);
+    },
 };

@@ -487,6 +487,26 @@ alphaZeroRouter.post('/move', asyncHandler(async (req, res) => {
     res.json(response);
 }));
 
+// GET /api/ml/alphazero/runs/:id/export/onnx - Export model to ONNX format
+alphaZeroRouter.get('/runs/:id/export/onnx', asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const { checkpointId } = req.query;
+
+    const run = await getAlphaZeroRun(id);
+    if (!run) {
+        throw new NotFoundError('Training run not found');
+    }
+
+    log.info(`Exporting ONNX model for run: ${id}`);
+
+    // Call ML service to export
+    const result = await mlHttp.post(`/alphazero/export/onnx/${id}`, {
+        checkpoint_id: typeof checkpointId === 'string' ? checkpointId : undefined,
+    });
+
+    res.json(result);
+}));
+
 // GET /api/ml/alphazero/config/default - Get default training configuration
 alphaZeroRouter.get('/config/default', asyncHandler(async (_req, res) => {
     res.json(DEFAULT_CONFIG);

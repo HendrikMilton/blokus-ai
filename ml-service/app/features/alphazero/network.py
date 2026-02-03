@@ -645,3 +645,158 @@ def create_network(
 def count_parameters(model: nn.Module) -> int:
     """Count trainable parameters."""
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+
+class BlokusNetONNX(nn.Module):
+    """
+    ONNX-exportable wrapper for BlokusNet.
+
+    Exports the feature extraction + value head for fast CPU inference.
+    The policy head requires dynamic legal move encoding, which is handled
+    separately in inference code using the exported features.
+
+    Input:
+        board_tensor: (batch, 10, 20, 20) - board state encoding
+        pieces_vector: (batch, 84) - remaining pieces for all players
+
+    Output:
+        features: (batch, hidden_dim) - combined features for policy computation
+        value: (batch, 1) - game outcome prediction [-1, 1]
+
+    For policy inference with ONNX:
+        1. Run ONNX model to get features and value
+        2. Use the policy_query_weight and policy_query_bias to compute query
+        3. Encode legal moves and compute attention in NumPy/ONNX Runtime
+    """
+
+    def __init__(self, blokus_net: BlokusNet):
+        super().__init__()
+        self.stem = blokus_net.stem
+        self.res_tower = blokus_net.res_tower
+        self.global_pool = blokus_net.global_pool
+        self.fc_combine = blokus_net.fc_combine
+        self.value_head = blokus_net.value_head
+        # Store policy query layer for optional export
+        self.policy_query = blokus_net.policy_query
+
+    def forward(
+        self,
+        board_tensor: torch.Tensor,
+        pieces_vector: torch.Tensor,
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """
+        Forward pass for ONNX export.
+
+        Args:
+            board_tensor: (batch, 10, 20, 20)
+            pieces_vector: (batch, 84)
+
+        Returns:
+            features: (batch, hidden_dim) - combined features
+            value: (batch, 1) - game outcome prediction
+            policy_query: (batch, embed_dim) - query vector for policy attention
+        """
+        batch_size = board_tensor.size(0)
+
+        # Board feature extraction
+        x = self.stem(board_tensor)
+        x = self.res_tower(x)
+        x = self.global_pool(x).view(batch_size, -1)
+
+        # Combine with pieces vector
+        combined = torch.cat([x, pieces_vector], dim=1)
+        features = self.fc_combine(combined)
+
+        # Value prediction
+        value = self.value_head(features)
+
+        # Policy query for attention computation
+        query = self.policy_query(features)
+
+        return features, value, query
+
+
+def export_to_onnx(
+    model: BlokusNet,
+    output_path: str,
+    opset_version: int = 17,
+    input_channels: int = None,
+) -> dict:
+    """
+    Export BlokusNet to ONNX format.
+
+    Args:
+        model: Trained BlokusNet model
+        output_path: Path to save the ONNX file
+        opset_version: ONNX opset version
+        input_channels: Number of input channels (auto-detected if None)
+
+    Returns:
+        dict with export metadata (input_shapes, output_names, file_size)
+    """
+    import os
+
+    model.eval()
+
+    # Create ONNX wrapper
+    onnx_model = BlokusNetONNX(model)
+    onnx_model.eval()
+
+    # Detect input channels from model if not specified
+    if input_channels is None:
+        # Get from stem layer
+        input_channels = model.stem[0].in_channels
+
+    # Create dummy inputs
+    batch_size = 1
+    board_tensor = torch.randn(batch_size, input_channels, 20, 20)
+    pieces_vector = torch.randn(batch_size, 84)
+
+    # Move to same device as model
+    device = next(model.parameters()).device
+    board_tensor = board_tensor.to(device)
+    pieces_vector = pieces_vector.to(device)
+    onnx_model = onnx_model.to(device)
+
+    # Export to ONNX
+    torch.onnx.export(
+        onnx_model,
+        (board_tensor, pieces_vector),
+        output_path,
+        export_params=True,
+        opset_version=opset_version,
+        do_constant_folding=True,
+        input_names=['board_tensor', 'pieces_vector'],
+        output_names=['features', 'value', 'policy_query'],
+        dynamic_axes={
+            'board_tensor': {0: 'batch_size'},
+            'pieces_vector': {0: 'batch_size'},
+            'features': {0: 'batch_size'},
+            'value': {0: 'batch_size'},
+            'policy_query': {0: 'batch_size'},
+        },
+    )
+
+    # Get file size
+    file_size_bytes = os.path.getsize(output_path)
+    file_size_mb = file_size_bytes / (1024 * 1024)
+
+    # Get output shapes by running inference
+    with torch.no_grad():
+        features, value, query = onnx_model(board_tensor, pieces_vector)
+
+    return {
+        'input_shapes': {
+            'board_tensor': [batch_size, input_channels, 20, 20],
+            'pieces_vector': [batch_size, 84],
+        },
+        'output_shapes': {
+            'features': list(features.shape),
+            'value': list(value.shape),
+            'policy_query': list(query.shape),
+        },
+        'output_names': ['features', 'value', 'policy_query'],
+        'file_size_bytes': file_size_bytes,
+        'file_size_mb': round(file_size_mb, 2),
+        'opset_version': opset_version,
+    }

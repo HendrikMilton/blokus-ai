@@ -222,6 +222,108 @@ def _dict_to_game(state: Dict[str, Any]) -> 'BlokusGame':
     return game
 
 
+class OnnxExportRequest(BaseModel):
+    checkpoint_id: Optional[str] = None
+
+
+class OnnxExportResponse(BaseModel):
+    run_id: str
+    onnx_path: str
+    file_size_mb: float
+    input_shapes: Dict[str, Any]
+    output_shapes: Dict[str, Any]
+    output_names: List[str]
+
+
+@router.post("/export/onnx/{run_id}", response_model=OnnxExportResponse)
+async def export_to_onnx(run_id: str, request: OnnxExportRequest = None):
+    """
+    Export AlphaZero model to ONNX format.
+
+    Args:
+        run_id: Training run ID
+        request: Optional request body with checkpoint_id
+
+    Returns:
+        Export metadata including path, size, and tensor shapes
+    """
+    from .network import BlokusNet, create_network, export_to_onnx as onnx_export
+
+    # Determine checkpoint path
+    model_dir = MODELS_DIR / "alphazero" / run_id
+    if not model_dir.exists():
+        raise HTTPException(status_code=404, detail=f"Model directory not found: {model_dir}")
+
+    checkpoint_id = request.checkpoint_id if request else None
+    if checkpoint_id:
+        # Use specific checkpoint
+        model_path = model_dir / f"{checkpoint_id}.pt"
+    else:
+        # Use best.pt by default, fall back to latest checkpoint
+        model_path = model_dir / "best.pt"
+        if not model_path.exists():
+            # Find the latest checkpoint file
+            checkpoint_files = sorted(model_dir.glob("*.pt"), key=lambda p: p.stat().st_mtime, reverse=True)
+            if checkpoint_files:
+                model_path = checkpoint_files[0]
+                log.info(f"No best.pt found, using latest checkpoint: {model_path.name}")
+
+    if not model_path.exists():
+        raise HTTPException(status_code=404, detail=f"No checkpoint found in {model_dir}")
+
+    log.info(f"Exporting model to ONNX: {model_path}")
+
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+    # Load checkpoint
+    checkpoint = torch.load(model_path, map_location=device)
+
+    # Get config from checkpoint
+    config = checkpoint.get('config', {})
+    num_res_blocks = config.get('num_res_blocks', 15)
+    channels = config.get('channels', 256)
+
+    # Detect input channels from the checkpoint's stem layer
+    state_dict = checkpoint['model_state_dict']
+    stem_weight_shape = state_dict['stem.0.weight'].shape
+    input_channels = stem_weight_shape[1]  # Shape is [out_channels, in_channels, H, W]
+    actual_channels = stem_weight_shape[0]
+    log.info(f"Detected model: {input_channels} input channels, {actual_channels} channels, {num_res_blocks} res blocks")
+
+    # Create network with correct architecture
+    network = BlokusNet(
+        num_res_blocks=num_res_blocks,
+        channels=actual_channels,
+    )
+    # Override INPUT_CHANNELS if different from default
+    if input_channels != BlokusNet.INPUT_CHANNELS:
+        # Recreate stem with correct input channels
+        import torch.nn as nn
+        network.stem = nn.Sequential(
+            nn.Conv2d(input_channels, actual_channels, 3, padding=1, bias=False),
+            nn.BatchNorm2d(actual_channels),
+            nn.ReLU(),
+        )
+    network = network.to(device)
+    network.load_state_dict(state_dict)
+    network.eval()
+
+    # Export to ONNX
+    onnx_path = model_dir / "model.onnx"
+    export_metadata = onnx_export(network, str(onnx_path), input_channels=input_channels)
+
+    log.info(f"ONNX export complete: {onnx_path} ({export_metadata['file_size_mb']} MB)")
+
+    return OnnxExportResponse(
+        run_id=run_id,
+        onnx_path=str(onnx_path),
+        file_size_mb=export_metadata['file_size_mb'],
+        input_shapes=export_metadata['input_shapes'],
+        output_shapes=export_metadata['output_shapes'],
+        output_names=export_metadata['output_names'],
+    )
+
+
 @router.get("/health")
 async def health_check():
     """Health check endpoint."""
