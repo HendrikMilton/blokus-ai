@@ -83,8 +83,14 @@ docker exec postgres17 psql -U c_connect_user -d blokus_ai -c "\d table_name"
 Migrations are in `api/src/migrations/`. Migrations run automatically on API startup - no need to apply manually.
 
 ```bash
-# Create new migration
+# Create new migration (ALWAYS use this command, not manual file creation)
 bun run --cwd api migrate:make <migration_name>
+
+# This uses scripts/create-migration.js which:
+# - Generates proper timestamp prefix
+# - Creates empty migration file
+# - Adds file to git
+# Then you edit the generated file to add the up/down functions
 ```
 
 ## Notes

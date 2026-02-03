@@ -5,18 +5,8 @@ import { Table, Column } from '../../../components/ui/Table';
 import { ConfirmModal } from '../../../components/ui/ConfirmModal';
 import { http } from '../../../api/config';
 import { formatShortId } from '../../../utils/format';
+import type { TrainingProgress } from '../../../contexts/AdminContext';
 import toast from 'react-hot-toast';
-
-export interface TrainingProgress {
-    phase: 'detection' | 'classifier' | 'pose';
-    epoch: number;
-    totalEpochs: number;
-    loss: number;
-    accuracy: number;
-    // Preserved detection metrics for when classifier/pose phase starts
-    detectionAccuracy?: number;
-    detectionLoss?: number;
-}
 
 interface Props {
     runs: TrainingRun[];

@@ -30,14 +30,6 @@ const generateTimestamp = () => {
 
 // Template for TypeScript migration using system line endings
 const migrationTemplate = [
-    'import { Knex } from \'knex\';',
-    '',
-    'export const up = async (knex: Knex): Promise<void> => {',
-    '};',
-    '',
-    'export const down = async (knex: Knex): Promise<void> => {',
-    '};',
-    ''
 ].join(os.EOL);
 
 try {

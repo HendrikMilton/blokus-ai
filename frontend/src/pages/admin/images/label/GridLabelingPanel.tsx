@@ -2,10 +2,10 @@ import { useState, useEffect } from 'react';
 import toast from 'react-hot-toast';
 import { Sparkles, Loader2 } from 'lucide-react';
 import { PLAYER_COLORS } from '@blokus-ai/shared';
-import type { GridPrediction, GridPredictionRecord } from '@blokus-ai/shared';
+import type { GridPrediction, GridPredictionRecord, GridLabels, PlayerColor, CornerDetectionResult } from '@blokus-ai/shared';
 import { Button } from '../../../../components/ui/Button';
 import { ML_API } from '../../../../api/ml';
-import { CELL_COLORS, createEmptyGrid, type GridLabels, type PlayerColor, type CornerDetectionResult } from './types';
+import { CELL_COLORS, createEmptyGrid } from './types';
 
 interface GridLabelingPanelProps {
     sampleId: string;

@@ -1,5 +1,5 @@
 import { http } from './config';
-import {
+import type {
     TrainingRun,
     DetectionRun,
     BoardDetection,
@@ -10,15 +10,12 @@ import {
     BoardCorners,
     PerspectiveFromCornersRequest,
     PerspectiveFromCornersResponse,
-    PerspectiveMethodResult,
     GridLabels,
     GridLabel,
     GridPrediction,
     GridPredictionRecord,
 } from '@blokus-ai/shared';
 
-// Re-export for convenience
-export type { PerspectiveFromCornersResponse, PerspectiveMethodResult };
 
 export interface PerspectiveCorrectionMethod {
     method: string;
@@ -221,13 +218,6 @@ export const ML_API = {
         return response.predictions;
     },
 };
-
-export interface BoardCorners {
-    topLeft: { x: number; y: number };
-    topRight: { x: number; y: number };
-    bottomRight: { x: number; y: number };
-    bottomLeft: { x: number; y: number };
-}
 
 export interface CornerDetectionMethod {
     method: string;

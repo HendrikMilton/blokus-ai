@@ -1,6 +1,5 @@
-import type { BoundingBox, BoardDetection, SampleStatusFlags, CornerDetectionResult, GridLabels, PlayerColor } from '@blokus-ai/shared';
+import type { SampleStatusFlags, GridLabels, PlayerColor, BoardDetection } from '@blokus-ai/shared';
 import { PLAYER_COLORS } from '@blokus-ai/shared';
-import type { BoardCorners } from '../../../../api/ml';
 
 // Grid cell colors for labeling
 export const CELL_COLORS: { key: PlayerColor | null; label: string; color: string }[] = [
@@ -46,6 +45,3 @@ export interface LabelData {
 }
 
 export type DragHandle = 'nw' | 'ne' | 'sw' | 'se' | 'move' | null;
-
-// Re-export for convenience
-export type { BoundingBox, BoardDetection, SampleStatusFlags, CornerDetectionResult, GridLabels, PlayerColor, BoardCorners };

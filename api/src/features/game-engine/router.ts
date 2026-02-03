@@ -2,12 +2,92 @@ import { Router } from 'express';
 import type { GameConfig, GameState, Move, PlayerColor, GamePieceDefinition } from '@blokus-ai/shared';
 import { BlokusGame } from './engine';
 import { PIECE_CATALOG } from '../pieces/service';
+import { getAlphaZeroCheckpoint } from '../alphazero/database';
+import { mlHttp } from '../../lib/http';
 
 export const gameRouter = Router();
 
 // Store active games in memory (in production, use Redis or DB)
-const activeGames = new Map<string, BlokusGame>();
+interface StoredGame {
+    game: BlokusGame;
+    config: GameConfig;
+}
+
+const activeGames = new Map<string, StoredGame>();
 let gameIdCounter = 0;
+
+// ============================================================================
+// AlphaZero Integration
+// ============================================================================
+
+interface AlphaZeroMoveResponse {
+    piece_idx: number;
+    orientation_idx: number;
+    row: number;
+    col: number;
+    policy: number[];
+    value: number;
+}
+
+// Piece IDs in same order as ML service (verified identical)
+const PIECE_IDS = ['1', '2', 'I3', 'V3', 'I4', 'O4', 'T4', 'L4', 'S4',
+    'F', 'I5', 'L5', 'N', 'P', 'T5', 'U', 'V', 'W', 'X', 'Y', 'Z'];
+
+// Convert game state for ML service
+const gameStateForML = (game: BlokusGame): Record<string, unknown> => {
+    const state = game.getState();
+    return {
+        board: state.board,
+        players: Object.fromEntries(
+            Object.entries(state.players).map(([color, p]) => [
+                color,
+                {
+                    remainingPieces: Array.from(p.remainingPieces),  // ML expects 'remainingPieces'
+                    hasPlayed: p.hasPlayed,
+                    isEliminated: p.isEliminated,
+                    score: p.score,
+                }
+            ])
+        ),
+        currentPlayer: state.currentPlayer,
+        turnNumber: state.turnNumber,
+        isGameOver: state.isGameOver,
+        consecutivePasses: state.consecutivePasses,
+    };
+};
+
+// Convert ML response to game Move
+const mlMoveToGameMove = (response: AlphaZeroMoveResponse, player: PlayerColor): Move => ({
+    player,
+    pieceId: PIECE_IDS[response.piece_idx],
+    position: { row: response.row, col: response.col },
+    orientationIndex: response.orientation_idx,
+});
+
+// Get AI move from ML service
+const getAlphaZeroMove = async (game: BlokusGame, checkpointId: string): Promise<Move | null> => {
+    try {
+        const checkpoint = await getAlphaZeroCheckpoint(checkpointId);
+        if (!checkpoint) {
+            console.warn(`AlphaZero checkpoint not found: ${checkpointId}`);
+            return null;
+        }
+
+        const response = await mlHttp.post<AlphaZeroMoveResponse>(
+            '/alphazero/move',
+            {
+                game_state: gameStateForML(game),
+                model_path: checkpoint.modelPath,
+                mcts_simulations: 100,  // Fast for interactive play
+            }
+        );
+
+        return mlMoveToGameMove(response, game.getCurrentPlayer());
+    } catch (err) {
+        console.warn('AlphaZero inference failed:', err);
+        return null;
+    }
+};
 
 // Helper to serialize game state (convert Sets to arrays)
 const serializeState = (game: BlokusGame): GameState => {
@@ -45,7 +125,7 @@ gameRouter.post('/new', (req, res) => {
     const gameId = `game-${++gameIdCounter}`;
     const game = new BlokusGame();
 
-    activeGames.set(gameId, game);
+    activeGames.set(gameId, { game, config });
 
     res.json({
         gameId,
@@ -56,43 +136,43 @@ gameRouter.post('/new', (req, res) => {
 
 // GET /api/game/:id - Get game state
 gameRouter.get('/:id', (req, res) => {
-    const game = activeGames.get(req.params.id);
+    const stored = activeGames.get(req.params.id);
 
-    if (!game) {
+    if (!stored) {
         res.status(404).json({ error: 'Game not found' });
         return;
     }
 
     res.json({
-        state: serializeState(game),
-        moveHistory: game.getMoveHistory(),
+        state: serializeState(stored.game),
+        moveHistory: stored.game.getMoveHistory(),
     });
 });
 
 // GET /api/game/:id/legal-moves - Get legal moves for current player
 gameRouter.get('/:id/legal-moves', (req, res) => {
-    const game = activeGames.get(req.params.id);
+    const stored = activeGames.get(req.params.id);
 
-    if (!game) {
+    if (!stored) {
         res.status(404).json({ error: 'Game not found' });
         return;
     }
 
-    const moves = game.getLegalMoves();
+    const moves = stored.game.getLegalMoves();
     res.json({ moves, count: moves.length });
 });
 
 // POST /api/game/:id/move - Make a move
 gameRouter.post('/:id/move', (req, res) => {
-    const game = activeGames.get(req.params.id);
+    const stored = activeGames.get(req.params.id);
 
-    if (!game) {
+    if (!stored) {
         res.status(404).json({ error: 'Game not found' });
         return;
     }
 
     const move = req.body as Move;
-    const result = game.makeMove(move);
+    const result = stored.game.makeMove(move);
 
     if (!result.success) {
         res.status(400).json({ success: false, error: result.error });
@@ -101,19 +181,20 @@ gameRouter.post('/:id/move', (req, res) => {
 
     res.json({
         success: true,
-        state: serializeState(game),
+        state: serializeState(stored.game),
     });
 });
 
 // POST /api/game/:id/move-with-ai - Make a move and let AI respond
-gameRouter.post('/:id/move-with-ai', (req, res) => {
-    const game = activeGames.get(req.params.id);
+gameRouter.post('/:id/move-with-ai', async (req, res) => {
+    const stored = activeGames.get(req.params.id);
 
-    if (!game) {
+    if (!stored) {
         res.status(404).json({ error: 'Game not found' });
         return;
     }
 
+    const { game, config } = stored;
     const { move, aiColors } = req.body as { move: Move; aiColors: PlayerColor[] };
     const aiColorSet = new Set(aiColors);
 
@@ -133,12 +214,23 @@ gameRouter.post('/:id/move-with-ai', (req, res) => {
 
         if (legalMoves.length === 0) {
             game.pass();
-        } else {
-            // Random AI: pick a random move
-            const randomMove = legalMoves[Math.floor(Math.random() * legalMoves.length)];
-            game.makeMove(randomMove);
-            aiMoves.push(randomMove);
+            continue;
         }
+
+        let aiMove: Move | null = null;
+
+        // Try AlphaZero if model selected
+        if (config.aiModelId) {
+            aiMove = await getAlphaZeroMove(game, config.aiModelId);
+        }
+
+        // Fallback to random
+        if (!aiMove) {
+            aiMove = legalMoves[Math.floor(Math.random() * legalMoves.length)];
+        }
+
+        game.makeMove(aiMove);
+        aiMoves.push(aiMove);
     }
 
     res.json({
@@ -150,14 +242,14 @@ gameRouter.post('/:id/move-with-ai', (req, res) => {
 
 // POST /api/game/:id/pass - Pass turn (when no legal moves)
 gameRouter.post('/:id/pass', (req, res) => {
-    const game = activeGames.get(req.params.id);
+    const stored = activeGames.get(req.params.id);
 
-    if (!game) {
+    if (!stored) {
         res.status(404).json({ error: 'Game not found' });
         return;
     }
 
-    const result = game.pass();
+    const result = stored.game.pass();
 
     if (!result.success) {
         res.status(400).json({ success: false, error: result.error });
@@ -166,19 +258,20 @@ gameRouter.post('/:id/pass', (req, res) => {
 
     res.json({
         success: true,
-        state: serializeState(game),
+        state: serializeState(stored.game),
     });
 });
 
 // POST /api/game/:id/pass-with-ai - Pass and let AI continue
-gameRouter.post('/:id/pass-with-ai', (req, res) => {
-    const game = activeGames.get(req.params.id);
+gameRouter.post('/:id/pass-with-ai', async (req, res) => {
+    const stored = activeGames.get(req.params.id);
 
-    if (!game) {
+    if (!stored) {
         res.status(404).json({ error: 'Game not found' });
         return;
     }
 
+    const { game, config } = stored;
     const { aiColors } = req.body as { aiColors: PlayerColor[] };
     const aiColorSet = new Set(aiColors);
 
@@ -198,11 +291,23 @@ gameRouter.post('/:id/pass-with-ai', (req, res) => {
 
         if (legalMoves.length === 0) {
             game.pass();
-        } else {
-            const randomMove = legalMoves[Math.floor(Math.random() * legalMoves.length)];
-            game.makeMove(randomMove);
-            aiMoves.push(randomMove);
+            continue;
         }
+
+        let aiMove: Move | null = null;
+
+        // Try AlphaZero if model selected
+        if (config.aiModelId) {
+            aiMove = await getAlphaZeroMove(game, config.aiModelId);
+        }
+
+        // Fallback to random
+        if (!aiMove) {
+            aiMove = legalMoves[Math.floor(Math.random() * legalMoves.length)];
+        }
+
+        game.makeMove(aiMove);
+        aiMoves.push(aiMove);
     }
 
     res.json({
@@ -214,14 +319,14 @@ gameRouter.post('/:id/pass-with-ai', (req, res) => {
 
 // GET /api/game/:id/summary - Get game summary (scores, winner)
 gameRouter.get('/:id/summary', (req, res) => {
-    const game = activeGames.get(req.params.id);
+    const stored = activeGames.get(req.params.id);
 
-    if (!game) {
+    if (!stored) {
         res.status(404).json({ error: 'Game not found' });
         return;
     }
 
-    const summary = game.getSummary();
+    const summary = stored.game.getSummary();
     res.json(summary);
 });
 

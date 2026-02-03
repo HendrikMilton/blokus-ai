@@ -20,6 +20,8 @@ export interface TrainingProgress {
     accuracy: number;
     detectionAccuracy?: number;
     detectionLoss?: number;
+    classifierAccuracy?: number;
+    classifierLoss?: number;
 }
 
 export interface DetectionProgress {

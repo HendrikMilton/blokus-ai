@@ -613,7 +613,10 @@ export const getSampleDetectionInfoMap = async (
     type PartialModelDetection = Pick<ModelDetectionRow,
         'sample_id' | 'has_board_detected' | 'is_entire_board_visible' |
         'confidence' | 'classifier_confidence' |
-        'bbox_x' | 'bbox_y' | 'bbox_width' | 'bbox_height'
+        'bbox_x' | 'bbox_y' | 'bbox_width' | 'bbox_height' |
+        'corner_tl_x' | 'corner_tl_y' | 'corner_tr_x' | 'corner_tr_y' |
+        'corner_br_x' | 'corner_br_y' | 'corner_bl_x' | 'corner_bl_y' |
+        'corner_confidence'
     >;
     const aiDetectionMap = new Map<string, PartialModelDetection>();
     if (effectiveModelId) {
@@ -625,7 +628,10 @@ export const getSampleDetectionInfoMap = async (
                 'is_entire_board_visible',
                 'confidence',
                 'classifier_confidence',
-                'bbox_x', 'bbox_y', 'bbox_width', 'bbox_height'
+                'bbox_x', 'bbox_y', 'bbox_width', 'bbox_height',
+                'corner_tl_x', 'corner_tl_y', 'corner_tr_x', 'corner_tr_y',
+                'corner_br_x', 'corner_br_y', 'corner_bl_x', 'corner_bl_y',
+                'corner_confidence'
             );
         for (const row of aiRows) {
             aiDetectionMap.set(row.sample_id, row);
@@ -670,6 +676,13 @@ export const getSampleDetectionInfoMap = async (
                     width: aiRow!.bbox_width!,
                     height: aiRow!.bbox_height!,
                 } : null,
+                corners: aiRow!.corner_tl_x !== null ? {
+                    topLeft: { x: aiRow!.corner_tl_x, y: aiRow!.corner_tl_y! },
+                    topRight: { x: aiRow!.corner_tr_x!, y: aiRow!.corner_tr_y! },
+                    bottomRight: { x: aiRow!.corner_br_x!, y: aiRow!.corner_br_y! },
+                    bottomLeft: { x: aiRow!.corner_bl_x!, y: aiRow!.corner_bl_y! },
+                } : null,
+                cornerError: null, // Corner error not stored in model_detections
             } : null,
             human: hasHumanLabel ? {
                 hasBoardDetected: row.human_has_board ?? false,
@@ -712,6 +725,13 @@ export const getSampleDetectionInfoMap = async (
                     width: aiRow.bbox_width!,
                     height: aiRow.bbox_height!,
                 } : null,
+                corners: aiRow.corner_tl_x !== null ? {
+                    topLeft: { x: aiRow.corner_tl_x, y: aiRow.corner_tl_y! },
+                    topRight: { x: aiRow.corner_tr_x!, y: aiRow.corner_tr_y! },
+                    bottomRight: { x: aiRow.corner_br_x!, y: aiRow.corner_br_y! },
+                    bottomLeft: { x: aiRow.corner_bl_x!, y: aiRow.corner_bl_y! },
+                } : null,
+                cornerError: null, // Corner error not stored in model_detections
             },
             human: null,
             iou: null,

@@ -27,7 +27,7 @@ export const generateMockBoardState = (): BoardCell[][] => {
         const [rowOffset, colOffset] = cornerOffsets[index];
         const piece = BLOKUS_PIECES[index % BLOKUS_PIECES.length];
 
-        piece.cells.forEach(([r, c]) => {
+        piece.cells.forEach(([r, c]: [number, number]) => {
             const row = rowOffset + r;
             const col = colOffset + c;
             if (row >= 0 && row < BOARD_SIZE && col >= 0 && col < BOARD_SIZE) {

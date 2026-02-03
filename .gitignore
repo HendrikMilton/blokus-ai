@@ -31,6 +31,10 @@ coverage/
 ml-service/models/
 ml-service/*.pt
 
+# Rust build artifacts
+ml-service/rust_mcts/target/
+ml-service/rust_mcts/Cargo.lock
+
 # Terraform
 .terraform/
 *.tfstate

@@ -1,6 +1,7 @@
 import { useRef, useCallback } from 'react';
+import type { BoundingBox, BoardCorners } from '@blokus-ai/shared';
 import { API_URL } from '../../../../api/config';
-import { CORNER_CONFIG, type Sample, type LabelData, type BoundingBox, type BoardCorners, type PartialCorners, type DragHandle } from './types';
+import { CORNER_CONFIG, type Sample, type LabelData, type PartialCorners, type DragHandle } from './types';
 
 interface OriginalImagePanelProps {
     currentSample: Sample;

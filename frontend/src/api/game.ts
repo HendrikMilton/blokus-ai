@@ -81,3 +81,112 @@ export const GAME_API = {
         await http.delete(`/api/game/${gameId}`);
     },
 };
+
+// ============================================================================
+// AlphaZero Training API
+// ============================================================================
+
+export interface AlphaZeroConfig {
+    gamesPerGeneration?: number;
+    mctsSimulations?: number;
+    mctsCPuct?: number;
+    temperatureThreshold?: number;
+    dirichletAlpha?: number;
+    dirichletEpsilon?: number;
+    numParallelGames?: number;
+    mctsBatchSize?: number;
+    inferenceBatchSize?: number;
+    batchSize?: number;
+    learningRate?: number;
+    lrDecay?: string;
+    trainingStepsPerGen?: number;
+    replayBufferSize?: number;
+    mixedPrecision?: boolean;
+    numResBlocks?: number;
+    channels?: number;
+    evalGames?: number;
+    promotionThreshold?: number;
+    maxGenerations?: number;
+}
+
+export interface AlphaZeroRun {
+    id: string;
+    name: string;
+    status: 'pending' | 'running' | 'completed' | 'failed' | 'stopped';
+    config: AlphaZeroConfig;
+    currentGeneration: number;
+    gamesGenerated: number;
+    trainingSteps: number;
+    policyLoss: number | null;
+    valueLoss: number | null;
+    bestWinRate: number | null;
+    startedAt: string | null;
+    completedAt: string | null;
+    errorMessage: string | null;
+    createdAt: string;
+    updatedAt: string;
+}
+
+export interface AlphaZeroCheckpoint {
+    id: string;
+    runId: string;
+    generation: number;
+    step: number;
+    policyLoss: number | null;
+    valueLoss: number | null;
+    evalWinRate: number | null;
+    evalGames: number | null;
+    isBest: boolean;
+    modelPath: string;
+    createdAt: string;
+}
+
+export const ALPHAZERO_API = {
+    // Get default config
+    getDefaultConfig: async (): Promise<AlphaZeroConfig> => {
+        return http.get('/api/ml/alphazero/config/default');
+    },
+
+    // Start a new training run
+    startTraining: async (name: string, config?: Partial<AlphaZeroConfig>): Promise<AlphaZeroRun> => {
+        return http.post('/api/ml/alphazero/runs', { name, config });
+    },
+
+    // List all training runs
+    listRuns: async (): Promise<{ runs: AlphaZeroRun[] }> => {
+        return http.get('/api/ml/alphazero/runs');
+    },
+
+    // Get a single run
+    getRun: async (runId: string): Promise<AlphaZeroRun> => {
+        return http.get(`/api/ml/alphazero/runs/${runId}`);
+    },
+
+    // Stop a running training
+    stopTraining: async (runId: string): Promise<AlphaZeroRun> => {
+        return http.post(`/api/ml/alphazero/runs/${runId}/stop`, {});
+    },
+
+    // Delete a training run
+    deleteRun: async (runId: string): Promise<void> => {
+        await http.delete(`/api/ml/alphazero/runs/${runId}`);
+    },
+
+    // List checkpoints
+    listCheckpoints: async (runId?: string, bestOnly?: boolean): Promise<{ checkpoints: AlphaZeroCheckpoint[] }> => {
+        const params = new URLSearchParams();
+        if (runId) {
+            params.set('runId', runId);
+        }
+        if (bestOnly) {
+            params.set('bestOnly', 'true');
+        }
+        const query = params.toString();
+        return http.get(`/api/ml/alphazero/checkpoints${query ? `?${query}` : ''}`);
+    },
+
+    // Activate a checkpoint as best
+    activateCheckpoint: async (checkpointId: string): Promise<void> => {
+        await http.post(`/api/ml/alphazero/checkpoints/${checkpointId}/activate`, {});
+    },
+};

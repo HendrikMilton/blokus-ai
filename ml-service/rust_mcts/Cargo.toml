@@ -1,0 +1,19 @@
+[package]
+name = "rust_mcts"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "rust_mcts"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.22", features = ["extension-module"] }
+rand = "0.8"
+parking_lot = "0.12"  # Faster mutexes
+smallvec = "1.13"     # Stack-allocated small vectors
+
+[profile.release]
+lto = true
+codegen-units = 1
+opt-level = 3

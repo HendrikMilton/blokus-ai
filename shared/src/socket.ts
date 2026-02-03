@@ -24,7 +24,14 @@ export type SocketEvent =
     | 'grid-run-started'
     | 'grid-run-progress'
     | 'grid-run-completed'
-    | 'grid-run-failed';
+    | 'grid-run-failed'
+    | 'alphazero-progress'
+    | 'alphazero-run-started'
+    | 'alphazero-run-stopped'
+    | 'alphazero-run-completed'
+    | 'alphazero-run-failed'
+    | 'alphazero-run-deleted'
+    | 'alphazero-checkpoint-created';
 
 // Event payload types
 export interface UserCreatedPayload {
@@ -132,6 +139,90 @@ export interface GridRunFailedPayload {
     errorMessage: string;
 }
 
+// AlphaZero training event payloads
+export interface AlphaZeroProgressPayload {
+    runId: string;
+    // Current state
+    generation: number;
+    maxGenerations: number;
+    gamesGenerated: number;
+    trainingSteps: number;
+    policyLoss: number | null;
+    valueLoss: number | null;
+    // Phase info
+    phase: 'self_play' | 'training' | 'evaluation';
+    phaseCurrent: number;
+    phaseTotal: number;
+    phaseProgress: number; // 0-100
+    phaseEtaSec: number;
+    // Generation info
+    generationProgress: number; // 0-100
+    generationEtaSec: number;
+    // Overall info
+    overallProgress: number; // 0-100
+    overallEtaSec: number;
+    // Human-readable message
+    message: string;
+    // Extra metrics
+    gamesPerMin?: number;
+    avgGameTimeSec?: number;
+    lastGameMoves?: number;
+    stepsPerSec?: number;
+    learningRate?: number;
+    totalLoss?: number;
+    evalWins?: number;
+    evalGames?: number;
+    currentWinRate?: number;
+    promotionThreshold?: number;
+}
+
+export interface AlphaZeroRunStartedPayload {
+    runId: string;
+    name: string;
+}
+
+export interface AlphaZeroRunStoppedPayload {
+    run: {
+        id: string;
+        name: string;
+        status: string;
+    };
+}
+
+export interface AlphaZeroRunCompletedPayload {
+    run: {
+        id: string;
+        name: string;
+        status: string;
+        policyLoss: number;
+        valueLoss: number;
+        bestWinRate: number;
+    };
+}
+
+export interface AlphaZeroRunFailedPayload {
+    runId: string;
+    errorMessage: string;
+}
+
+export interface AlphaZeroRunDeletedPayload {
+    runId: string;
+}
+
+export interface AlphaZeroCheckpointCreatedPayload {
+    checkpoint: {
+        id: string;
+        runId: string;
+        generation: number;
+        step: number;
+        policyLoss: number | null;
+        valueLoss: number | null;
+        evalWinRate: number | null;
+        isBest: boolean;
+        modelPath: string;
+    };
+}
+
 // Discriminated union of all event payloads
 // Using Record<SocketEvent, ...> ensures all events have corresponding payloads
 export type EventPayloads = Record<SocketEvent, unknown> & {
@@ -156,6 +247,13 @@ export type EventPayloads = Record<SocketEvent, unknown> & {
     'grid-run-progress': GridRunProgressPayload;
     'grid-run-completed': GridRunCompletedPayload;
     'grid-run-failed': GridRunFailedPayload;
+    'alphazero-progress': AlphaZeroProgressPayload;
+    'alphazero-run-started': AlphaZeroRunStartedPayload;
+    'alphazero-run-stopped': AlphaZeroRunStoppedPayload;
+    'alphazero-run-completed': AlphaZeroRunCompletedPayload;
+    'alphazero-run-failed': AlphaZeroRunFailedPayload;
+    'alphazero-run-deleted': AlphaZeroRunDeletedPayload;
+    'alphazero-checkpoint-created': AlphaZeroCheckpointCreatedPayload;
 };
 
 // Room names

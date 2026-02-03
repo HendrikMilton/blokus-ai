@@ -243,7 +243,6 @@ samplesRouter.delete('/:id/corners', asyncHandler(async (req, res) => {
 // ============================================================================
 
 import { getGridLabel, saveGridLabel, deleteGridLabel, getCornerDetectionsForSamples } from '../ml/database';
-import { mlHttp } from '../../lib/http';
 
 // GET /api/samples/:id/grid - Get grid label for a sample
 samplesRouter.get('/:id/grid', asyncHandler(async (req, res) => {

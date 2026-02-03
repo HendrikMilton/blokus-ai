@@ -19,7 +19,6 @@ export const useSocketEvent = <T extends SocketEvent>(
 ) => {
     useEffect(() => {
         const handleEvent = (serializedData: string) => {
-            console.log(`[DEBUG] Socket received event '${eventName}':`, serializedData);
             try {
                 const data = JSON.parse(serializedData) as EventPayloads[T];
                 callback(data);
@@ -28,7 +27,6 @@ export const useSocketEvent = <T extends SocketEvent>(
             }
         };
 
-        console.log(`[DEBUG] Socket registering listener for '${eventName}'`);
         apiSocket.on(eventName as string, handleEvent);
 
         return () => {

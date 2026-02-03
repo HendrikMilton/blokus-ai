@@ -13,6 +13,7 @@ import { samplesRouter } from './features/samples/router';
 import { pipelinesRouter } from './features/pipelines/router';
 import { piecesRouter } from './features/pieces/router';
 import { gameRouter } from './features/game-engine/router';
+import { alphaZeroRouter } from './features/alphazero/router';
 import { debugPath } from '@blokus-ai/shared';
 import { cidMiddleware } from './middleware/cid';
 import { errorHandler } from './error';
@@ -93,6 +94,7 @@ app.use('/api/samples', samplesRouter);
 app.use('/api/pipelines', pipelinesRouter);
 app.use('/api/pieces', piecesRouter);
 app.use('/api/game', gameRouter);
+app.use('/api/ml/alphazero', alphaZeroRouter);
 
 // Error handler (must be last)
 app.use(errorHandler);

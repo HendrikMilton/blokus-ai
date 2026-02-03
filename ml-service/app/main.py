@@ -7,6 +7,7 @@ from app.features.samples import router as samples_router
 from app.features.detect import router as detect_router
 from app.features.train import router as train_router
 from app.features.models import router as models_router
+from app.features.alphazero import router as alphazero_router
 from app.middleware import CorrelationIdMiddleware
 
 app = FastAPI(
@@ -32,6 +33,7 @@ app.include_router(samples_router, prefix="/samples", tags=["samples"])
 app.include_router(detect_router, prefix="/detect", tags=["detect"])
 app.include_router(train_router, prefix="/train", tags=["train"])
 app.include_router(models_router, prefix="/models", tags=["models"])
+app.include_router(alphazero_router, prefix="/alphazero", tags=["alphazero"])
 
 
 @app.get("/")

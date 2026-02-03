@@ -1,6 +1,7 @@
+import type { BoundingBox, BoardDetection } from '@blokus-ai/shared';
 import { Button } from '../../../../components/ui/Button';
 import { isUnlabeled } from '../../../../lib/status';
-import { CORNER_CONFIG, type Sample, type LabelData, type BoundingBox, type BoardDetection } from './types';
+import { CORNER_CONFIG, type Sample, type LabelData } from './types';
 
 interface LabelingControlsProps {
     currentSample: Sample;
