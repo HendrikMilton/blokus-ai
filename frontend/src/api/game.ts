@@ -100,6 +100,9 @@ export interface AlphaZeroConfig {
     learningRate?: number;
     lrDecay?: string;
     trainingStepsPerGen?: number;
+    trainingStepsMin?: number;
+    trainingStepsMax?: number;
+    adaptiveTrainingSteps?: boolean;
     replayBufferSize?: number;
     mixedPrecision?: boolean;
     numResBlocks?: number;

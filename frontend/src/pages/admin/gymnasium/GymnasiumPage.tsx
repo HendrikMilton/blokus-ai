@@ -1516,7 +1516,22 @@ export const GymnasiumPage = () => {
                                     value={trainConfig.maxGenerations ?? 100}
                                     onChange={(e) => setTrainConfig(c => ({ ...c, maxGenerations: parseInt(e.target.value) || 100 }))}
                                 />
+                                <Input
+                                    label="Training Steps Min"
+                                    type="number"
+                                    value={trainConfig.trainingStepsMin ?? 500}
+                                    onChange={(e) => setTrainConfig(c => ({ ...c, trainingStepsMin: parseInt(e.target.value) || 500 }))}
+                                />
+                                <Input
+                                    label="Training Steps Max"
+                                    type="number"
+                                    value={trainConfig.trainingStepsMax ?? 2000}
+                                    onChange={(e) => setTrainConfig(c => ({ ...c, trainingStepsMax: parseInt(e.target.value) || 2000 }))}
+                                />
                             </div>
+                            <p className="text-xs text-muted mt-2">
+                                Training steps scale adaptively from Min to Max as the replay buffer fills up.
+                            </p>
                         </div>
 
                         <div className="border-t border-border pt-4">
@@ -1554,6 +1569,8 @@ export const GymnasiumPage = () => {
                                         numParallelGames: 4,
                                         mctsBatchSize: 8,
                                         inferenceBatchSize: 16,
+                                        trainingStepsMin: 100,
+                                        trainingStepsMax: 200,
                                     })}
                                 >
                                 Quick Test
@@ -1572,7 +1589,8 @@ export const GymnasiumPage = () => {
                                         numParallelGames: 32,
                                         mctsBatchSize: 32,
                                         inferenceBatchSize: 128,
-                                        trainingStepsPerGen: 500,
+                                        trainingStepsMin: 300,
+                                        trainingStepsMax: 1000,
                                     })}
                                 >
                                 Medium
@@ -1584,14 +1602,15 @@ export const GymnasiumPage = () => {
                                         mctsSimulations: 800,
                                         gamesPerGeneration: 200,
                                         maxGenerations: 100,
-                                        batchSize: 4096,
+                                        batchSize: 1024,
                                         numResBlocks: 15,
-                                        channels: 128,
+                                        channels: 256,
                                         evalGames: 50,
                                         numParallelGames: 32,
                                         mctsBatchSize: 32,
                                         inferenceBatchSize: 128,
-                                        trainingStepsPerGen: 2000,
+                                        trainingStepsMin: 500,
+                                        trainingStepsMax: 2000,
                                     })}
                                 >
                                 Large
@@ -1610,7 +1629,8 @@ export const GymnasiumPage = () => {
                                         numParallelGames: 128,
                                         mctsBatchSize: 128,
                                         inferenceBatchSize: 512,
-                                        trainingStepsPerGen: 4000,
+                                        trainingStepsMin: 1000,
+                                        trainingStepsMax: 4000,
                                     })}
                                 >
                                 GH200

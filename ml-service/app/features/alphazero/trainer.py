@@ -54,7 +54,10 @@ class TrainingConfig:
     batch_size: int = 4096
     learning_rate: float = 0.002
     lr_decay: str = 'cosine'
-    training_steps_per_gen: int = 2000
+    training_steps_per_gen: int = 2000  # Used if adaptive is disabled
+    training_steps_min: int = 500       # Adaptive: min steps (small buffer)
+    training_steps_max: int = 2000      # Adaptive: max steps (full buffer)
+    adaptive_training_steps: bool = True  # Enable adaptive scaling
     replay_buffer_size: int = 1_000_000
     mixed_precision: bool = True
 
@@ -89,6 +92,9 @@ class TrainingConfig:
             'learningRate': 'learning_rate',
             'lrDecay': 'lr_decay',
             'trainingStepsPerGen': 'training_steps_per_gen',
+            'trainingStepsMin': 'training_steps_min',
+            'trainingStepsMax': 'training_steps_max',
+            'adaptiveTrainingSteps': 'adaptive_training_steps',
             'replayBufferSize': 'replay_buffer_size',
             'mixedPrecision': 'mixed_precision',
             'numResBlocks': 'num_res_blocks',
@@ -435,31 +441,40 @@ class AlphaZeroTrainer:
                     return False
 
                 # Clear GPU memory before training phase
-                # Move network to CPU temporarily to force CUDA to release memory
                 import gc
                 import ctypes
 
+                # Move network to CPU temporarily to force CUDA to release memory
                 self.network.cpu()
-                gc.collect()
+
+                # Multiple rounds of cleanup to ensure all references are freed
+                for _ in range(3):
+                    gc.collect()
                 torch.cuda.empty_cache()
                 torch.cuda.synchronize()
 
-                # Reset the CUDA peak memory stats for accurate monitoring
-                torch.cuda.reset_peak_memory_stats()
-
-                # Force garbage collection again after CUDA cleanup
-                gc.collect()
-
-                # Release memory back to OS (Linux glibc malloc_trim)
-                try:
-                    libc = ctypes.CDLL("libc.so.6")
-                    libc.malloc_trim(0)
-                except Exception:
-                    pass
-
+                # Check memory before continuing
                 allocated = torch.cuda.memory_allocated() / 1e9
                 reserved = torch.cuda.memory_reserved() / 1e9
-                log.info(f"GPU memory after cleanup: allocated={allocated:.2f}GB, reserved={reserved:.2f}GB")
+                log.info(f"GPU memory after initial cleanup: allocated={allocated:.2f}GB, reserved={reserved:.2f}GB")
+
+                # If still using significant memory, try harder
+                if reserved > 1.0:
+                    log.info("Memory still high, forcing additional cleanup...")
+                    torch.cuda.reset_peak_memory_stats()
+                    torch.cuda.empty_cache()
+                    gc.collect()
+
+                    # Release memory back to OS (Linux glibc malloc_trim)
+                    try:
+                        libc = ctypes.CDLL("libc.so.6")
+                        libc.malloc_trim(0)
+                    except Exception:
+                        pass
+
+                    allocated = torch.cuda.memory_allocated() / 1e9
+                    reserved = torch.cuda.memory_reserved() / 1e9
+                    log.info(f"GPU memory after aggressive cleanup: allocated={allocated:.2f}GB, reserved={reserved:.2f}GB")
 
                 # Move network back to GPU for training
                 self.network.to(self.device)
@@ -686,6 +701,26 @@ class AlphaZeroTrainer:
         del examples
         del manager
 
+        # Force cleanup of any cached tensors
+        import gc
+        gc.collect()
+        torch.cuda.empty_cache()
+
+    def _get_training_steps(self) -> int:
+        """Calculate training steps based on buffer size (adaptive) or fixed config."""
+        if not self.config.adaptive_training_steps:
+            return self.config.training_steps_per_gen
+
+        # Scale steps linearly with buffer fullness
+        # At 0% full -> training_steps_min
+        # At 100% full -> training_steps_max
+        buffer_ratio = min(len(self.replay_buffer) / self.config.replay_buffer_size, 1.0)
+        steps = int(
+            self.config.training_steps_min +
+            buffer_ratio * (self.config.training_steps_max - self.config.training_steps_min)
+        )
+        return steps
+
     def _run_training(self) -> tuple[float, float]:
         """Train the network on replay buffer."""
         self.phase_start_time = time.time()
@@ -694,11 +729,16 @@ class AlphaZeroTrainer:
         total_policy_loss = 0.0
         total_value_loss = 0.0
 
+        # Calculate adaptive training steps
+        training_steps = self._get_training_steps()
+        log.info(f"Training steps this generation: {training_steps} "
+                 f"(buffer: {len(self.replay_buffer)}/{self.config.replay_buffer_size})")
+
         # Collect metrics for batch insert to database
         metrics_batch = []
         last_step_time = time.time()
 
-        for step in range(self.config.training_steps_per_gen):
+        for step in range(training_steps):
             if self._stop_requested:
                 break
 
@@ -820,13 +860,13 @@ class AlphaZeroTrainer:
                 avg_p = 0.0 if np.isnan(avg_p) or np.isinf(avg_p) else avg_p
                 avg_v = 0.0 if np.isnan(avg_v) or np.isinf(avg_v) else avg_v
 
-                message = f"Step {step + 1}/{self.config.training_steps_per_gen} - loss: {avg_p + avg_v:.4f}"
+                message = f"Step {step + 1}/{training_steps} - loss: {avg_p + avg_v:.4f}"
 
                 self._report_progress(
                     phase='training',
-                    phase_progress=(step + 1) / self.config.training_steps_per_gen,
+                    phase_progress=(step + 1) / training_steps,
                     phase_current=step + 1,
-                    phase_total=self.config.training_steps_per_gen,
+                    phase_total=training_steps,
                     policy_loss=avg_p,
                     value_loss=avg_v,
                     message=message,
@@ -834,9 +874,10 @@ class AlphaZeroTrainer:
                         'stepsPerSec': round(steps_per_sec, 2),
                         'learningRate': lr,
                         'totalLoss': round(avg_p + avg_v, 4),
+                        'adaptiveSteps': training_steps,
                     }
                 )
-                log.info(f"Step {step + 1}/{self.config.training_steps_per_gen} - "
+                log.info(f"Step {step + 1}/{training_steps} - "
                       f"policy_loss: {avg_p:.4f}, value_loss: {avg_v:.4f}, {steps_per_sec:.1f} steps/s")
 
                 # Send metrics batch to API
@@ -847,8 +888,8 @@ class AlphaZeroTrainer:
         if metrics_batch:
             self._send_metrics_batch(metrics_batch)
 
-        avg_policy_loss = total_policy_loss / self.config.training_steps_per_gen
-        avg_value_loss = total_value_loss / self.config.training_steps_per_gen
+        avg_policy_loss = total_policy_loss / training_steps if training_steps > 0 else 0.0
+        avg_value_loss = total_value_loss / training_steps if training_steps > 0 else 0.0
 
         return avg_policy_loss, avg_value_loss
 
