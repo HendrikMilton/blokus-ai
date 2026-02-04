@@ -126,6 +126,7 @@ export interface AlphaZeroConfig {
     entropyWeight?: number;
     entropyTarget?: number;
     entropyAdaptive?: boolean;
+    entropyWeightMax?: number;
     dynamicPromotion?: boolean;
     promotionThresholdMin?: number;
     promotionDecayPerStuckGen?: number;

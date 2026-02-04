@@ -46,7 +46,7 @@ const DEFAULT_CONFIG: AlphaZeroConfig = {
     numResBlocks: 15,
     channels: 256,
     // Evaluation
-    evalGames: 100,
+    evalGames: 400,  // AlphaZero used 400 games for statistical confidence
     promotionThreshold: 0.55,
     // Limits
     maxGenerations: 100,

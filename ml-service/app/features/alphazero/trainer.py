@@ -88,16 +88,17 @@ class TrainingConfig:
     channels: int = 256
 
     # Evaluation
-    eval_games: int = 100
+    eval_games: int = 400  # Matches AlphaZero's 400 games for statistical confidence
     promotion_threshold: float = 0.55
 
     # === Anti-Collapse Fixes ===
 
     # 1. Entropy regularization (prevents policy collapse)
     entropy_regularization: bool = True
-    entropy_weight: float = 0.01          # Base entropy bonus weight
-    entropy_target: float = 1.0           # Target entropy level
+    entropy_weight: float = 0.1           # Base entropy bonus weight (10x stronger)
+    entropy_target: float = 1.5           # Target entropy level (higher target)
     entropy_adaptive: bool = True         # Increase weight when entropy too low
+    entropy_weight_max: float = 1.0       # Cap for adaptive weight
 
     # 2. Dynamic promotion threshold
     dynamic_promotion: bool = True
@@ -170,6 +171,7 @@ class TrainingConfig:
             'entropyWeight': 'entropy_weight',
             'entropyTarget': 'entropy_target',
             'entropyAdaptive': 'entropy_adaptive',
+            'entropyWeightMax': 'entropy_weight_max',
             'dynamicPromotion': 'dynamic_promotion',
             'promotionThresholdMin': 'promotion_threshold_min',
             'promotionDecayPerStuckGen': 'promotion_decay_per_stuck_gen',
@@ -261,6 +263,7 @@ class AlphaZeroTrainer:
         self.total_steps = 0
         self.best_win_rate = 0.0
         self._stop_requested = False
+        self._last_heuristics: Optional[Dict[str, float]] = None  # Populated after each self-play phase
 
         # Heuristic config for policy bootstrapping
         self.heuristic_config = HeuristicConfig() if config.use_heuristic_bootstrap else None
@@ -1047,16 +1050,25 @@ class AlphaZeroTrainer:
                         log_probs_for_entropy = torch.log(probs + 1e-10)
                         entropy = -(probs * log_probs_for_entropy).sum(dim=1).mean()
 
-                        # Adaptive weight: increase if entropy too low
+                        # Adaptive weight: exponential scaling when entropy below target
                         if self.config.entropy_adaptive and self._last_heuristics:
                             current_entropy = self._last_heuristics.get('policy_entropy', 1.0)
                             if current_entropy < self.config.entropy_target:
-                                # Scale up weight when entropy is low
-                                adaptive_weight = self.config.entropy_weight * (self.config.entropy_target / max(current_entropy, 0.1))
+                                # Exponential scaling: weight grows rapidly as entropy drops
+                                ratio = self.config.entropy_target / max(current_entropy, 0.05)
+                                adaptive_weight = min(
+                                    self.config.entropy_weight * (ratio ** 2),
+                                    self.config.entropy_weight_max
+                                )
                             else:
                                 adaptive_weight = self.config.entropy_weight
                         else:
                             adaptive_weight = self.config.entropy_weight
+
+                        # Log adaptive weight on first step for diagnostics
+                        if step == 0:
+                            log.info(f"Entropy regularization: current={self._last_heuristics.get('policy_entropy', 'N/A') if self._last_heuristics else 'N/A'}, "
+                                    f"target={self.config.entropy_target}, adaptive_weight={adaptive_weight:.4f}")
 
                         # Add entropy bonus (negative because we want to maximize entropy)
                         loss = policy_loss + value_loss - adaptive_weight * entropy
@@ -1092,14 +1104,25 @@ class AlphaZeroTrainer:
                     log_probs_for_entropy = torch.log(probs + 1e-10)
                     entropy = -(probs * log_probs_for_entropy).sum(dim=1).mean()
 
+                    # Adaptive weight: exponential scaling when entropy below target
                     if self.config.entropy_adaptive and self._last_heuristics:
                         current_entropy = self._last_heuristics.get('policy_entropy', 1.0)
                         if current_entropy < self.config.entropy_target:
-                            adaptive_weight = self.config.entropy_weight * (self.config.entropy_target / max(current_entropy, 0.1))
+                            # Exponential scaling: weight grows rapidly as entropy drops
+                            ratio = self.config.entropy_target / max(current_entropy, 0.05)
+                            adaptive_weight = min(
+                                self.config.entropy_weight * (ratio ** 2),
+                                self.config.entropy_weight_max
+                            )
                         else:
                             adaptive_weight = self.config.entropy_weight
                     else:
                         adaptive_weight = self.config.entropy_weight
+
+                    # Log adaptive weight on first step for diagnostics
+                    if step == 0:
+                        log.info(f"Entropy regularization: current={self._last_heuristics.get('policy_entropy', 'N/A') if self._last_heuristics else 'N/A'}, "
+                                f"target={self.config.entropy_target}, adaptive_weight={adaptive_weight:.4f}")
 
                     loss = policy_loss + value_loss - adaptive_weight * entropy
                 else:

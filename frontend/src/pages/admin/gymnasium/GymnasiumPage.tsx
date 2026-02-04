@@ -1804,6 +1804,43 @@ export const GymnasiumPage = () => {
                                         0 = uniform sampling, 0.7 = recent examples ~10x more likely.
                                     </p>
                                 </div>
+
+                                <div className="grid grid-cols-2 gap-3 mt-3">
+                                    <div>
+                                        <Input
+                                            label="Entropy Weight"
+                                            type="number"
+                                            step="0.01"
+                                            min="0"
+                                            max="1"
+                                            value={trainConfig.entropyWeight ?? 0.1}
+                                            onChange={(e) => setTrainConfig(c => ({
+                                                ...c,
+                                                entropyWeight: parseFloat(e.target.value) || 0.1
+                                            }))}
+                                        />
+                                        <p className="text-xs text-secondary mt-1">
+                                            Base weight for entropy bonus (default 0.1).
+                                        </p>
+                                    </div>
+                                    <div>
+                                        <Input
+                                            label="Eval Games"
+                                            type="number"
+                                            step="50"
+                                            min="20"
+                                            max="1000"
+                                            value={trainConfig.evalGames ?? 400}
+                                            onChange={(e) => setTrainConfig(c => ({
+                                                ...c,
+                                                evalGames: parseInt(e.target.value) || 400
+                                            }))}
+                                        />
+                                        <p className="text-xs text-secondary mt-1">
+                                            Games per evaluation (400 for statistical confidence).
+                                        </p>
+                                    </div>
+                                </div>
                             </div>
                         </div>
 
@@ -1820,7 +1857,7 @@ export const GymnasiumPage = () => {
                                         batchSize: 512,
                                         numResBlocks: 5,
                                         channels: 64,
-                                        evalGames: 10,
+                                        evalGames: 400,
                                         numParallelGames: 4,
                                         mctsBatchSize: 8,
                                         inferenceBatchSize: 16,
@@ -1840,7 +1877,7 @@ export const GymnasiumPage = () => {
                                         batchSize: 4096,
                                         numResBlocks: 10,
                                         channels: 128,
-                                        evalGames: 20,
+                                        evalGames: 400,
                                         numParallelGames: 32,
                                         mctsBatchSize: 32,
                                         inferenceBatchSize: 128,
@@ -1860,7 +1897,7 @@ export const GymnasiumPage = () => {
                                         batchSize: 1024,
                                         numResBlocks: 15,
                                         channels: 256,
-                                        evalGames: 50,
+                                        evalGames: 400,
                                         numParallelGames: 32,
                                         mctsBatchSize: 32,
                                         inferenceBatchSize: 128,
@@ -1880,7 +1917,7 @@ export const GymnasiumPage = () => {
                                         batchSize: 8192,
                                         numResBlocks: 20,
                                         channels: 256,
-                                        evalGames: 100,
+                                        evalGames: 400,
                                         numParallelGames: 128,
                                         mctsBatchSize: 128,
                                         inferenceBatchSize: 512,
