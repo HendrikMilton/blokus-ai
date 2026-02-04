@@ -579,8 +579,13 @@ export const GymnasiumPage = () => {
                 }
             }
 
+            // Map UI game mode to API game mode
+            // UI modes: '1v3', '2v2', 'spectate', 'local'
+            // API modes: '1v1', '4-player', 'vs-ai'
+            const apiMode = gameMode === 'local' ? '4-player' : 'vs-ai';
+
             const response = await GAME_API.newGame({
-                mode: gameMode,
+                mode: apiMode,
                 humanColors,
                 aiColors,
                 aiModels: Object.keys(aiModels).length > 0 ? aiModels : undefined,
@@ -764,7 +769,7 @@ export const GymnasiumPage = () => {
                 setGameId(null);
                 setGameState(null);
             }
-        } catch (err) {
+        } catch {
             toast.error('AI move failed - check if model is compatible');
             // Reset game on error so user isn't stuck
             setGameId(null);
