@@ -19,6 +19,14 @@ from .mcts import MCTS, MCTSConfig, BatchedMCTS, MCTSNode
 from .network import BlokusNet
 from .mcts_rust import HybridMCTS, encode_move
 
+# Import heuristics for cold start bootstrapping (optional, may not exist)
+try:
+    from .heuristics import HeuristicConfig, compute_heuristic_policy, blend_policies
+    HEURISTICS_AVAILABLE = True
+except ImportError:
+    HEURISTICS_AVAILABLE = False
+    HeuristicConfig = None
+
 log.info("Using Rust-accelerated MCTS")
 
 
@@ -39,6 +47,10 @@ class GameMetrics:
     avg_mobility: float           # Average legal moves available per turn
     avg_center_coverage: float    # Average pieces placed near center (inner 10x10)
     final_corner_counts: List[int]  # Final corner counts per player
+    # Policy quality metrics (added for debugging cold start problem)
+    avg_policy_entropy: float = 0.0  # Average entropy of MCTS policy targets (higher = more uniform)
+    avg_top1_prob: float = 0.0       # Average probability of top move (higher = more focused)
+    avg_top5_prob: float = 0.0       # Average probability mass in top 5 moves
 
 
 @dataclass
@@ -295,13 +307,34 @@ class ReplayBuffer:
             if len(self.buffer) > self.max_size:
                 self.buffer = self.buffer[-self.max_size:]
 
-    def sample(self, batch_size: int) -> List[TrainingExample]:
-        """Sample a batch of examples."""
+    def sample(self, batch_size: int, recent_bias: float = 0.0) -> List[TrainingExample]:
+        """
+        Sample a batch of examples with optional recent bias.
+
+        Args:
+            batch_size: Number of examples to sample
+            recent_bias: Weight for recency (0.0 = uniform, 1.0 = strongly favor recent)
+                        Default 0.0 means uniform sampling for backwards compatibility.
+                        Values around 0.7 mean recent examples are ~10x more likely.
+
+        Returns:
+            List of sampled training examples
+        """
         with self._lock:
             if len(self.buffer) < batch_size:
                 # Return all if not enough
                 return self.buffer.copy()
-            indices = np.random.choice(len(self.buffer), batch_size, replace=False)
+
+            if recent_bias > 0:
+                # Exponential weights favoring recent examples
+                # recent_bias controls the steepness
+                positions = np.arange(len(self.buffer))
+                weights = np.exp(recent_bias * (positions / len(self.buffer) - 1) * 3)
+                weights = weights / weights.sum()
+                indices = np.random.choice(len(self.buffer), batch_size, p=weights, replace=False)
+            else:
+                indices = np.random.choice(len(self.buffer), batch_size, replace=False)
+
             return [self.buffer[i] for i in indices]
 
     def __len__(self):
@@ -348,6 +381,12 @@ class ParallelSelfPlay:
         mcts_batch_size: int = 16,
         inference_batch_size: int = 32,
         device: str = 'cuda',
+        # Cold start fixes
+        heuristic_config: Optional['HeuristicConfig'] = None,
+        heuristic_blend_factor: float = 0.0,
+        policy_target_temperature: float = 1.0,
+        # Adaptive noise
+        noise_multiplier: float = 1.0,
     ):
         self.network = network
         self.mcts_config = mcts_config
@@ -355,6 +394,15 @@ class ParallelSelfPlay:
         self.mcts_batch_size = mcts_batch_size
         self.inference_batch_size = inference_batch_size
         self.device = device
+
+        # Cold start fixes
+        self.heuristic_config = heuristic_config
+        self.heuristic_blend_factor = heuristic_blend_factor
+        self.policy_target_temperature = policy_target_temperature
+
+        # Adaptive noise: multiply dirichlet_epsilon by this factor
+        # when entropy is low to force more exploration
+        self.noise_multiplier = noise_multiplier
 
         # Statistics
         self.games_completed = 0
@@ -441,11 +489,37 @@ class ParallelSelfPlay:
             # Final corner counts per player
             final_corners = [len(game._valid_corners[p]) for p in range(NUM_PLAYERS)]
 
+            # Calculate policy quality metrics from MCTS policies
+            # This helps diagnose if MCTS is generating focused vs uniform targets
+            entropies = []
+            top1_probs = []
+            top5_probs = []
+            for _, _, policy, _, _ in examples_raw:
+                if len(policy) > 0:
+                    # Entropy: -sum(p * log(p)), higher = more uniform
+                    # Add small epsilon to avoid log(0)
+                    p = policy + 1e-10
+                    p = p / p.sum()  # Renormalize
+                    entropy = -np.sum(p * np.log(p))
+                    entropies.append(entropy)
+
+                    # Top-1 probability (how confident is the policy)
+                    top1_probs.append(float(np.max(policy)))
+
+                    # Top-5 probability mass
+                    if len(policy) >= 5:
+                        top5_probs.append(float(np.sum(np.sort(policy)[-5:])))
+                    else:
+                        top5_probs.append(float(np.sum(policy)))
+
             metrics = GameMetrics(
                 avg_corner_count=sum(corner_counts) / len(corner_counts) if corner_counts else 0,
                 avg_mobility=sum(mobility_counts) / len(mobility_counts) if mobility_counts else 0,
                 avg_center_coverage=center_coverage_ratio,
                 final_corner_counts=final_corners,
+                avg_policy_entropy=sum(entropies) / len(entropies) if entropies else 0.0,
+                avg_top1_prob=sum(top1_probs) / len(top1_probs) if top1_probs else 0.0,
+                avg_top5_prob=sum(top5_probs) / len(top5_probs) if top5_probs else 0.0,
             )
 
         examples: List[TrainingExample] = []
@@ -650,6 +724,10 @@ class ParallelSelfPlay:
         Run one MCTS decision for multiple games using Rust-accelerated MCTS.
 
         Uses HybridMCTS which is ~14x faster than Python for tree operations.
+
+        Applies cold start fixes:
+        1. Heuristic blending: combines NN policy prior with handcrafted heuristics
+        2. Temperature adjustment: applies temperature to MCTS visit counts for sharper targets
         """
         mcts_start = time.time()
 
@@ -659,7 +737,17 @@ class ParallelSelfPlay:
             ag.mobility_counts.append(len(legal_moves))
 
             # Create Rust MCTS and run search
-            mcts = HybridMCTS(self.network, self.mcts_config, self.device)
+            # Note: heuristic blending happens inside HybridMCTS when we pass it
+            mcts = HybridMCTS(
+                self.network,
+                self.mcts_config,
+                self.device,
+                # Pass heuristic config for policy prior blending
+                heuristic_config=self.heuristic_config,
+                heuristic_blend_factor=self.heuristic_blend_factor,
+                # Pass adaptive noise multiplier
+                noise_multiplier=self.noise_multiplier,
+            )
             add_noise = ag.game.turn_number <= 30
 
             move, policy, visits = mcts.search(
@@ -667,6 +755,14 @@ class ParallelSelfPlay:
                 add_noise=add_noise,
                 batch_size=self.mcts_batch_size,
             )
+
+            # Apply temperature to policy targets (sharper policies for training)
+            # Temperature < 1.0 makes the distribution more peaked
+            if self.policy_target_temperature != 1.0 and len(policy) > 0:
+                # Apply temperature: p_i^(1/T) / sum(p_j^(1/T))
+                temp_policy = policy ** (1.0 / self.policy_target_temperature)
+                temp_policy = temp_policy / temp_policy.sum()
+                policy = temp_policy
 
             # Store example
             board_tensor, pieces_vector = ag.game.get_state_for_neural_net()

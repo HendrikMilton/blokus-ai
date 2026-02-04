@@ -26,6 +26,14 @@ except ImportError:
     RUST_AVAILABLE = False
     log.warning("rust_mcts not available, falling back to Python MCTS")
 
+# Try to import heuristics for cold start bootstrapping
+try:
+    from .heuristics import compute_heuristic_policy, blend_policies
+    HEURISTICS_AVAILABLE = True
+except ImportError:
+    HEURISTICS_AVAILABLE = False
+    log.info("Heuristics module not available, disabling policy bootstrapping")
+
 
 def encode_move(move: Move) -> int:
     """Encode a Move object as a u32 for Rust."""
@@ -71,6 +79,10 @@ class HybridMCTS:
 
     This provides ~14x speedup on tree operations while maintaining
     compatibility with the existing Python game implementation.
+
+    Cold Start Fixes:
+    - Supports heuristic blending to bootstrap policy learning
+    - Blends handcrafted move priors with neural network output at root
     """
 
     def __init__(
@@ -78,6 +90,11 @@ class HybridMCTS:
         network: BlokusNet,
         config: MCTSConfig,
         device: str = 'cuda',
+        # Cold start fix: heuristic policy bootstrapping
+        heuristic_config: Optional[Any] = None,
+        heuristic_blend_factor: float = 0.0,
+        # Adaptive noise: multiplier for dirichlet_epsilon
+        noise_multiplier: float = 1.0,
     ):
         if not RUST_AVAILABLE:
             raise RuntimeError(
@@ -88,6 +105,14 @@ class HybridMCTS:
         self.network = network
         self.config = config
         self.device = device
+
+        # Cold start fix parameters
+        self.heuristic_config = heuristic_config
+        self.heuristic_blend_factor = heuristic_blend_factor
+
+        # Adaptive noise: multiply dirichlet_epsilon by this factor
+        # when entropy is low to force more exploration
+        self.noise_multiplier = noise_multiplier
 
     def search(
         self,
@@ -130,12 +155,26 @@ class HybridMCTS:
             board_tensor, pieces_vector, moves_tuples, self.device
         )
 
+        # COLD START FIX: Blend neural network policy with handcrafted heuristics
+        # This helps bootstrap learning when the NN outputs uniform distributions
+        if (HEURISTICS_AVAILABLE and
+            self.heuristic_config is not None and
+            self.heuristic_blend_factor > 0.0 and
+            len(policy) > 0):
+
+            heuristic_policy = compute_heuristic_policy(
+                game, legal_moves, self.heuristic_config
+            )
+            policy = blend_policies(policy, heuristic_policy, self.heuristic_blend_factor)
+
         # Add Dirichlet noise if requested
         if add_noise and len(policy) > 0:
             noise = np.random.dirichlet([self.config.dirichlet_alpha] * len(policy))
+            # Apply adaptive noise multiplier (capped at 0.5 to avoid complete randomness)
+            adjusted_epsilon = min(0.5, self.config.dirichlet_epsilon * self.noise_multiplier)
             policy = (
-                (1 - self.config.dirichlet_epsilon) * policy +
-                self.config.dirichlet_epsilon * noise
+                (1 - adjusted_epsilon) * policy +
+                adjusted_epsilon * noise
             )
 
         # Set root policy

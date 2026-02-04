@@ -340,6 +340,9 @@ alphaZeroRouter.post('/runs/:id/metrics', asyncHandler(async (req, res) => {
         moves_per_sec?: number;
         replay_buffer_size?: number;
         step_time_ms?: number;
+        policy_entropy?: number;
+        policy_top1?: number;
+        policy_top5?: number;
     }> };
 
     if (!metrics || !Array.isArray(metrics)) {
@@ -363,6 +366,9 @@ alphaZeroRouter.post('/runs/:id/metrics', asyncHandler(async (req, res) => {
         movesPerSec: m.moves_per_sec,
         replayBufferSize: m.replay_buffer_size,
         stepTimeMs: m.step_time_ms,
+        policyEntropy: m.policy_entropy,
+        policyTop1: m.policy_top1,
+        policyTop5: m.policy_top5,
     }));
 
     await createAlphaZeroMetricsBatch(metricData);

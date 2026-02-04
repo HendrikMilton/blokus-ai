@@ -64,6 +64,16 @@ const mlMoveToGameMove = (response: AlphaZeroMoveResponse, player: PlayerColor):
     orientationIndex: response.orientation_idx,
 });
 
+// Get AI model ID for a specific player color
+const getAiModelForPlayer = (config: GameConfig, color: PlayerColor): string | undefined => {
+    // Check per-player models first
+    if (config.aiModels?.[color]) {
+        return config.aiModels[color];
+    }
+    // Fall back to legacy single model
+    return config.aiModelId;
+};
+
 // Get AI move from ML service
 const getAlphaZeroMove = async (game: BlokusGame, checkpointId: string): Promise<Move | null> => {
     try {
@@ -218,14 +228,70 @@ gameRouter.post('/:id/move-with-ai', async (req, res) => {
         }
 
         let aiMove: Move | null = null;
+        const currentPlayer = game.getCurrentPlayer();
+        const modelId = getAiModelForPlayer(config, currentPlayer);
 
-        // Try AlphaZero if model selected
-        if (config.aiModelId) {
-            aiMove = await getAlphaZeroMove(game, config.aiModelId);
+        if (modelId) {
+            // AlphaZero model selected - must use it, no fallback
+            aiMove = await getAlphaZeroMove(game, modelId);
+            if (!aiMove) {
+                throw new Error('AlphaZero model failed to generate move');
+            }
+        } else {
+            // Random AI
+            aiMove = legalMoves[Math.floor(Math.random() * legalMoves.length)];
         }
 
-        // Fallback to random
-        if (!aiMove) {
+        game.makeMove(aiMove);
+        aiMoves.push(aiMove);
+    }
+
+    res.json({
+        success: true,
+        state: serializeState(game),
+        aiMoves,
+    });
+});
+
+// POST /api/game/:id/ai-move - Let AI make a move (for spectate mode)
+gameRouter.post('/:id/ai-move', async (req, res) => {
+    const stored = activeGames.get(req.params.id);
+
+    if (!stored) {
+        res.status(404).json({ error: 'Game not found' });
+        return;
+    }
+
+    const { game, config } = stored;
+
+    if (game.isGameOver()) {
+        res.json({
+            success: true,
+            state: serializeState(game),
+            aiMoves: [],
+        });
+        return;
+    }
+
+    const aiMoves: Move[] = [];
+    const legalMoves = game.getLegalMoves();
+
+    if (legalMoves.length === 0) {
+        // No legal moves, pass
+        game.pass();
+    } else {
+        let aiMove: Move | null = null;
+        const currentPlayer = game.getCurrentPlayer();
+        const modelId = getAiModelForPlayer(config, currentPlayer);
+
+        if (modelId) {
+            // AlphaZero model selected - must use it, no fallback
+            aiMove = await getAlphaZeroMove(game, modelId);
+            if (!aiMove) {
+                throw new Error('AlphaZero model failed to generate move');
+            }
+        } else {
+            // Random AI
             aiMove = legalMoves[Math.floor(Math.random() * legalMoves.length)];
         }
 
@@ -295,14 +361,17 @@ gameRouter.post('/:id/pass-with-ai', async (req, res) => {
         }
 
         let aiMove: Move | null = null;
+        const currentPlayer = game.getCurrentPlayer();
+        const modelId = getAiModelForPlayer(config, currentPlayer);
 
-        // Try AlphaZero if model selected
-        if (config.aiModelId) {
-            aiMove = await getAlphaZeroMove(game, config.aiModelId);
-        }
-
-        // Fallback to random
-        if (!aiMove) {
+        if (modelId) {
+            // AlphaZero model selected - must use it, no fallback
+            aiMove = await getAlphaZeroMove(game, modelId);
+            if (!aiMove) {
+                throw new Error('AlphaZero model failed to generate move');
+            }
+        } else {
+            // Random AI
             aiMove = legalMoves[Math.floor(Math.random() * legalMoves.length)];
         }
 

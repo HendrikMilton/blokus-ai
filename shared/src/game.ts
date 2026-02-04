@@ -56,7 +56,8 @@ export interface GameConfig {
     mode: GameMode;
     humanColors: PlayerColor[];  // Colors controlled by human(s)
     aiColors: PlayerColor[];     // Colors controlled by AI
-    aiModelId?: string;          // Checkpoint ID for AlphaZero (undefined = random AI)
+    aiModelId?: string;          // Checkpoint ID for AlphaZero (undefined = random AI) - legacy, use aiModels
+    aiModels?: Partial<Record<PlayerColor, string>>;  // Per-player AI model checkpoint IDs
 }
 
 // Result of attempting a move

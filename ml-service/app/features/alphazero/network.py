@@ -201,24 +201,23 @@ class BlokusNet(nn.Module):
     maximum GPU utilization during batched inference.
     """
 
-    # Number of input channels for the board tensor
-    INPUT_CHANNELS = 10
-
     def __init__(
         self,
         num_res_blocks: int = 15,
         channels: int = 256,
         policy_embed_dim: int = 128,
         value_hidden: int = 256,
+        input_channels: int = 10,
     ):
         super().__init__()
 
         self.channels = channels
         self.policy_embed_dim = policy_embed_dim
+        self.input_channels = input_channels
 
         # Stem: initial convolution
         self.stem = nn.Sequential(
-            nn.Conv2d(self.INPUT_CHANNELS, channels, 3, padding=1, bias=False),
+            nn.Conv2d(input_channels, channels, 3, padding=1, bias=False),
             nn.BatchNorm2d(channels),
             nn.ReLU(),
         )
@@ -633,11 +632,13 @@ def create_network(
     num_res_blocks: int = 15,
     channels: int = 256,
     device: str = 'cuda',
+    input_channels: int = 10,
 ) -> BlokusNet:
     """Create a new network with specified architecture."""
     net = BlokusNet(
         num_res_blocks=num_res_blocks,
         channels=channels,
+        input_channels=input_channels,
     )
     return net.to(device)
 

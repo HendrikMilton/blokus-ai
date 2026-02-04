@@ -28,6 +28,12 @@ from .network import BlokusNet, create_network
 from .mcts import MCTSConfig
 from .self_play import SelfPlayManager, ReplayBuffer, TrainingExample, ParallelSelfPlay
 from .mcts_rust import HybridMCTS
+from .heuristics import (
+    HeuristicConfig,
+    compute_heuristic_policy,
+    blend_policies,
+    get_blend_factor_for_generation,
+)
 
 log.info("Using Rust-accelerated MCTS (~14x faster tree operations)")
 
@@ -61,6 +67,22 @@ class TrainingConfig:
     replay_buffer_size: int = 1_000_000
     mixed_precision: bool = True
 
+    # Gradient clipping (prevents explosion)
+    max_grad_norm: float = 1.0       # Max gradient norm for clipping
+
+    # Cold start fixes
+    # 1. Heuristic bootstrapping: blend handcrafted policy with NN
+    use_heuristic_bootstrap: bool = True
+    heuristic_blend_initial: float = 0.5   # Initial blend (0=pure NN, 1=pure heuristic)
+    heuristic_blend_decay_gens: int = 30   # Generations to decay to 0
+
+    # 2. Increased MCTS simulations for early training
+    mcts_simulations_initial: int = 1600   # Higher sims for first N generations
+    mcts_simulations_decay_gens: int = 20  # Decay to base mcts_simulations over this many gens
+
+    # 3. Temperature-adjusted targets for sharper policies
+    policy_target_temperature: float = 0.5  # <1.0 makes MCTS targets more peaked
+
     # Network
     num_res_blocks: int = 15
     channels: int = 256
@@ -69,8 +91,36 @@ class TrainingConfig:
     eval_games: int = 100
     promotion_threshold: float = 0.55
 
+    # === Anti-Collapse Fixes ===
+
+    # 1. Entropy regularization (prevents policy collapse)
+    entropy_regularization: bool = True
+    entropy_weight: float = 0.01          # Base entropy bonus weight
+    entropy_target: float = 1.0           # Target entropy level
+    entropy_adaptive: bool = True         # Increase weight when entropy too low
+
+    # 2. Dynamic promotion threshold
+    dynamic_promotion: bool = True
+    promotion_threshold_min: float = 0.45   # Minimum threshold
+    promotion_decay_per_stuck_gen: float = 0.02  # Lower by 2% per stuck generation
+
+    # 3. Recent-weighted replay sampling
+    replay_recent_bias: float = 0.7  # Bias toward recent examples (0=uniform, 1=strong)
+
+    # 4. Adaptive Dirichlet noise
+    adaptive_noise: bool = True
+    noise_entropy_threshold: float = 0.5  # Increase noise when entropy below this
+    noise_multiplier_max: float = 2.0     # Max multiplier for noise when entropy low
+
     # Limits
     max_generations: int = 100
+
+    # Heuristic pretraining (Phase 0 - before self-play)
+    use_heuristic_pretraining: bool = True
+    pretrain_positions: int = 10000
+    pretrain_steps: int = 1000
+    pretrain_batch_size: int = 256
+    pretrain_lr: float = 0.001
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> 'TrainingConfig':
@@ -97,11 +147,36 @@ class TrainingConfig:
             'adaptiveTrainingSteps': 'adaptive_training_steps',
             'replayBufferSize': 'replay_buffer_size',
             'mixedPrecision': 'mixed_precision',
+            'maxGradNorm': 'max_grad_norm',
+            'useHeuristicBootstrap': 'use_heuristic_bootstrap',
+            'heuristicBlendInitial': 'heuristic_blend_initial',
+            'heuristicBlendDecayGens': 'heuristic_blend_decay_gens',
+            'mctsSimulationsInitial': 'mcts_simulations_initial',
+            'mctsSimulationsDecayGens': 'mcts_simulations_decay_gens',
+            'policyTargetTemperature': 'policy_target_temperature',
             'numResBlocks': 'num_res_blocks',
             'channels': 'channels',
             'evalGames': 'eval_games',
             'promotionThreshold': 'promotion_threshold',
             'maxGenerations': 'max_generations',
+            # Heuristic pretraining
+            'useHeuristicPretraining': 'use_heuristic_pretraining',
+            'pretrainPositions': 'pretrain_positions',
+            'pretrainSteps': 'pretrain_steps',
+            'pretrainBatchSize': 'pretrain_batch_size',
+            'pretrainLr': 'pretrain_lr',
+            # Anti-collapse fixes
+            'entropyRegularization': 'entropy_regularization',
+            'entropyWeight': 'entropy_weight',
+            'entropyTarget': 'entropy_target',
+            'entropyAdaptive': 'entropy_adaptive',
+            'dynamicPromotion': 'dynamic_promotion',
+            'promotionThresholdMin': 'promotion_threshold_min',
+            'promotionDecayPerStuckGen': 'promotion_decay_per_stuck_gen',
+            'replayRecentBias': 'replay_recent_bias',
+            'adaptiveNoise': 'adaptive_noise',
+            'noiseEntropyThreshold': 'noise_entropy_threshold',
+            'noiseMultiplierMax': 'noise_multiplier_max',
         }
 
         kwargs = {}
@@ -187,6 +262,9 @@ class AlphaZeroTrainer:
         self.best_win_rate = 0.0
         self._stop_requested = False
 
+        # Heuristic config for policy bootstrapping
+        self.heuristic_config = HeuristicConfig() if config.use_heuristic_bootstrap else None
+
         # Timing for ETA calculation
         self.training_start_time: Optional[float] = None
         self.generation_start_time: Optional[float] = None
@@ -201,6 +279,10 @@ class AlphaZeroTrainer:
             'evaluation': [],
         }
         self.current_phase_durations: Dict[str, float] = {}  # Durations within current generation
+
+        # Dynamic promotion threshold state
+        self.generations_since_promotion = 0
+        self.current_promotion_threshold = config.promotion_threshold
 
     def _report_progress(
         self,
@@ -407,6 +489,122 @@ class AlphaZeroTrainer:
             self.completed_gen_durations.append(duration)
             log.info(f"Generation {self.current_generation} completed in {duration:.1f}s")
 
+    def _get_mcts_simulations(self) -> int:
+        """
+        Get MCTS simulations for current generation.
+
+        Starts high (mcts_simulations_initial) and decays to base (mcts_simulations)
+        over the first mcts_simulations_decay_gens generations.
+        """
+        if self.current_generation >= self.config.mcts_simulations_decay_gens:
+            return self.config.mcts_simulations
+
+        # Linear decay from initial to base
+        progress = self.current_generation / self.config.mcts_simulations_decay_gens
+        sims = int(
+            self.config.mcts_simulations_initial * (1 - progress) +
+            self.config.mcts_simulations * progress
+        )
+        return sims
+
+    def _get_heuristic_blend_factor(self) -> float:
+        """
+        Get heuristic blend factor for current generation.
+
+        Returns 0.0 if heuristic bootstrapping is disabled.
+        """
+        if not self.config.use_heuristic_bootstrap:
+            return 0.0
+
+        return get_blend_factor_for_generation(
+            generation=self.current_generation,
+            initial_blend=self.config.heuristic_blend_initial,
+            decay_generations=self.config.heuristic_blend_decay_gens,
+            min_blend=0.0,
+        )
+
+    def _update_promotion_threshold(self, was_promoted: bool):
+        """Update promotion threshold based on stuck generations."""
+        if not self.config.dynamic_promotion:
+            return
+
+        if was_promoted:
+            # Reset to base threshold after promotion
+            self.generations_since_promotion = 0
+            self.current_promotion_threshold = self.config.promotion_threshold
+        else:
+            # Lower threshold if stuck
+            self.generations_since_promotion += 1
+            if self.generations_since_promotion >= 2:  # After 2 stuck generations
+                new_threshold = self.current_promotion_threshold - self.config.promotion_decay_per_stuck_gen
+                self.current_promotion_threshold = max(new_threshold, self.config.promotion_threshold_min)
+                log.info(f"Lowered promotion threshold to {self.current_promotion_threshold:.2%} "
+                        f"(stuck for {self.generations_since_promotion} generations)")
+
+    def _get_noise_multiplier(self) -> float:
+        """
+        Calculate noise multiplier based on current policy entropy.
+
+        When entropy is low (policy is too confident/collapsed), increase noise
+        to force more exploration.
+        """
+        if not self.config.adaptive_noise or not self._last_heuristics:
+            return 1.0
+
+        current_entropy = self._last_heuristics.get('policy_entropy', 2.0)
+        if current_entropy < self.config.noise_entropy_threshold:
+            noise_mult = min(
+                self.config.noise_multiplier_max,
+                self.config.noise_entropy_threshold / max(current_entropy, 0.1)
+            )
+            log.info(f"Adaptive noise: entropy={current_entropy:.3f} < threshold={self.config.noise_entropy_threshold}, "
+                    f"noise_multiplier={noise_mult:.2f}")
+            return noise_mult
+        return 1.0
+
+    def _run_heuristic_pretraining(self):
+        """Phase 0: Pretrain policy head on heuristic-scored positions."""
+        from .pretraining import pretrain_policy_head
+
+        log.info("=" * 60)
+        log.info("PHASE 0: Heuristic Pretraining")
+        log.info("=" * 60)
+
+        self._report_progress(
+            phase='pretraining',
+            phase_progress=0.0,
+            message='Generating training positions...',
+        )
+
+        def progress_cb(step: int, total: int, loss: float):
+            self._report_progress(
+                phase='pretraining',
+                phase_progress=step / total,
+                phase_current=step,
+                phase_total=total,
+                message=f'Step {step}/{total} - loss: {loss:.4f}',
+            )
+
+        result = pretrain_policy_head(
+            network=self.network,
+            device=self.device,
+            num_positions=self.config.pretrain_positions,
+            num_steps=self.config.pretrain_steps,
+            batch_size=self.config.pretrain_batch_size,
+            learning_rate=self.config.pretrain_lr,
+            progress_callback=progress_cb,
+        )
+
+        log.info(f"Pretraining complete! Avg loss: {result['avg_loss']:.4f}")
+
+        self._report_progress(
+            phase='pretraining',
+            phase_progress=1.0,
+            message='Pretraining complete',
+        )
+
+        return result
+
     def train(self) -> bool:
         """
         Run the full training loop.
@@ -420,6 +618,14 @@ class AlphaZeroTrainer:
         self.training_start_time = time.time()
 
         try:
+            # Phase 0: Heuristic pretraining (before self-play)
+            if self.config.use_heuristic_pretraining:
+                self._run_heuristic_pretraining()
+
+                if self._stop_requested:
+                    log.info("Stop requested during pretraining, exiting")
+                    return False
+
             for gen in range(self.config.max_generations):
                 if self._stop_requested:
                     log.info("Stop requested, exiting")
@@ -529,8 +735,14 @@ class AlphaZeroTrainer:
         use_batched = self.config.use_batched_mcts
         use_parallel = self.config.use_parallel_games
 
+        # Get dynamic values for cold start fixes
+        current_mcts_sims = self._get_mcts_simulations()
+        current_blend_factor = self._get_heuristic_blend_factor()
+
         log.info(f"Starting self-play: {self.config.games_per_generation} games, "
-              f"{self.config.mcts_simulations} MCTS sims, "
+              f"{current_mcts_sims} MCTS sims (base={self.config.mcts_simulations}), "
+              f"heuristic_blend={current_blend_factor:.3f}, "
+              f"policy_temp={self.config.policy_target_temperature}, "
               f"batched={use_batched}, parallel={use_parallel}, "
               f"mcts_batch={self.config.mcts_batch_size}, "
               f"parallel_games={self.config.num_parallel_games}")
@@ -612,15 +824,33 @@ class AlphaZeroTrainer:
                 }
             )
 
+        # Create generation-specific MCTS config with dynamic simulations
+        gen_mcts_config = MCTSConfig(
+            num_simulations=current_mcts_sims,
+            c_puct=self.config.mcts_c_puct,
+            temperature_threshold=self.config.temperature_threshold,
+            dirichlet_alpha=self.config.dirichlet_alpha,
+            dirichlet_epsilon=self.config.dirichlet_epsilon,
+        )
+
+        # Calculate adaptive noise multiplier based on entropy
+        noise_multiplier = self._get_noise_multiplier()
+
         if use_batched:
             # Use new ParallelSelfPlay with batched MCTS
             manager = ParallelSelfPlay(
                 network=self.network,
-                mcts_config=self.mcts_config,
+                mcts_config=gen_mcts_config,
                 num_parallel_games=self.config.num_parallel_games,
                 mcts_batch_size=self.config.mcts_batch_size,
                 inference_batch_size=self.config.inference_batch_size,
                 device=self.device,
+                # Cold start fixes
+                heuristic_config=self.heuristic_config if current_blend_factor > 0 else None,
+                heuristic_blend_factor=current_blend_factor,
+                policy_target_temperature=self.config.policy_target_temperature,
+                # Adaptive noise
+                noise_multiplier=noise_multiplier,
             )
 
             if use_parallel:
@@ -639,7 +869,7 @@ class AlphaZeroTrainer:
             # Legacy sequential MCTS (for comparison/debugging)
             manager = SelfPlayManager(
                 network=self.network,
-                mcts_config=self.mcts_config,
+                mcts_config=gen_mcts_config,
                 num_workers=self.config.num_parallel_games,
                 device=self.device,
             )
@@ -663,11 +893,19 @@ class AlphaZeroTrainer:
             avg_mobility = sum(m.avg_mobility for m in game_metrics_list) / len(game_metrics_list)
             avg_center = sum(m.avg_center_coverage for m in game_metrics_list) / len(game_metrics_list)
 
+            # Policy quality metrics (for diagnosing cold start problem)
+            avg_entropy = sum(m.avg_policy_entropy for m in game_metrics_list) / len(game_metrics_list)
+            avg_top1 = sum(m.avg_top1_prob for m in game_metrics_list) / len(game_metrics_list)
+            avg_top5 = sum(m.avg_top5_prob for m in game_metrics_list) / len(game_metrics_list)
+
             # Store for training metrics
             self._last_heuristics = {
                 'avg_corners': avg_corners,
                 'avg_mobility': avg_mobility,
                 'center_coverage': avg_center,
+                'policy_entropy': avg_entropy,
+                'policy_top1': avg_top1,
+                'policy_top5': avg_top5,
             }
 
             # Average final corners per player across all games
@@ -676,9 +914,15 @@ class AlphaZeroTrainer:
                 for p in range(4)
             ]
 
+            # Log policy quality - this is key for diagnosing learning issues
+            # High entropy (~4.0+) means MCTS is generating nearly uniform targets (bad)
+            # Low entropy (<2.0) means MCTS is generating focused targets (good)
             log.info(f"[Heuristics] Gen {self.current_generation}: "
                   f"avg_corners={avg_corners:.1f}, avg_mobility={avg_mobility:.1f}, "
                   f"center_coverage={avg_center:.2%}, final_corners={[f'{c:.1f}' for c in avg_final_corners]}")
+            log.info(f"[Policy Quality] Gen {self.current_generation}: "
+                  f"entropy={avg_entropy:.3f}, top1={avg_top1:.3f}, top5={avg_top5:.3f} "
+                  f"(low entropy + high top1/top5 = focused policies = good learning signal)")
 
             # Report metrics via progress API for frontend display
             self._report_progress(
@@ -693,6 +937,11 @@ class AlphaZeroTrainer:
                         'avgMobility': round(avg_mobility, 2),
                         'centerCoverage': round(avg_center, 4),
                         'finalCorners': [round(c, 2) for c in avg_final_corners],
+                    },
+                    'policyQuality': {
+                        'entropy': round(avg_entropy, 4),
+                        'top1Prob': round(avg_top1, 4),
+                        'top5Prob': round(avg_top5, 4),
                     }
                 }
             )
@@ -743,7 +992,7 @@ class AlphaZeroTrainer:
                 break
 
             # Sample batch
-            batch = self.replay_buffer.sample(self.config.batch_size)
+            batch = self.replay_buffer.sample(self.config.batch_size, self.config.replay_recent_bias)
             if len(batch) < self.config.batch_size // 2 and step == 0:
                 log.info(f"Warning: only {len(batch)} examples in buffer (batch_size={self.config.batch_size})")
 
@@ -791,9 +1040,36 @@ class AlphaZeroTrainer:
                     # Cross-entropy: -sum(target * log_probs) per sample, then mean
                     policy_loss = -(target_policies * log_probs).sum(dim=1).mean()
 
-                    loss = policy_loss + value_loss
+                    # Entropy regularization: prevent policy collapse
+                    if self.config.entropy_regularization:
+                        # Compute policy entropy: -sum(p * log(p))
+                        probs = F.softmax(masked_logits, dim=1)
+                        log_probs_for_entropy = torch.log(probs + 1e-10)
+                        entropy = -(probs * log_probs_for_entropy).sum(dim=1).mean()
+
+                        # Adaptive weight: increase if entropy too low
+                        if self.config.entropy_adaptive and self._last_heuristics:
+                            current_entropy = self._last_heuristics.get('policy_entropy', 1.0)
+                            if current_entropy < self.config.entropy_target:
+                                # Scale up weight when entropy is low
+                                adaptive_weight = self.config.entropy_weight * (self.config.entropy_target / max(current_entropy, 0.1))
+                            else:
+                                adaptive_weight = self.config.entropy_weight
+                        else:
+                            adaptive_weight = self.config.entropy_weight
+
+                        # Add entropy bonus (negative because we want to maximize entropy)
+                        loss = policy_loss + value_loss - adaptive_weight * entropy
+                    else:
+                        loss = policy_loss + value_loss
 
                 self.scaler.scale(loss).backward()
+                # Unscale gradients before clipping (required for mixed precision)
+                self.scaler.unscale_(self.optimizer)
+                # Gradient clipping to prevent explosion
+                torch.nn.utils.clip_grad_norm_(
+                    self.network.parameters(), self.config.max_grad_norm
+                )
                 self.scaler.step(self.optimizer)
                 self.scaler.update()
             else:
@@ -810,8 +1086,30 @@ class AlphaZeroTrainer:
                 log_probs = torch.nan_to_num(log_probs, nan=0.0)
                 policy_loss = -(target_policies * log_probs).sum(dim=1).mean()
 
-                loss = policy_loss + value_loss
+                # Entropy regularization: prevent policy collapse
+                if self.config.entropy_regularization:
+                    probs = F.softmax(masked_logits, dim=1)
+                    log_probs_for_entropy = torch.log(probs + 1e-10)
+                    entropy = -(probs * log_probs_for_entropy).sum(dim=1).mean()
+
+                    if self.config.entropy_adaptive and self._last_heuristics:
+                        current_entropy = self._last_heuristics.get('policy_entropy', 1.0)
+                        if current_entropy < self.config.entropy_target:
+                            adaptive_weight = self.config.entropy_weight * (self.config.entropy_target / max(current_entropy, 0.1))
+                        else:
+                            adaptive_weight = self.config.entropy_weight
+                    else:
+                        adaptive_weight = self.config.entropy_weight
+
+                    loss = policy_loss + value_loss - adaptive_weight * entropy
+                else:
+                    loss = policy_loss + value_loss
+
                 loss.backward()
+                # Gradient clipping to prevent explosion
+                torch.nn.utils.clip_grad_norm_(
+                    self.network.parameters(), self.config.max_grad_norm
+                )
                 self.optimizer.step()
 
             if self.scheduler and step > 0:
@@ -819,10 +1117,16 @@ class AlphaZeroTrainer:
 
             p_item = policy_loss.item()
             v_item = value_loss.item()
-            # Skip NaN losses
-            if not (np.isnan(p_item) or np.isnan(v_item)):
+
+            # Check for NaN/Inf losses - indicates catastrophic training failure
+            if np.isnan(p_item) or np.isnan(v_item) or np.isinf(p_item) or np.isinf(v_item):
+                log.warning(f"NaN/Inf loss detected at step {step + 1}: "
+                           f"policy={p_item}, value={v_item}")
+                # Don't accumulate bad losses
+            else:
                 total_policy_loss += p_item
                 total_value_loss += v_item
+
             self.total_steps += 1
 
             # Track step timing
@@ -847,6 +1151,11 @@ class AlphaZeroTrainer:
                 metric['avg_corners'] = self._last_heuristics['avg_corners']
                 metric['avg_mobility'] = self._last_heuristics['avg_mobility']
                 metric['center_coverage'] = self._last_heuristics['center_coverage']
+                # Policy quality metrics
+                if 'policy_entropy' in self._last_heuristics:
+                    metric['policy_entropy'] = self._last_heuristics['policy_entropy']
+                    metric['policy_top1'] = self._last_heuristics['policy_top1']
+                    metric['policy_top5'] = self._last_heuristics['policy_top5']
             metrics_batch.append(metric)
 
             # Report progress and send metrics every 50 steps
@@ -953,7 +1262,7 @@ class AlphaZeroTrainer:
                     'evalWins': new_wins,
                     'evalGames': games_played,
                     'currentWinRate': round(current_win_rate, 3),
-                    'promotionThreshold': self.config.promotion_threshold,
+                    'promotionThreshold': self.current_promotion_threshold,
                     'rustMcts': True,
                 }
             )
@@ -962,10 +1271,17 @@ class AlphaZeroTrainer:
                 log.info(f"Eval {games_played}/{self.config.eval_games}: {new_wins} wins ({current_win_rate:.1%})")
 
         win_rate = new_wins / games_played if games_played > 0 else 0.0
-        is_best = win_rate >= self.config.promotion_threshold
+        # Use dynamic promotion threshold instead of fixed config value
+        is_best = win_rate >= self.current_promotion_threshold
 
+        # Update promotion threshold based on result
+        self._update_promotion_threshold(is_best)
+
+        threshold_info = ""
+        if self.config.dynamic_promotion:
+            threshold_info = f" (threshold: {self.current_promotion_threshold:.1%})"
         log.info(f"Evaluation complete: {new_wins}/{games_played} wins ({win_rate:.2%}) - "
-              f"{'PROMOTED' if is_best else 'not promoted'}")
+              f"{'PROMOTED' if is_best else 'not promoted'}{threshold_info}")
 
         return win_rate, is_best
 

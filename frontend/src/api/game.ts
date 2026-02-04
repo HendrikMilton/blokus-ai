@@ -66,6 +66,11 @@ export const GAME_API = {
         return http.post(`/api/game/${gameId}/pass`, {});
     },
 
+    // Let AI make a move (for spectate mode)
+    aiMove: async (gameId: string): Promise<MoveResponse> => {
+        return http.post(`/api/game/${gameId}/ai-move`, {});
+    },
+
     // Pass and let AI continue
     passWithAI: async (gameId: string, aiColors: PlayerColor[]): Promise<MoveResponse> => {
         return http.post(`/api/game/${gameId}/pass-with-ai`, { aiColors });
@@ -110,6 +115,24 @@ export interface AlphaZeroConfig {
     evalGames?: number;
     promotionThreshold?: number;
     maxGenerations?: number;
+    // Heuristic pretraining
+    useHeuristicPretraining?: boolean;
+    pretrainPositions?: number;
+    pretrainSteps?: number;
+    pretrainBatchSize?: number;
+    pretrainLr?: number;
+    // Anti-collapse fixes
+    entropyRegularization?: boolean;
+    entropyWeight?: number;
+    entropyTarget?: number;
+    entropyAdaptive?: boolean;
+    dynamicPromotion?: boolean;
+    promotionThresholdMin?: number;
+    promotionDecayPerStuckGen?: number;
+    replayRecentBias?: number;
+    adaptiveNoise?: boolean;
+    noiseEntropyThreshold?: number;
+    noiseMultiplierMax?: number;
 }
 
 export interface AlphaZeroRun {

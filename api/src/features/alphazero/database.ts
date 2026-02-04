@@ -396,6 +396,9 @@ export interface AlphaZeroMetric {
     movesPerSec: number | null;
     replayBufferSize: number | null;
     stepTimeMs: number | null;
+    policyEntropy: number | null;
+    policyTop1: number | null;
+    policyTop5: number | null;
     createdAt: string;
 }
 
@@ -416,6 +419,9 @@ interface AlphaZeroMetricRow {
     moves_per_sec: number | null;
     replay_buffer_size: number | null;
     step_time_ms: number | null;
+    policy_entropy: number | null;
+    policy_top1: number | null;
+    policy_top5: number | null;
     created_at: Date;
 }
 
@@ -435,6 +441,9 @@ export interface CreateMetricData {
     movesPerSec?: number | null;
     replayBufferSize?: number | null;
     stepTimeMs?: number | null;
+    policyEntropy?: number | null;
+    policyTop1?: number | null;
+    policyTop5?: number | null;
 }
 
 export const createAlphaZeroMetric = async (
@@ -484,6 +493,9 @@ export const createAlphaZeroMetricsBatch = async (
         moves_per_sec: data.movesPerSec ?? null,
         replay_buffer_size: data.replayBufferSize ?? null,
         step_time_ms: data.stepTimeMs ?? null,
+        policy_entropy: data.policyEntropy ?? null,
+        policy_top1: data.policyTop1 ?? null,
+        policy_top5: data.policyTop5 ?? null,
     }));
 
     await trx('alphazero_metrics').insert(rows);
@@ -506,6 +518,9 @@ const rowToMetric = (row: AlphaZeroMetricRow): AlphaZeroMetric => ({
     movesPerSec: row.moves_per_sec,
     replayBufferSize: row.replay_buffer_size,
     stepTimeMs: row.step_time_ms,
+    policyEntropy: row.policy_entropy,
+    policyTop1: row.policy_top1,
+    policyTop5: row.policy_top5,
     createdAt: row.created_at.toISOString(),
 });
 

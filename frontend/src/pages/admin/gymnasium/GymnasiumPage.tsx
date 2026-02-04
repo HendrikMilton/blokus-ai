@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import toast from 'react-hot-toast';
-import { Play, RotateCcw, FlipHorizontal2, Trophy, Users, Brain, Gamepad2, Plus, Square, X, Download } from 'lucide-react';
+import { Play, Pause, RotateCcw, FlipHorizontal2, Trophy, Users, Brain, Gamepad2, Plus, Square, X, Download } from 'lucide-react';
 import { PLAYER_COLORS } from '@blokus-ai/shared';
 import type {
     GameState,
@@ -53,12 +53,14 @@ type Tab = 'play' | 'train';
 
 // Game mode options with AI selection
 const GAME_MODE_OPTIONS = [
-    { value: 'vs-ai', label: 'vs AI' },
-    { value: '1v1', label: '1v1 (Local)' },
+    { value: '1v3', label: '1 vs 3 AI' },
+    { value: '2v2', label: '2 vs 2 AI' },
+    { value: 'spectate', label: 'Spectate (AI vs AI)' },
+    { value: 'local', label: 'Local Multiplayer' },
 ];
 
 // Game mode selection
-type GameMode = 'vs-ai' | '1v1';
+type GameMode = '1v3' | '2v2' | 'spectate' | 'local';
 
 // Board cell component
 const BoardCell = ({
@@ -261,8 +263,14 @@ export const GymnasiumPage = () => {
     const [selectedRunForDetails, setSelectedRunForDetails] = useState<AlphaZeroRun | null>(null);
     const [trainingProgress, setTrainingProgress] = useState<Record<string, AlphaZeroProgressPayload>>({});
 
-    // AI model selection
+    // AI model selection - per-player for spectate mode
     const [selectedAIModel, setSelectedAIModel] = useState<string>('random');
+    const [perPlayerModels, setPerPlayerModels] = useState<Record<PlayerColor, string>>({
+        blue: 'random',
+        yellow: 'random',
+        red: 'random',
+        green: 'random',
+    });
 
     // Build model options from checkpoints - show best checkpoint per run (highest win rate)
     const aiModelOptions = useMemo(() => {
@@ -301,11 +309,12 @@ export const GymnasiumPage = () => {
     const [legalMoves, setLegalMoves] = useState<Move[]>([]);
 
     // UI state
-    const [gameMode, setGameMode] = useState<GameMode>('vs-ai');
+    const [gameMode, setGameMode] = useState<GameMode>('1v3');
     const [selectedPieceId, setSelectedPieceId] = useState<string | null>(null);
     const [orientationIndex, setOrientationIndex] = useState(0);
     const [hoveredCell, setHoveredCell] = useState<{ row: number; col: number } | null>(null);
     const [isLoading, setIsLoading] = useState(false);
+    const [isPaused, setIsPaused] = useState(false);
 
     // Load AlphaZero runs and checkpoints
     const loadAlphaZeroData = useCallback(async () => {
@@ -499,17 +508,33 @@ export const GymnasiumPage = () => {
 
     // Determine which colors are human/AI based on mode
     const humanColors: PlayerColor[] = useMemo(() => {
-        if (gameMode === 'vs-ai') {
+        switch (gameMode) {
+        case '1v3':
+            return ['blue']; // Human plays only blue
+        case '2v2':
             return ['blue', 'red']; // Human plays blue and red (opposite corners)
+        case 'spectate':
+            return []; // No human players - AI plays all
+        case 'local':
+            return ['blue', 'yellow', 'red', 'green']; // All human (local multiplayer)
+        default:
+            return ['blue'];
         }
-        return ['blue', 'yellow', 'red', 'green']; // All human in 1v1 (local multiplayer)
     }, [gameMode]);
 
     const aiColors: PlayerColor[] = useMemo(() => {
-        if (gameMode === 'vs-ai') {
-            return ['yellow', 'green'];
+        switch (gameMode) {
+        case '1v3':
+            return ['yellow', 'red', 'green']; // AI plays 3 colors
+        case '2v2':
+            return ['yellow', 'green']; // AI plays 2 colors (opposite corners)
+        case 'spectate':
+            return ['blue', 'yellow', 'red', 'green']; // AI plays all 4
+        case 'local':
+            return []; // No AI in local mode
+        default:
+            return ['yellow', 'red', 'green'];
         }
-        return [];
     }, [gameMode]);
 
     const isHumanTurn = gameState && humanColors.includes(gameState.currentPlayer);
@@ -545,11 +570,20 @@ export const GymnasiumPage = () => {
     const startGame = useCallback(async () => {
         setIsLoading(true);
         try {
+            // Build per-player AI models config
+            const aiModels: Partial<Record<PlayerColor, string>> = {};
+            for (const color of aiColors) {
+                const modelId = gameMode === 'spectate' ? perPlayerModels[color] : selectedAIModel;
+                if (modelId && modelId !== 'random') {
+                    aiModels[color] = modelId;
+                }
+            }
+
             const response = await GAME_API.newGame({
                 mode: gameMode,
                 humanColors,
                 aiColors,
-                aiModelId: selectedAIModel !== 'random' ? selectedAIModel : undefined,
+                aiModels: Object.keys(aiModels).length > 0 ? aiModels : undefined,
             });
             setGameId(response.gameId);
             setGameState(response.state);
@@ -561,7 +595,7 @@ export const GymnasiumPage = () => {
         } finally {
             setIsLoading(false);
         }
-    }, [gameMode, humanColors, aiColors, selectedAIModel]);
+    }, [gameMode, humanColors, aiColors, selectedAIModel, perPlayerModels]);
 
     // Get selected piece
     const selectedPiece = useMemo(() => {
@@ -712,6 +746,51 @@ export const GymnasiumPage = () => {
             setIsLoading(false);
         }
     }, [gameId, gameState, aiColors]);
+
+    // Trigger AI to play next move (for spectate mode)
+    const triggerAIMove = useCallback(async () => {
+        if (!gameId || !gameState || gameState.isGameOver || isLoading) {
+            return;
+        }
+
+        setIsLoading(true);
+        try {
+            const response = await GAME_API.aiMove(gameId);
+            if (response.success && response.state) {
+                setGameState(response.state);
+            } else {
+                toast.error(response.error || 'AI move failed');
+                // Reset game on error so user isn't stuck
+                setGameId(null);
+                setGameState(null);
+            }
+        } catch (err) {
+            toast.error('AI move failed - check if model is compatible');
+            // Reset game on error so user isn't stuck
+            setGameId(null);
+            setGameState(null);
+        } finally {
+            setIsLoading(false);
+        }
+    }, [gameId, gameState, isLoading]);
+
+    // Auto-play in spectate mode
+    useEffect(() => {
+        if (
+            gameMode === 'spectate' &&
+            gameId &&
+            gameState &&
+            !gameState.isGameOver &&
+            !isLoading &&
+            !isPaused
+        ) {
+            // Add delay between moves so user can watch
+            const timer = setTimeout(() => {
+                triggerAIMove();
+            }, 500);
+            return () => clearTimeout(timer);
+        }
+    }, [gameMode, gameId, gameState, isLoading, isPaused, triggerAIMove]);
 
     // Auto-pass when no legal moves are available
     useEffect(() => {
@@ -1044,7 +1123,7 @@ export const GymnasiumPage = () => {
                                     className="w-full"
                                 />
                             </div>
-                            {gameMode === 'vs-ai' && (
+                            {gameMode !== 'local' && gameMode !== 'spectate' && (
                                 <div>
                                     <label className="block text-sm font-medium text-secondary mb-1">AI Opponent</label>
                                     <Select
@@ -1053,6 +1132,36 @@ export const GymnasiumPage = () => {
                                         onChange={(v) => setSelectedAIModel(String(v))}
                                         className="w-full"
                                     />
+                                    <p className="text-xs text-muted mt-1">
+                                        {gameMode === '1v3' && 'You play as Blue vs 3 AI opponents'}
+                                        {gameMode === '2v2' && 'You play Blue & Red vs AI Yellow & Green'}
+                                    </p>
+                                </div>
+                            )}
+                            {gameMode === 'spectate' && (
+                                <div className="space-y-3">
+                                    <label className="block text-sm font-medium text-secondary">AI Models (per player)</label>
+                                    {(['blue', 'yellow', 'red', 'green'] as PlayerColor[]).map(color => (
+                                        <div key={color} className="flex items-center gap-2">
+                                            <div
+                                                className="w-4 h-4 rounded flex-shrink-0"
+                                                style={{ backgroundColor: PLAYER_COLORS[color] }}
+                                            />
+                                            <span className="text-sm text-foreground capitalize w-16">{color}</span>
+                                            <Select
+                                                value={perPlayerModels[color]}
+                                                options={aiModelOptions}
+                                                onChange={(v) => setPerPlayerModels(prev => ({
+                                                    ...prev,
+                                                    [color]: String(v)
+                                                }))}
+                                                className="flex-1"
+                                            />
+                                        </div>
+                                    ))}
+                                    <p className="text-xs text-muted">
+                                        Pit different AI models against each other
+                                    </p>
                                 </div>
                             )}
                             <Button onClick={startGame} disabled={isLoading} className="w-full">
@@ -1128,6 +1237,53 @@ export const GymnasiumPage = () => {
                                         Pass (Auto-passing...)
                                     </Button>
                                 )}
+                                {/* Pause/Resume for spectate mode */}
+                                {gameMode === 'spectate' && (
+                                    <Button
+                                        variant="secondary"
+                                        className="w-full"
+                                        onClick={() => setIsPaused(!isPaused)}
+                                    >
+                                        {isPaused ? (
+                                            <>
+                                                <Play className="w-4 h-4 mr-2" />
+                                                Resume
+                                            </>
+                                        ) : (
+                                            <>
+                                                <Pause className="w-4 h-4 mr-2" />
+                                                Pause
+                                            </>
+                                        )}
+                                    </Button>
+                                )}
+                                <Button
+                                    variant="ghost"
+                                    className="w-full"
+                                    onClick={() => {
+                                        setGameId(null);
+                                        setGameState(null);
+                                        setIsPaused(false);
+                                    }}
+                                >
+                                    <X className="w-4 h-4 mr-2" />
+                                    Close Game
+                                </Button>
+                            </div>
+                        )}
+
+                        {/* Actions when game is over */}
+                        {gameState?.isGameOver && (
+                            <div className="space-y-2">
+                                <Button
+                                    variant="primary"
+                                    className="w-full"
+                                    onClick={startGame}
+                                    disabled={isLoading}
+                                >
+                                    <RotateCcw className="w-4 h-4 mr-2" />
+                                    Play Again
+                                </Button>
                                 <Button
                                     variant="ghost"
                                     className="w-full"
@@ -1136,8 +1292,8 @@ export const GymnasiumPage = () => {
                                         setGameState(null);
                                     }}
                                 >
-                                    <RotateCcw className="w-4 h-4 mr-2" />
-                                    New Game
+                                    <X className="w-4 h-4 mr-2" />
+                                    Close Game
                                 </Button>
                             </div>
                         )}
@@ -1549,6 +1705,100 @@ export const GymnasiumPage = () => {
                                     value={trainConfig.channels ?? 256}
                                     onChange={(e) => setTrainConfig(c => ({ ...c, channels: parseInt(e.target.value) || 256 }))}
                                 />
+                            </div>
+                        </div>
+
+                        <div className="border-t border-border pt-4">
+                            <h4 className="text-sm font-medium text-foreground mb-3">Cold Start Fixes</h4>
+                            <label className="flex items-center gap-2 cursor-pointer">
+                                <input
+                                    type="checkbox"
+                                    checked={trainConfig.useHeuristicPretraining ?? true}
+                                    onChange={(e) => setTrainConfig(c => ({
+                                        ...c,
+                                        useHeuristicPretraining: e.target.checked
+                                    }))}
+                                    className="w-4 h-4 rounded border-border bg-surface text-primary focus:ring-primary"
+                                />
+                                <span className="text-sm text-foreground">Heuristic Pretraining (Phase 0)</span>
+                            </label>
+                            <p className="text-xs text-secondary mt-2 ml-6">
+                                Pretrain policy head on heuristic-scored moves before self-play.
+                                Helps MCTS generate focused targets instead of uniform distributions.
+                            </p>
+                        </div>
+
+                        <div className="border-t border-border pt-4">
+                            <h4 className="text-sm font-medium text-foreground mb-3">Anti-Collapse Settings</h4>
+                            <p className="text-xs text-secondary mb-3">
+                                Prevent self-distillation collapse where models get stuck copying themselves.
+                            </p>
+                            <div className="space-y-3">
+                                <label className="flex items-center gap-2 cursor-pointer">
+                                    <input
+                                        type="checkbox"
+                                        checked={trainConfig.entropyRegularization ?? true}
+                                        onChange={(e) => setTrainConfig(c => ({
+                                            ...c,
+                                            entropyRegularization: e.target.checked
+                                        }))}
+                                        className="w-4 h-4 rounded border-border bg-surface text-primary focus:ring-primary"
+                                    />
+                                    <span className="text-sm text-foreground">Entropy Regularization</span>
+                                </label>
+                                <p className="text-xs text-secondary ml-6 -mt-1">
+                                    Add entropy bonus to loss to prevent policy collapse (deterministic policies).
+                                </p>
+
+                                <label className="flex items-center gap-2 cursor-pointer">
+                                    <input
+                                        type="checkbox"
+                                        checked={trainConfig.dynamicPromotion ?? true}
+                                        onChange={(e) => setTrainConfig(c => ({
+                                            ...c,
+                                            dynamicPromotion: e.target.checked
+                                        }))}
+                                        className="w-4 h-4 rounded border-border bg-surface text-primary focus:ring-primary"
+                                    />
+                                    <span className="text-sm text-foreground">Dynamic Promotion Threshold</span>
+                                </label>
+                                <p className="text-xs text-secondary ml-6 -mt-1">
+                                    Lower win rate threshold after stuck generations (55% → 45% min).
+                                </p>
+
+                                <label className="flex items-center gap-2 cursor-pointer">
+                                    <input
+                                        type="checkbox"
+                                        checked={trainConfig.adaptiveNoise ?? true}
+                                        onChange={(e) => setTrainConfig(c => ({
+                                            ...c,
+                                            adaptiveNoise: e.target.checked
+                                        }))}
+                                        className="w-4 h-4 rounded border-border bg-surface text-primary focus:ring-primary"
+                                    />
+                                    <span className="text-sm text-foreground">Adaptive Exploration Noise</span>
+                                </label>
+                                <p className="text-xs text-secondary ml-6 -mt-1">
+                                    Increase Dirichlet noise when policy entropy is low to force exploration.
+                                </p>
+
+                                <div className="mt-2">
+                                    <Input
+                                        label="Recent Replay Bias"
+                                        type="number"
+                                        step="0.1"
+                                        min="0"
+                                        max="1"
+                                        value={trainConfig.replayRecentBias ?? 0.7}
+                                        onChange={(e) => setTrainConfig(c => ({
+                                            ...c,
+                                            replayRecentBias: parseFloat(e.target.value) || 0.7
+                                        }))}
+                                    />
+                                    <p className="text-xs text-secondary mt-1">
+                                        0 = uniform sampling, 0.7 = recent examples ~10x more likely.
+                                    </p>
+                                </div>
                             </div>
                         </div>
 

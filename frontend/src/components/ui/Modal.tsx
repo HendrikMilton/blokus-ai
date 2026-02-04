@@ -58,11 +58,12 @@ export const Modal = ({
                 className={`
                     relative w-full ${sizes[size]} mx-4 bg-surface rounded-lg shadow-gcp-lg
                     animate-in fade-in zoom-in-95 duration-200
+                    max-h-[90vh] flex flex-col
                 `}
             >
                 {/* Header */}
                 {title && (
-                    <div className="flex items-center justify-between px-6 py-4 border-b border-border">
+                    <div className="flex items-center justify-between px-6 py-4 border-b border-border shrink-0">
                         <h2 className="text-lg font-semibold text-foreground">{title}</h2>
                         <button
                             onClick={onClose}
@@ -74,7 +75,7 @@ export const Modal = ({
                 )}
 
                 {/* Content */}
-                <div className="px-6 py-4">{children}</div>
+                <div className="px-6 py-4 overflow-y-auto">{children}</div>
             </div>
         </div>
     );

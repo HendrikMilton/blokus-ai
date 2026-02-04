@@ -114,8 +114,11 @@ async def get_move(request: AlphaZeroMoveRequest):
     num_res_blocks = config.get('num_res_blocks', 15)
     channels = config.get('channels', 256)
 
+    # Detect input channels from checkpoint
+    input_channels = checkpoint['model_state_dict']['stem.0.weight'].shape[1]
+
     # Create and load network
-    network = create_network(num_res_blocks=num_res_blocks, channels=channels, device=device)
+    network = create_network(num_res_blocks=num_res_blocks, channels=channels, input_channels=input_channels, device=device)
     network.load_state_dict(checkpoint['model_state_dict'])
     network.eval()
 
