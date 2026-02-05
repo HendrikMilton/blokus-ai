@@ -107,12 +107,57 @@ interface HeuristicMoveResponse {
     col: number;
 }
 
-const getHeuristicMove = async (game: BlokusGame): Promise<Move | null> => {
+interface SmartMoveResponse extends HeuristicMoveResponse {
+    time_ms: number;
+    candidates_evaluated: number;
+}
+
+// Difficulty levels for heuristic AI
+// Format: "heuristic" (default easy) or "heuristic:easy|medium|hard|expert"
+type HeuristicDifficulty = 'easy' | 'medium' | 'hard' | 'expert';
+
+const parseHeuristicModel = (modelId: string): { isHeuristic: boolean; difficulty: HeuristicDifficulty } => {
+    if (!modelId.startsWith('heuristic')) {
+        return { isHeuristic: false, difficulty: 'easy' };
+    }
+    if (modelId === 'heuristic') {
+        return { isHeuristic: true, difficulty: 'easy' };
+    }
+    // Parse "heuristic:difficulty" format
+    const parts = modelId.split(':');
+    const difficulty = parts[1] as HeuristicDifficulty;
+    if (['easy', 'medium', 'hard', 'expert'].includes(difficulty)) {
+        return { isHeuristic: true, difficulty };
+    }
+    return { isHeuristic: true, difficulty: 'easy' };
+};
+
+const getHeuristicMove = async (game: BlokusGame, difficulty: HeuristicDifficulty = 'easy'): Promise<Move | null> => {
     try {
+        // Use SmartPlayer endpoint for medium+ difficulty
+        if (difficulty !== 'easy') {
+            const response = await mlHttp.post<SmartMoveResponse>(
+                '/alphazero/smart-move',
+                {
+                    game_state: gameStateForML(game),
+                    difficulty,
+                }
+            );
+
+            return {
+                player: game.getCurrentPlayer(),
+                pieceId: PIECE_IDS[response.piece_idx],
+                position: { row: response.row, col: response.col },
+                orientationIndex: response.orientation_idx,
+            };
+        }
+
+        // Use basic heuristic endpoint for easy
         const response = await mlHttp.post<HeuristicMoveResponse>(
             '/alphazero/heuristic-move',
             {
                 game_state: gameStateForML(game),
+                difficulty: 'easy',
             }
         );
 
@@ -259,10 +304,11 @@ gameRouter.post('/:id/move-with-ai', async (req, res) => {
         let aiMove: Move | null = null;
         const currentPlayer = game.getCurrentPlayer();
         const modelId = getAiModelForPlayer(config, currentPlayer);
+        const { isHeuristic, difficulty } = parseHeuristicModel(modelId || '');
 
-        if (modelId === 'heuristic') {
-            // Pure heuristic AI
-            aiMove = await getHeuristicMove(game);
+        if (isHeuristic) {
+            // Heuristic AI (with difficulty level)
+            aiMove = await getHeuristicMove(game, difficulty);
             if (!aiMove) {
                 throw new Error('Heuristic AI failed to generate move');
             }
@@ -318,10 +364,11 @@ gameRouter.post('/:id/ai-move', async (req, res) => {
         let aiMove: Move | null = null;
         const currentPlayer = game.getCurrentPlayer();
         const modelId = getAiModelForPlayer(config, currentPlayer);
+        const { isHeuristic, difficulty } = parseHeuristicModel(modelId || '');
 
-        if (modelId === 'heuristic') {
-            // Pure heuristic AI
-            aiMove = await getHeuristicMove(game);
+        if (isHeuristic) {
+            // Heuristic AI (with difficulty level)
+            aiMove = await getHeuristicMove(game, difficulty);
             if (!aiMove) {
                 throw new Error('Heuristic AI failed to generate move');
             }
@@ -404,10 +451,11 @@ gameRouter.post('/:id/pass-with-ai', async (req, res) => {
         let aiMove: Move | null = null;
         const currentPlayer = game.getCurrentPlayer();
         const modelId = getAiModelForPlayer(config, currentPlayer);
+        const { isHeuristic, difficulty } = parseHeuristicModel(modelId || '');
 
-        if (modelId === 'heuristic') {
-            // Pure heuristic AI
-            aiMove = await getHeuristicMove(game);
+        if (isHeuristic) {
+            // Heuristic AI (with difficulty level)
+            aiMove = await getHeuristicMove(game, difficulty);
             if (!aiMove) {
                 throw new Error('Heuristic AI failed to generate move');
             }

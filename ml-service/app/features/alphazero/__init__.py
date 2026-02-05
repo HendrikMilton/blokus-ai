@@ -329,6 +329,7 @@ async def export_to_onnx(run_id: str, request: OnnxExportRequest = None):
 
 class HeuristicMoveRequest(BaseModel):
     game_state: Dict[str, Any]
+    difficulty: Optional[str] = "easy"  # "easy", "medium", "hard", "expert"
 
 
 class HeuristicMoveResponse(BaseModel):
@@ -338,10 +339,24 @@ class HeuristicMoveResponse(BaseModel):
     col: int
 
 
+class SmartMoveRequest(BaseModel):
+    game_state: Dict[str, Any]
+    difficulty: str = "hard"  # "easy", "medium", "hard", "expert"
+
+
+class SmartMoveResponse(BaseModel):
+    piece_idx: int
+    orientation_idx: int
+    row: int
+    col: int
+    time_ms: float
+    candidates_evaluated: int
+
+
 @router.post("/heuristic-move", response_model=HeuristicMoveResponse)
 async def get_heuristic_move(request: HeuristicMoveRequest):
     """Get AI move using pure heuristic player (no neural network)."""
-    from .heuristic_player import HeuristicPlayer
+    from .heuristic_player import HeuristicPlayer, create_player
 
     # Reconstruct game state
     game = _dict_to_game(request.game_state)
@@ -351,8 +366,9 @@ async def get_heuristic_move(request: HeuristicMoveRequest):
     if not legal_moves:
         raise HTTPException(status_code=400, detail="No legal moves available")
 
-    # Use heuristic player to select move
-    player = HeuristicPlayer()
+    # Use heuristic player to select move (with difficulty support)
+    difficulty = request.difficulty or "easy"
+    player = create_player(difficulty)
     move = player.select_move(game)
 
     if not move:
@@ -363,6 +379,63 @@ async def get_heuristic_move(request: HeuristicMoveRequest):
         orientation_idx=move.orientation_idx,
         row=move.row,
         col=move.col,
+    )
+
+
+@router.post("/smart-move", response_model=SmartMoveResponse)
+async def get_smart_move(request: SmartMoveRequest):
+    """
+    Get AI move using SmartPlayer with lookahead (no neural network).
+
+    SmartPlayer is a strong heuristic-based AI that uses:
+    - Two-level search (candidate selection + deep evaluation)
+    - Mobility lookahead
+    - Corner differential calculation
+    - Opponent response simulation
+    - Phase-adaptive weights
+
+    Difficulty levels:
+    - easy: Greedy with basic heuristics (~50ms)
+    - medium: Single lookahead (~200ms)
+    - hard: Full features (~300-500ms)
+    - expert: Deeper search (~2-5s)
+    """
+    from .smart_player import SmartPlayer, SmartPlayerConfig
+
+    # Reconstruct game state
+    game = _dict_to_game(request.game_state)
+
+    # Get legal moves
+    legal_moves = game.get_legal_moves()
+    if not legal_moves:
+        raise HTTPException(status_code=400, detail="No legal moves available")
+
+    # Create SmartPlayer with requested difficulty
+    difficulty = request.difficulty.lower()
+    if difficulty == "easy":
+        config = SmartPlayerConfig.easy()
+    elif difficulty == "medium":
+        config = SmartPlayerConfig.medium()
+    elif difficulty == "hard":
+        config = SmartPlayerConfig.hard()
+    elif difficulty == "expert":
+        config = SmartPlayerConfig.expert()
+    else:
+        config = SmartPlayerConfig.hard()
+
+    player = SmartPlayer(config)
+    move = player.select_move(game)
+
+    if not move:
+        raise HTTPException(status_code=400, detail="SmartPlayer could not select a move")
+
+    return SmartMoveResponse(
+        piece_idx=move.piece_idx,
+        orientation_idx=move.orientation_idx,
+        row=move.row,
+        col=move.col,
+        time_ms=player.last_move_time_ms,
+        candidates_evaluated=player.last_candidates_evaluated,
     )
 
 

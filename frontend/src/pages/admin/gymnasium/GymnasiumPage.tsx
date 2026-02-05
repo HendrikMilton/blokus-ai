@@ -402,7 +402,10 @@ export const GymnasiumPage = () => {
     const aiModelOptions = useMemo(() => {
         const options: { value: string; label: string }[] = [
             { value: 'random', label: 'Random AI' },
-            { value: 'heuristic', label: 'Heuristic AI' },
+            { value: 'heuristic', label: 'Heuristic AI (Easy)' },
+            { value: 'heuristic:medium', label: 'Heuristic AI (Medium)' },
+            { value: 'heuristic:hard', label: 'Heuristic AI (Hard)' },
+            { value: 'heuristic:expert', label: 'Heuristic AI (Expert)' },
         ];
 
         // Group checkpoints by run and pick the one with highest win rate
