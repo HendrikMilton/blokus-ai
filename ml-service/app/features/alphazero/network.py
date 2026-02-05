@@ -13,7 +13,7 @@ Uses fully vectorized move encoding for maximum GPU utilization.
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import Tuple, List, Optional
+from typing import Tuple, List, Optional, Dict
 import numpy as np
 
 from .pieces import NUM_PIECES, PIECE_CATALOG
@@ -208,12 +208,18 @@ class BlokusNet(nn.Module):
         policy_embed_dim: int = 128,
         value_hidden: int = 256,
         input_channels: int = 10,
+        use_auxiliary_heads: bool = True,  # KataGo auxiliary targets
+        num_players: int = 4,  # For ownership head
+        score_range: int = 161,  # Score distribution: [-80, +80]
     ):
         super().__init__()
 
         self.channels = channels
         self.policy_embed_dim = policy_embed_dim
         self.input_channels = input_channels
+        self.use_auxiliary_heads = use_auxiliary_heads
+        self.num_players = num_players
+        self.score_range = score_range
 
         # Stem: initial convolution
         self.stem = nn.Sequential(
@@ -252,6 +258,37 @@ class BlokusNet(nn.Module):
             nn.Linear(value_hidden, 1),
             nn.Tanh(),
         )
+
+        # === AUXILIARY HEADS (from KataGo for 50x efficiency) ===
+        # These provide denser gradients and faster credit assignment
+
+        if use_auxiliary_heads:
+            # 1. Ownership head: per-cell probability of who controls each position
+            # Output: (batch, num_players, 20, 20) - ownership probability per player
+            # Provides localized feedback on territorial control prediction
+            self.ownership_head = nn.Sequential(
+                nn.Conv2d(channels, channels // 2, 1),
+                nn.BatchNorm2d(channels // 2),
+                nn.ReLU(),
+                nn.Conv2d(channels // 2, num_players, 1),
+                # No activation - will apply softmax over players dimension
+            )
+
+            # 2. Score head: distribution over final score differences
+            # Output: (batch, score_range) - probability distribution over scores
+            # Score range: [-80, +80] in Blokus (161 buckets)
+            # Helps value head learn more nuanced evaluations
+            self.score_head = nn.Sequential(
+                nn.Linear(value_hidden * 2, value_hidden),
+                nn.ReLU(),
+                nn.Linear(value_hidden, score_range),
+                # No activation - will apply softmax
+            )
+
+            # 3. Opponent policy head: predict opponent's likely next move
+            # Uses same move encoder but predicts opponent's policy
+            # Weight: 0.15 in loss (provides ~15% of gradient signal)
+            self.opponent_policy_query = nn.Linear(value_hidden * 2, policy_embed_dim)
 
     def _extract_move_tensors(
         self,
@@ -432,6 +469,151 @@ class BlokusNet(nn.Module):
         valid_mask = position_indices < move_counts_t.unsqueeze(1)  # (batch, max_moves)
 
         # Copy scores where valid, keep -inf elsewhere
+        policy_logits[valid_mask] = scores[valid_mask]
+
+        return policy_logits
+
+    def forward_with_auxiliary(
+        self,
+        board_tensor: torch.Tensor,
+        pieces_vector: torch.Tensor,
+        legal_moves_list: Optional[List[List[Tuple[int, int, int, int]]]] = None,
+    ) -> Dict[str, torch.Tensor]:
+        """
+        Forward pass with all auxiliary outputs (for training with KataGo-style losses).
+
+        Args:
+            board_tensor: (batch, 10, 20, 20)
+            pieces_vector: (batch, 84)
+            legal_moves_list: List of legal moves per batch item
+
+        Returns:
+            Dictionary with:
+            - policy_logits: (batch, max_num_moves)
+            - value: (batch, 1)
+            - ownership: (batch, num_players, 20, 20) - per-cell ownership probs
+            - score_logits: (batch, score_range) - score distribution
+            - opponent_policy_logits: (batch, max_num_moves) - predicted opponent policy
+        """
+        batch_size = board_tensor.size(0)
+        device = board_tensor.device
+
+        # Board feature extraction - keep spatial features for ownership
+        x = self.stem(board_tensor)
+        spatial_features = self.res_tower(x)  # (batch, channels, 20, 20)
+
+        # Global features for value/policy
+        x_pooled = self.global_pool(spatial_features).view(batch_size, -1)
+
+        # Combine with pieces vector
+        combined = torch.cat([x_pooled, pieces_vector], dim=1)
+        features = self.fc_combine(combined)
+
+        # Primary outputs
+        value = self.value_head(features)
+
+        if legal_moves_list is None:
+            policy_logits = torch.zeros(batch_size, 1, device=device)
+        else:
+            policy_logits = self._compute_policy_vectorized(features, legal_moves_list, device)
+
+        result = {
+            'policy_logits': policy_logits,
+            'value': value,
+        }
+
+        # Auxiliary outputs (KataGo-style)
+        if self.use_auxiliary_heads:
+            # 1. Ownership: per-cell ownership probability
+            # Output: (batch, num_players, 20, 20)
+            ownership_logits = self.ownership_head(spatial_features)
+            # Softmax over players dimension (who owns each cell)
+            ownership = F.softmax(ownership_logits, dim=1)
+            result['ownership'] = ownership
+            result['ownership_logits'] = ownership_logits
+
+            # 2. Score distribution
+            # Output: (batch, score_range) - distribution over score buckets
+            score_logits = self.score_head(features)
+            result['score_logits'] = score_logits
+
+            # 3. Opponent policy (predict opponent's likely response)
+            # Uses same move encoder but different query projection
+            if legal_moves_list is not None and len(legal_moves_list) > 0:
+                opp_query = self.opponent_policy_query(features)
+                # Reuse move embeddings from policy head
+                opp_policy_logits = self._compute_policy_with_query(
+                    opp_query, legal_moves_list, device
+                )
+                result['opponent_policy_logits'] = opp_policy_logits
+            else:
+                result['opponent_policy_logits'] = torch.zeros(batch_size, 1, device=device)
+
+        return result
+
+    def _compute_policy_with_query(
+        self,
+        query: torch.Tensor,
+        legal_moves_list: List[List],
+        device: torch.device,
+    ) -> torch.Tensor:
+        """Compute policy logits using provided query vector (for opponent policy)."""
+        batch_size = query.size(0)
+
+        # Extract all moves into flat tensors
+        piece_idx, orient_idx, rows, cols, move_counts = self._extract_move_tensors(
+            legal_moves_list, device
+        )
+
+        total_moves = piece_idx.shape[0]
+        max_moves = max(move_counts) if move_counts else 1
+        max_moves = max(max_moves, 1)
+
+        if total_moves == 0:
+            return torch.full((batch_size, max_moves), float('-inf'), device=device)
+
+        # Encode and embed moves
+        move_encodings = self.move_encoder.encode_moves_vectorized(
+            piece_idx, orient_idx, rows, cols
+        )
+        move_embeddings = self.move_encoder(move_encodings)
+
+        # Initialize output
+        policy_logits = torch.full(
+            (batch_size, max_moves), float('-inf'),
+            device=device, dtype=move_embeddings.dtype
+        )
+
+        # Pad embeddings
+        embed_dim = move_embeddings.size(1)
+        padded_embeddings = torch.zeros(
+            batch_size, max_moves, embed_dim,
+            device=device, dtype=move_embeddings.dtype
+        )
+
+        # Build indices
+        batch_indices = []
+        pos_indices = []
+        offset = 0
+        for i, count in enumerate(move_counts):
+            if count > 0:
+                batch_indices.extend([i] * count)
+                pos_indices.extend(range(count))
+            offset += count
+
+        if batch_indices:
+            batch_idx = torch.tensor(batch_indices, dtype=torch.long, device=device)
+            pos_idx = torch.tensor(pos_indices, dtype=torch.long, device=device)
+            padded_embeddings[batch_idx, pos_idx] = move_embeddings
+
+        # Compute attention scores
+        scores = torch.bmm(query.unsqueeze(1), padded_embeddings.transpose(1, 2)).squeeze(1)
+
+        # Apply mask
+        move_counts_t = torch.tensor(move_counts, device=device)
+        position_indices = torch.arange(max_moves, device=device).unsqueeze(0)
+        valid_mask = position_indices < move_counts_t.unsqueeze(1)
+
         policy_logits[valid_mask] = scores[valid_mask]
 
         return policy_logits

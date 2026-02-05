@@ -19,6 +19,15 @@ from .mcts import MCTS, MCTSConfig, BatchedMCTS, MCTSNode
 from .network import BlokusNet
 from .mcts_rust import HybridMCTS, encode_move
 
+# Import Gumbel MCTS (guaranteed policy improvement)
+try:
+    from .gumbel_mcts import GumbelMCTS, GumbelMCTSConfig
+    GUMBEL_MCTS_AVAILABLE = True
+except ImportError:
+    GUMBEL_MCTS_AVAILABLE = False
+    GumbelMCTS = None
+    GumbelMCTSConfig = None
+
 # Import heuristics for cold start bootstrapping (optional, may not exist)
 try:
     from .heuristics import HeuristicConfig, compute_heuristic_policy, blend_policies
@@ -291,18 +300,66 @@ class SelfPlayManager:
 class ReplayBuffer:
     """
     Replay buffer for storing training examples.
-    Maintains a fixed-size buffer with oldest examples removed first.
+
+    Features:
+    - Fixed-size buffer with oldest examples removed first
+    - Recent-biased sampling (exponential weighting)
+    - Sublinear window (KataGo) to prevent early overfitting
     """
 
-    def __init__(self, max_size: int = 1_000_000):
+    def __init__(
+        self,
+        max_size: int = 1_000_000,
+        # Sublinear window parameters (from KataGo)
+        use_sublinear_window: bool = False,
+        sublinear_c: float = 250000.0,
+        sublinear_alpha: float = 0.75,
+        sublinear_beta: float = 0.4,
+    ):
         self.max_size = max_size
         self.buffer: List[TrainingExample] = []
         self._lock = threading.Lock()
+
+        # Sublinear window (KataGo)
+        # Window grows sublinearly to prevent early overfitting
+        # Formula: N_window = c * (1 + β * (N_total/c)^α - 1) / α
+        self.use_sublinear_window = use_sublinear_window
+        self.sublinear_c = sublinear_c
+        self.sublinear_alpha = sublinear_alpha
+        self.sublinear_beta = sublinear_beta
+        self.total_samples_added = 0  # Track total samples ever added
+
+    def _compute_sublinear_window(self) -> int:
+        """
+        Compute the sublinear window size based on total samples added.
+
+        From KataGo paper: the window grows sublinearly to prevent
+        training too much on early (low quality) data.
+
+        Formula: N_window = c * (1 + β * (N_total/c)^α - 1) / α
+        where:
+        - c: initial window constant
+        - α: sublinear exponent (< 1 for sublinear growth)
+        - β: growth rate factor
+        """
+        if not self.use_sublinear_window or self.total_samples_added <= self.sublinear_c:
+            return len(self.buffer)
+
+        c = self.sublinear_c
+        alpha = self.sublinear_alpha
+        beta = self.sublinear_beta
+        n = self.total_samples_added
+
+        # Sublinear window formula
+        window = c * (1 + beta * ((n / c) ** alpha - 1) / alpha)
+        return min(int(window), len(self.buffer))
 
     def add(self, examples: List[TrainingExample]):
         """Add examples to the buffer."""
         with self._lock:
             self.buffer.extend(examples)
+            self.total_samples_added += len(examples)
+
             # Remove oldest examples if over capacity
             if len(self.buffer) > self.max_size:
                 self.buffer = self.buffer[-self.max_size:]
@@ -310,6 +367,9 @@ class ReplayBuffer:
     def sample(self, batch_size: int, recent_bias: float = 0.0) -> List[TrainingExample]:
         """
         Sample a batch of examples with optional recent bias.
+
+        With sublinear window enabled, only samples from the most recent
+        N_window examples to prevent overfitting on early data.
 
         Args:
             batch_size: Number of examples to sample
@@ -321,29 +381,56 @@ class ReplayBuffer:
             List of sampled training examples
         """
         with self._lock:
-            if len(self.buffer) < batch_size:
+            # Apply sublinear window
+            if self.use_sublinear_window:
+                window_size = self._compute_sublinear_window()
+                sample_buffer = self.buffer[-window_size:]
+            else:
+                sample_buffer = self.buffer
+
+            if len(sample_buffer) < batch_size:
                 # Return all if not enough
-                return self.buffer.copy()
+                return sample_buffer.copy()
 
             if recent_bias > 0:
                 # Exponential weights favoring recent examples
                 # recent_bias controls the steepness
-                positions = np.arange(len(self.buffer))
-                weights = np.exp(recent_bias * (positions / len(self.buffer) - 1) * 3)
+                positions = np.arange(len(sample_buffer))
+                weights = np.exp(recent_bias * (positions / len(sample_buffer) - 1) * 3)
                 weights = weights / weights.sum()
-                indices = np.random.choice(len(self.buffer), batch_size, p=weights, replace=False)
+                indices = np.random.choice(len(sample_buffer), batch_size, p=weights, replace=False)
             else:
-                indices = np.random.choice(len(self.buffer), batch_size, replace=False)
+                indices = np.random.choice(len(sample_buffer), batch_size, replace=False)
 
-            return [self.buffer[i] for i in indices]
+            return [sample_buffer[i] for i in indices]
 
     def __len__(self):
+        return len(self.buffer)
+
+    def effective_size(self) -> int:
+        """Get effective size (considering sublinear window)."""
+        if self.use_sublinear_window:
+            return self._compute_sublinear_window()
         return len(self.buffer)
 
     def clear(self):
         """Clear the buffer."""
         with self._lock:
             self.buffer = []
+            self.total_samples_added = 0
+
+    def configure_sublinear_window(
+        self,
+        c: float = 250000.0,
+        alpha: float = 0.75,
+        beta: float = 0.4,
+    ):
+        """Configure and enable sublinear window."""
+        self.use_sublinear_window = True
+        self.sublinear_c = c
+        self.sublinear_alpha = alpha
+        self.sublinear_beta = beta
+        log.info(f"Enabled sublinear replay window: c={c}, alpha={alpha}, beta={beta}")
 
 
 @dataclass
@@ -371,6 +458,10 @@ class ParallelSelfPlay:
     2. Each game's MCTS collects leaf nodes for evaluation
     3. Leaves from all games are batched together for GPU inference
     4. Results are distributed back to respective games
+
+    Features (from KataGo research for 50x efficiency):
+    - Playout cap randomization: 25% full search (recorded), 75% fast search (not recorded)
+    - This provides 4x more games for value training while keeping policy target quality
     """
 
     def __init__(
@@ -387,6 +478,12 @@ class ParallelSelfPlay:
         policy_target_temperature: float = 1.0,
         # Adaptive noise
         noise_multiplier: float = 1.0,
+        # Playout cap randomization (KataGo)
+        use_playout_cap_randomization: bool = False,
+        playout_cap_fraction: float = 0.25,
+        playout_full_simulations: int = 600,
+        playout_fast_simulations: int = 100,
+        playout_fast_no_noise: bool = True,
     ):
         self.network = network
         self.mcts_config = mcts_config
@@ -403,6 +500,29 @@ class ParallelSelfPlay:
         # Adaptive noise: multiply dirichlet_epsilon by this factor
         # when entropy is low to force more exploration
         self.noise_multiplier = noise_multiplier
+
+        # Playout cap randomization (KataGo - 50x efficiency improvement)
+        # 25% of moves use full search and are recorded for training
+        # 75% of moves use fast search, just to play game (not recorded)
+        # This gives value head 4x more games while keeping policy targets high quality
+        self.use_playout_cap_randomization = use_playout_cap_randomization
+        self.playout_cap_fraction = playout_cap_fraction
+        self.playout_full_simulations = playout_full_simulations
+        self.playout_fast_simulations = playout_fast_simulations
+        self.playout_fast_no_noise = playout_fast_no_noise
+
+        # Gumbel MCTS settings (will be set by trainer if enabled)
+        self.use_gumbel_mcts = False
+        self.gumbel_config: Optional[GumbelMCTSConfig] = None
+
+        # Policy target pruning (KataGo)
+        # Removes exploration artifacts from policy targets
+        self.use_policy_target_pruning = False
+        self.policy_prune_threshold = 0.01
+
+        # Warm-start rollout blending (Warm-Start AlphaZero)
+        # Blends NN value with heuristic rollout in early training
+        self.warm_start_blend_factor = 0.0  # 0 = pure NN, 1 = pure rollout
 
         # Statistics
         self.games_completed = 0
@@ -728,58 +848,237 @@ class ParallelSelfPlay:
         Applies cold start fixes:
         1. Heuristic blending: combines NN policy prior with handcrafted heuristics
         2. Temperature adjustment: applies temperature to MCTS visit counts for sharper targets
+
+        Playout Cap Randomization (KataGo):
+        - 25% of moves use full search (600 sims) and are recorded for training
+        - 75% of moves use fast search (100 sims) and are NOT recorded
+        - Fast moves have no Dirichlet noise (pure exploitation)
+        - This gives value head 4x more games while keeping policy targets high quality
         """
         mcts_start = time.time()
+        full_search_count = 0
+        fast_search_count = 0
 
         for game_idx, ag, legal_moves in games_needing_moves:
             # Collect metrics before move
             ag.corner_counts.append(len(ag.game._valid_corners[ag.game.current_player]))
             ag.mobility_counts.append(len(legal_moves))
 
-            # Create Rust MCTS and run search
-            # Note: heuristic blending happens inside HybridMCTS when we pass it
-            mcts = HybridMCTS(
-                self.network,
-                self.mcts_config,
-                self.device,
-                # Pass heuristic config for policy prior blending
-                heuristic_config=self.heuristic_config,
-                heuristic_blend_factor=self.heuristic_blend_factor,
-                # Pass adaptive noise multiplier
-                noise_multiplier=self.noise_multiplier,
-            )
-            add_noise = ag.game.turn_number <= 30
+            # Playout cap randomization: decide if this move uses full or fast search
+            use_full_search = True  # Default: full search
+            if self.use_playout_cap_randomization:
+                use_full_search = np.random.random() < self.playout_cap_fraction
 
-            move, policy, visits = mcts.search(
-                ag.game,
-                add_noise=add_noise,
-                batch_size=self.mcts_batch_size,
-            )
+            # Configure MCTS based on search type
+            if self.use_playout_cap_randomization:
+                if use_full_search:
+                    # Full search: high sims, recorded for training
+                    num_sims = self.playout_full_simulations
+                    add_noise = ag.game.turn_number <= 30
+                    full_search_count += 1
+                else:
+                    # Fast search: low sims, not recorded, no noise
+                    num_sims = self.playout_fast_simulations
+                    add_noise = not self.playout_fast_no_noise and ag.game.turn_number <= 30
+                    fast_search_count += 1
 
-            # Apply temperature to policy targets (sharper policies for training)
-            # Temperature < 1.0 makes the distribution more peaked
-            if self.policy_target_temperature != 1.0 and len(policy) > 0:
-                # Apply temperature: p_i^(1/T) / sum(p_j^(1/T))
-                temp_policy = policy ** (1.0 / self.policy_target_temperature)
-                temp_policy = temp_policy / temp_policy.sum()
-                policy = temp_policy
+                # Create modified MCTS config with adjusted simulations
+                search_config = MCTSConfig(
+                    num_simulations=num_sims,
+                    c_puct=self.mcts_config.c_puct,
+                    temperature_threshold=self.mcts_config.temperature_threshold,
+                    dirichlet_alpha=self.mcts_config.dirichlet_alpha,
+                    dirichlet_epsilon=self.mcts_config.dirichlet_epsilon,
+                )
+            else:
+                # No playout cap randomization - use standard config
+                search_config = self.mcts_config
+                add_noise = ag.game.turn_number <= 30
 
-            # Store example
-            board_tensor, pieces_vector = ag.game.get_state_for_neural_net()
-            ag.examples_raw.append((
-                board_tensor.copy(),
-                pieces_vector.copy(),
-                policy.copy(),
-                legal_moves.copy(),
-                ag.game.current_player,
-            ))
+            # Choose MCTS implementation: Gumbel (guaranteed improvement) or PUCT (traditional)
+            if self.use_gumbel_mcts and GUMBEL_MCTS_AVAILABLE and self.gumbel_config:
+                # Gumbel MCTS: guaranteed policy improvement, works with fewer sims
+                gumbel_config = GumbelMCTSConfig(
+                    num_simulations=search_config.num_simulations if self.use_playout_cap_randomization else self.gumbel_config.num_simulations,
+                    c_visit=self.gumbel_config.c_visit,
+                    c_scale=self.gumbel_config.c_scale,
+                    max_num_considered_actions=self.gumbel_config.max_num_considered_actions,
+                )
+                mcts = GumbelMCTS(self.network, gumbel_config, self.device)
+                move, policy, visits = mcts.search(ag.game, add_noise=False)  # Gumbel provides exploration
+            else:
+                # Traditional PUCT-based MCTS with Rust acceleration
+                # Note: heuristic blending happens inside HybridMCTS when we pass it
+                mcts = HybridMCTS(
+                    self.network,
+                    search_config,
+                    self.device,
+                    # Pass heuristic config for policy prior blending
+                    heuristic_config=self.heuristic_config,
+                    heuristic_blend_factor=self.heuristic_blend_factor,
+                    # Pass adaptive noise multiplier
+                    noise_multiplier=self.noise_multiplier,
+                )
 
-            # Make move
+                move, policy, visits = mcts.search(
+                    ag.game,
+                    add_noise=add_noise,
+                    batch_size=self.mcts_batch_size,
+                )
+
+            # Only record examples for full search moves (playout cap randomization)
+            # Fast search moves still contribute to game progression (value training)
+            # but don't provide policy targets
+            should_record = use_full_search or not self.use_playout_cap_randomization
+
+            if should_record:
+                # Apply policy target pruning (KataGo)
+                # Removes exploration artifacts from MCTS policy
+                if self.use_policy_target_pruning and len(policy) > 0 and visits > 0:
+                    # Get neural network prior for pruning calculation
+                    bt, pv = ag.game.get_state_for_neural_net()
+                    moves_tuples = [(m.piece_idx, m.orientation_idx, m.row, m.col) for m in legal_moves]
+                    prior_policy, _ = self.network.predict(bt, pv, moves_tuples, self.device)
+                    policy = self._prune_policy_target(policy, prior_policy, visits)
+
+                # Apply temperature to policy targets (sharper policies for training)
+                # Temperature < 1.0 makes the distribution more peaked
+                if self.policy_target_temperature != 1.0 and len(policy) > 0:
+                    # Apply temperature: p_i^(1/T) / sum(p_j^(1/T))
+                    temp_policy = policy ** (1.0 / self.policy_target_temperature)
+                    temp_policy = temp_policy / temp_policy.sum()
+                    policy = temp_policy
+
+                # Store example
+                board_tensor, pieces_vector = ag.game.get_state_for_neural_net()
+                ag.examples_raw.append((
+                    board_tensor.copy(),
+                    pieces_vector.copy(),
+                    policy.copy(),
+                    legal_moves.copy(),
+                    ag.game.current_player,
+                ))
+
+            # Make move (always, regardless of recording)
             ag.game.make_move(move)
             ag.move_count += 1
 
-        log.info(f"Rust MCTS complete: {len(games_needing_moves)} games, "
-              f"{(time.time()-mcts_start)*1000:.1f}ms total")
+        if self.use_playout_cap_randomization:
+            log.info(f"Rust MCTS complete: {len(games_needing_moves)} games, "
+                  f"{full_search_count} full/{fast_search_count} fast search, "
+                  f"{(time.time()-mcts_start)*1000:.1f}ms total")
+        else:
+            log.info(f"Rust MCTS complete: {len(games_needing_moves)} games, "
+                  f"{(time.time()-mcts_start)*1000:.1f}ms total")
+
+    def configure_gumbel_mcts(
+        self,
+        c_visit: float = 50.0,
+        c_scale: float = 1.0,
+        max_actions: int = 16,
+    ):
+        """
+        Enable Gumbel MCTS for guaranteed policy improvement.
+
+        From Gumbel MuZero paper: provides guaranteed policy improvement
+        unlike PUCT, and works reliably with fewer simulations.
+        """
+        if not GUMBEL_MCTS_AVAILABLE:
+            log.warning("Gumbel MCTS not available, falling back to PUCT")
+            return
+
+        self.use_gumbel_mcts = True
+        self.gumbel_config = GumbelMCTSConfig(
+            num_simulations=self.mcts_config.num_simulations,
+            c_visit=c_visit,
+            c_scale=c_scale,
+            max_num_considered_actions=max_actions,
+        )
+        log.info(f"Enabled Gumbel MCTS: c_visit={c_visit}, c_scale={c_scale}, max_actions={max_actions}")
+
+    def configure_policy_target_pruning(
+        self,
+        threshold: float = 0.01,
+    ):
+        """
+        Enable policy target pruning (from KataGo).
+
+        This removes exploration artifacts from MCTS policy targets by
+        estimating and subtracting "forced playouts" that were added
+        purely for exploration, not because the moves were actually good.
+
+        The result is cleaner policy targets that better reflect
+        true move quality.
+        """
+        self.use_policy_target_pruning = True
+        self.policy_prune_threshold = threshold
+        log.info(f"Enabled policy target pruning: threshold={threshold}")
+
+    def configure_warm_start(self, blend_factor: float):
+        """
+        Configure warm-start rollout blending (from Warm-Start AlphaZero).
+
+        Early in training, the NN value is meaningless (random weights).
+        Warm-start blends NN value with heuristic rollout value:
+
+        value = (1 - blend) * nn_value + blend * rollout_value
+
+        Args:
+            blend_factor: 0.0 = pure NN, 1.0 = pure rollout
+        """
+        self.warm_start_blend_factor = blend_factor
+        if blend_factor > 0:
+            log.info(f"Warm-start enabled: blend_factor={blend_factor:.2f} (NN={1-blend_factor:.1%}, rollout={blend_factor:.1%})")
+
+    def _prune_policy_target(
+        self,
+        policy: np.ndarray,
+        prior_policy: np.ndarray,
+        total_visits: int,
+    ) -> np.ndarray:
+        """
+        Apply KataGo-style policy target pruning.
+
+        Estimates forced playouts per action:
+        n_forced(a) ≈ sqrt(k * P(a) * N)
+        where k is a constant, P(a) is prior, N is total visits
+
+        Then subtracts forced visits from actual visits before
+        computing the final policy target.
+
+        Args:
+            policy: MCTS policy from visit counts (normalized)
+            prior_policy: Neural network policy prior (normalized)
+            total_visits: Total MCTS visits at root
+
+        Returns:
+            Pruned policy (normalized)
+        """
+        if total_visits == 0 or len(policy) == 0:
+            return policy
+
+        # Estimate visit counts from policy
+        estimated_visits = policy * total_visits
+
+        # Calculate forced playouts (exploration artifacts)
+        # Formula from KataGo: n_forced(a) = sqrt(k * P(a) * N)
+        # k is typically around 1.0
+        k = 1.0
+        forced_visits = np.sqrt(k * prior_policy * total_visits)
+
+        # Subtract forced visits
+        adjusted_visits = np.maximum(estimated_visits - forced_visits, 0)
+
+        # Prune very small values
+        adjusted_visits[adjusted_visits < self.policy_prune_threshold * total_visits] = 0
+
+        # Renormalize
+        total_adjusted = adjusted_visits.sum()
+        if total_adjusted > 0:
+            return adjusted_visits / total_adjusted
+        else:
+            # Fallback to original policy if pruning removed everything
+            return policy
 
     def reset_stats(self):
         """Reset statistics."""

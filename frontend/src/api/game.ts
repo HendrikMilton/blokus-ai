@@ -112,7 +112,6 @@ export interface AlphaZeroConfig {
     mixedPrecision?: boolean;
     numResBlocks?: number;
     channels?: number;
-    evalGames?: number;
     promotionThreshold?: number;
     maxGenerations?: number;
     // Heuristic pretraining
@@ -121,19 +120,40 @@ export interface AlphaZeroConfig {
     pretrainSteps?: number;
     pretrainBatchSize?: number;
     pretrainLr?: number;
-    // Anti-collapse fixes
-    entropyRegularization?: boolean;
-    entropyWeight?: number;
-    entropyTarget?: number;
-    entropyAdaptive?: boolean;
-    entropyWeightMax?: number;
-    dynamicPromotion?: boolean;
-    promotionThresholdMin?: number;
-    promotionDecayPerStuckGen?: number;
-    replayRecentBias?: number;
-    adaptiveNoise?: boolean;
-    noiseEntropyThreshold?: number;
-    noiseMultiplierMax?: number;
+    // Research-backed improvements (KataGo, Gumbel MuZero, etc.)
+    // ELO-based evaluation (replaces threshold-based promotion)
+    useEloEvaluation?: boolean;
+    eloInitial?: number;
+    eloK?: number;
+    eloPromotionThreshold?: number;
+    eloGamesPerEval?: number;
+    eloCompareGenerations?: number;
+    // Gumbel MCTS (guaranteed policy improvement)
+    useGumbelMcts?: boolean;
+    gumbelMaxConsideredActions?: number;
+    gumbelCVisit?: number;
+    gumbelCScale?: number;
+    // Playout cap randomization (KataGo - 50x efficiency)
+    usePlayoutCapRandomization?: boolean;
+    playoutCapFraction?: number;
+    playoutCapFull?: number;
+    playoutCapFast?: number;
+    // Auxiliary prediction heads (denser gradients)
+    useAuxiliaryLosses?: boolean;
+    auxOwnershipWeight?: number;
+    auxScoreWeight?: number;
+    auxOpponentPolicyWeight?: number;
+    // Policy target pruning
+    usePolicyTargetPruning?: boolean;
+    // Warm-start rollout blending
+    useWarmStartRollouts?: boolean;
+    warmStartInitialBlend?: number;
+    warmStartAnnealGenerations?: number;
+    // Sublinear replay window (prevents early overfitting)
+    useSublinearWindow?: boolean;
+    sublinearWindowC?: number;
+    sublinearWindowAlpha?: number;
+    sublinearWindowBeta?: number;
 }
 
 export interface AlphaZeroRun {
@@ -163,6 +183,7 @@ export interface AlphaZeroCheckpoint {
     valueLoss: number | null;
     evalWinRate: number | null;
     evalGames: number | null;
+    heuristicWinRate: number | null;
     isBest: boolean;
     modelPath: string;
     createdAt: string;
@@ -197,6 +218,11 @@ export const ALPHAZERO_API = {
     // Delete a training run
     deleteRun: async (runId: string): Promise<void> => {
         await http.delete(`/api/ml/alphazero/runs/${runId}`);
+    },
+
+    // Get all current training progress (for page refresh)
+    getAllProgress: async (): Promise<Record<string, Record<string, unknown>>> => {
+        return http.get('/api/ml/alphazero/progress');
     },
 
     // List checkpoints

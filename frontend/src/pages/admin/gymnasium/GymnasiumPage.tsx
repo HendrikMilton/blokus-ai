@@ -429,8 +429,6 @@ export const GymnasiumPage = () => {
         return options;
     }, [alphaZeroRuns, alphaZeroCheckpoints]);
 
-    const selectedModelName = aiModelOptions.find(m => m.value === selectedAIModel)?.label || 'Random AI';
-
     // Game state
     const [gameId, setGameId] = useState<string | null>(null);
     const [gameState, setGameState] = useState<GameState | null>(null);
@@ -445,16 +443,21 @@ export const GymnasiumPage = () => {
     const [isLoading, setIsLoading] = useState(false);
     const [isPaused, setIsPaused] = useState(false);
 
-    // Load AlphaZero runs and checkpoints
+    // Load AlphaZero runs, checkpoints, and current progress
     const loadAlphaZeroData = useCallback(async () => {
         setIsLoadingRuns(true);
         try {
-            const [runsRes, checkpointsRes] = await Promise.all([
+            const [runsRes, checkpointsRes, progressRes] = await Promise.all([
                 ALPHAZERO_API.listRuns(),
                 ALPHAZERO_API.listCheckpoints(), // All checkpoints
+                ALPHAZERO_API.getAllProgress(), // Current progress for running trainings
             ]);
             setAlphaZeroRuns(runsRes.runs);
             setAlphaZeroCheckpoints(checkpointsRes.checkpoints);
+            // Set progress for any running trainings
+            if (progressRes && Object.keys(progressRes).length > 0) {
+                setTrainingProgress(progressRes as Record<string, TrainingProgress>);
+            }
         } catch (err) {
             console.error('Failed to load AlphaZero data:', err);
         } finally {
@@ -1906,113 +1909,122 @@ export const GymnasiumPage = () => {
                         </div>
 
                         <div className="border-t border-border pt-4">
-                            <h4 className="text-sm font-medium text-foreground mb-3">Anti-Collapse Settings</h4>
+                            <h4 className="text-sm font-medium text-foreground mb-3">Research-Backed Improvements</h4>
                             <p className="text-xs text-secondary mb-3">
-                                Prevent self-distillation collapse where models get stuck copying themselves.
+                                Based on KataGo, Gumbel MuZero, and ELF OpenGo research for 50x training efficiency.
                             </p>
                             <div className="space-y-3">
                                 <label className="flex items-center gap-2 cursor-pointer">
                                     <input
                                         type="checkbox"
-                                        checked={trainConfig.entropyRegularization ?? true}
+                                        checked={trainConfig.useEloEvaluation ?? true}
                                         onChange={(e) => setTrainConfig(c => ({
                                             ...c,
-                                            entropyRegularization: e.target.checked
+                                            useEloEvaluation: e.target.checked
                                         }))}
                                         className="w-4 h-4 rounded border-border bg-surface text-primary focus:ring-primary"
                                     />
-                                    <span className="text-sm text-foreground">Entropy Regularization</span>
+                                    <span className="text-sm text-foreground">ELO-Based Evaluation</span>
                                 </label>
                                 <p className="text-xs text-secondary ml-6 -mt-1">
-                                    Add entropy bonus to loss to prevent policy collapse (deterministic policies).
+                                    Use ELO ratings instead of win-rate threshold. More robust model promotion.
                                 </p>
 
                                 <label className="flex items-center gap-2 cursor-pointer">
                                     <input
                                         type="checkbox"
-                                        checked={trainConfig.dynamicPromotion ?? true}
+                                        checked={trainConfig.useGumbelMcts ?? true}
                                         onChange={(e) => setTrainConfig(c => ({
                                             ...c,
-                                            dynamicPromotion: e.target.checked
+                                            useGumbelMcts: e.target.checked
                                         }))}
                                         className="w-4 h-4 rounded border-border bg-surface text-primary focus:ring-primary"
                                     />
-                                    <span className="text-sm text-foreground">Dynamic Promotion Threshold</span>
+                                    <span className="text-sm text-foreground">Gumbel MCTS</span>
                                 </label>
                                 <p className="text-xs text-secondary ml-6 -mt-1">
-                                    Lower win rate threshold after stuck generations (55% → 45% min).
+                                    Guaranteed policy improvement. Works reliably with fewer simulations.
                                 </p>
 
                                 <label className="flex items-center gap-2 cursor-pointer">
                                     <input
                                         type="checkbox"
-                                        checked={trainConfig.adaptiveNoise ?? true}
+                                        checked={trainConfig.usePlayoutCapRandomization ?? true}
                                         onChange={(e) => setTrainConfig(c => ({
                                             ...c,
-                                            adaptiveNoise: e.target.checked
+                                            usePlayoutCapRandomization: e.target.checked
                                         }))}
                                         className="w-4 h-4 rounded border-border bg-surface text-primary focus:ring-primary"
                                     />
-                                    <span className="text-sm text-foreground">Adaptive Exploration Noise</span>
+                                    <span className="text-sm text-foreground">Playout Cap Randomization (KataGo)</span>
                                 </label>
                                 <p className="text-xs text-secondary ml-6 -mt-1">
-                                    Increase Dirichlet noise when policy entropy is low to force exploration.
+                                    25% full search for training, 75% fast search for game completion. 4x more games.
                                 </p>
 
-                                <div className="mt-2">
-                                    <Input
-                                        label="Recent Replay Bias"
-                                        type="number"
-                                        step="0.1"
-                                        min="0"
-                                        max="1"
-                                        value={trainConfig.replayRecentBias ?? 0.7}
+                                <label className="flex items-center gap-2 cursor-pointer">
+                                    <input
+                                        type="checkbox"
+                                        checked={trainConfig.useAuxiliaryLosses ?? true}
                                         onChange={(e) => setTrainConfig(c => ({
                                             ...c,
-                                            replayRecentBias: parseFloat(e.target.value) || 0.7
+                                            useAuxiliaryLosses: e.target.checked
                                         }))}
+                                        className="w-4 h-4 rounded border-border bg-surface text-primary focus:ring-primary"
                                     />
-                                    <p className="text-xs text-secondary mt-1">
-                                        0 = uniform sampling, 0.7 = recent examples ~10x more likely.
-                                    </p>
-                                </div>
+                                    <span className="text-sm text-foreground">Auxiliary Prediction Heads</span>
+                                </label>
+                                <p className="text-xs text-secondary ml-6 -mt-1">
+                                    Ownership, score distribution, opponent policy. Provides denser gradients.
+                                </p>
 
-                                <div className="grid grid-cols-2 gap-3 mt-3">
-                                    <div>
-                                        <Input
-                                            label="Entropy Weight"
-                                            type="number"
-                                            step="0.01"
-                                            min="0"
-                                            max="1"
-                                            value={trainConfig.entropyWeight ?? 0.1}
-                                            onChange={(e) => setTrainConfig(c => ({
-                                                ...c,
-                                                entropyWeight: parseFloat(e.target.value) || 0.1
-                                            }))}
-                                        />
-                                        <p className="text-xs text-secondary mt-1">
-                                            Base weight for entropy bonus (default 0.1).
-                                        </p>
-                                    </div>
-                                    <div>
-                                        <Input
-                                            label="Eval Games"
-                                            type="number"
-                                            step="50"
-                                            min="20"
-                                            max="1000"
-                                            value={trainConfig.evalGames ?? 400}
-                                            onChange={(e) => setTrainConfig(c => ({
-                                                ...c,
-                                                evalGames: parseInt(e.target.value) || 400
-                                            }))}
-                                        />
-                                        <p className="text-xs text-secondary mt-1">
-                                            Games per evaluation (400 for statistical confidence).
-                                        </p>
-                                    </div>
-                                </div>
+                                <label className="flex items-center gap-2 cursor-pointer">
+                                    <input
+                                        type="checkbox"
+                                        checked={trainConfig.usePolicyTargetPruning ?? true}
+                                        onChange={(e) => setTrainConfig(c => ({
+                                            ...c,
+                                            usePolicyTargetPruning: e.target.checked
+                                        }))}
+                                        className="w-4 h-4 rounded border-border bg-surface text-primary focus:ring-primary"
+                                    />
+                                    <span className="text-sm text-foreground">Policy Target Pruning</span>
+                                </label>
+                                <p className="text-xs text-secondary ml-6 -mt-1">
+                                    Remove exploration artifacts from MCTS policy targets.
+                                </p>
+
+                                <label className="flex items-center gap-2 cursor-pointer">
+                                    <input
+                                        type="checkbox"
+                                        checked={trainConfig.useWarmStartRollouts ?? true}
+                                        onChange={(e) => setTrainConfig(c => ({
+                                            ...c,
+                                            useWarmStartRollouts: e.target.checked
+                                        }))}
+                                        className="w-4 h-4 rounded border-border bg-surface text-primary focus:ring-primary"
+                                    />
+                                    <span className="text-sm text-foreground">Warm-Start Rollout Blending</span>
+                                </label>
+                                <p className="text-xs text-secondary ml-6 -mt-1">
+                                    Blend NN values with heuristic rollouts early in training for better cold-start.
+                                </p>
+
+                                <label className="flex items-center gap-2 cursor-pointer">
+                                    <input
+                                        type="checkbox"
+                                        checked={trainConfig.useSublinearWindow ?? true}
+                                        onChange={(e) => setTrainConfig(c => ({
+                                            ...c,
+                                            useSublinearWindow: e.target.checked
+                                        }))}
+                                        className="w-4 h-4 rounded border-border bg-surface text-primary focus:ring-primary"
+                                    />
+                                    <span className="text-sm text-foreground">Sublinear Replay Window</span>
+                                </label>
+                                <p className="text-xs text-secondary ml-6 -mt-1">
+                                    Gradually increase replay window to prevent early overfitting.
+                                </p>
                             </div>
                         </div>
 
@@ -2023,18 +2035,26 @@ export const GymnasiumPage = () => {
                                     size="sm"
                                     variant="ghost"
                                     onClick={() => setTrainConfig({
-                                        mctsSimulations: 20,
-                                        gamesPerGeneration: 5,
-                                        maxGenerations: 2,
-                                        batchSize: 512,
+                                        // Gumbel MCTS works with very few sims
+                                        mctsSimulations: 16,
+                                        gamesPerGeneration: 10,
+                                        maxGenerations: 3,
+                                        batchSize: 256,
                                         numResBlocks: 5,
                                         channels: 64,
-                                        evalGames: 400,
                                         numParallelGames: 4,
                                         mctsBatchSize: 8,
                                         inferenceBatchSize: 16,
-                                        trainingStepsMin: 100,
-                                        trainingStepsMax: 200,
+                                        trainingStepsMin: 50,
+                                        trainingStepsMax: 100,
+                                        // Research-backed defaults (all enabled)
+                                        useEloEvaluation: true,
+                                        useGumbelMcts: true,
+                                        usePlayoutCapRandomization: true,
+                                        useAuxiliaryLosses: true,
+                                        usePolicyTargetPruning: true,
+                                        useWarmStartRollouts: true,
+                                        useSublinearWindow: true,
                                     })}
                                 >
                                 Quick Test
@@ -2043,18 +2063,26 @@ export const GymnasiumPage = () => {
                                     size="sm"
                                     variant="ghost"
                                     onClick={() => setTrainConfig({
-                                        mctsSimulations: 200,
-                                        gamesPerGeneration: 100,
-                                        maxGenerations: 10,
-                                        batchSize: 4096,
+                                        // With playout cap: 25% at 50 sims (training), 75% at 16 sims (fast)
+                                        mctsSimulations: 50,
+                                        gamesPerGeneration: 50,
+                                        maxGenerations: 15,
+                                        batchSize: 1024,
                                         numResBlocks: 10,
                                         channels: 128,
-                                        evalGames: 400,
-                                        numParallelGames: 32,
-                                        mctsBatchSize: 32,
-                                        inferenceBatchSize: 128,
-                                        trainingStepsMin: 300,
-                                        trainingStepsMax: 1000,
+                                        numParallelGames: 16,
+                                        mctsBatchSize: 16,
+                                        inferenceBatchSize: 64,
+                                        trainingStepsMin: 200,
+                                        trainingStepsMax: 500,
+                                        // Research-backed defaults (all enabled)
+                                        useEloEvaluation: true,
+                                        useGumbelMcts: true,
+                                        usePlayoutCapRandomization: true,
+                                        useAuxiliaryLosses: true,
+                                        usePolicyTargetPruning: true,
+                                        useWarmStartRollouts: true,
+                                        useSublinearWindow: true,
                                     })}
                                 >
                                 Medium
@@ -2063,18 +2091,26 @@ export const GymnasiumPage = () => {
                                     size="sm"
                                     variant="ghost"
                                     onClick={() => setTrainConfig({
-                                        mctsSimulations: 800,
-                                        gamesPerGeneration: 200,
-                                        maxGenerations: 100,
-                                        batchSize: 1024,
+                                        // Serious training: still much less than vanilla AlphaZero
+                                        mctsSimulations: 100,
+                                        gamesPerGeneration: 100,
+                                        maxGenerations: 50,
+                                        batchSize: 2048,
                                         numResBlocks: 15,
                                         channels: 256,
-                                        evalGames: 400,
                                         numParallelGames: 32,
                                         mctsBatchSize: 32,
                                         inferenceBatchSize: 128,
-                                        trainingStepsMin: 500,
-                                        trainingStepsMax: 2000,
+                                        trainingStepsMin: 300,
+                                        trainingStepsMax: 1000,
+                                        // Research-backed defaults (all enabled)
+                                        useEloEvaluation: true,
+                                        useGumbelMcts: true,
+                                        usePlayoutCapRandomization: true,
+                                        useAuxiliaryLosses: true,
+                                        usePolicyTargetPruning: true,
+                                        useWarmStartRollouts: true,
+                                        useSublinearWindow: true,
                                     })}
                                 >
                                 Large
@@ -2083,18 +2119,26 @@ export const GymnasiumPage = () => {
                                     size="sm"
                                     variant="ghost"
                                     onClick={() => setTrainConfig({
-                                        mctsSimulations: 1600,
-                                        gamesPerGeneration: 400,
-                                        maxGenerations: 200,
-                                        batchSize: 8192,
+                                        // Full power: leverage GH200 with efficient settings
+                                        mctsSimulations: 200,
+                                        gamesPerGeneration: 200,
+                                        maxGenerations: 100,
+                                        batchSize: 4096,
                                         numResBlocks: 20,
                                         channels: 256,
-                                        evalGames: 400,
-                                        numParallelGames: 128,
-                                        mctsBatchSize: 128,
-                                        inferenceBatchSize: 512,
-                                        trainingStepsMin: 1000,
-                                        trainingStepsMax: 4000,
+                                        numParallelGames: 64,
+                                        mctsBatchSize: 64,
+                                        inferenceBatchSize: 256,
+                                        trainingStepsMin: 500,
+                                        trainingStepsMax: 2000,
+                                        // Research-backed defaults (all enabled)
+                                        useEloEvaluation: true,
+                                        useGumbelMcts: true,
+                                        usePlayoutCapRandomization: true,
+                                        useAuxiliaryLosses: true,
+                                        usePolicyTargetPruning: true,
+                                        useWarmStartRollouts: true,
+                                        useSublinearWindow: true,
                                     })}
                                 >
                                 GH200

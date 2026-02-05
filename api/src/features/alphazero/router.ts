@@ -25,6 +25,10 @@ import {
 
 export const alphaZeroRouter = Router();
 
+// In-memory cache for current training progress (cleared when run completes)
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const progressCache: Map<string, Record<string, any>> = new Map();
+
 // Default training configuration
 const DEFAULT_CONFIG: AlphaZeroConfig = {
     // Self-play
@@ -46,7 +50,6 @@ const DEFAULT_CONFIG: AlphaZeroConfig = {
     numResBlocks: 15,
     channels: 256,
     // Evaluation
-    evalGames: 400,  // AlphaZero used 400 games for statistical confidence
     promotionThreshold: 0.55,
     // Limits
     maxGenerations: 100,
@@ -142,6 +145,9 @@ alphaZeroRouter.post('/runs/:id/stop', asyncHandler(async (req, res) => {
         log.warn(`Failed to signal ML service to stop: ${err}`);
     }
 
+    // Clear progress cache
+    progressCache.delete(id);
+
     // Update status
     const stoppedRun = await updateAlphaZeroRun(id, {
         status: 'stopped',
@@ -192,6 +198,26 @@ alphaZeroRouter.delete('/runs/:id', asyncHandler(async (req, res) => {
 // ML Service Callbacks
 // ============================================================================
 
+// GET /api/ml/alphazero/runs/:id/progress - Get current progress (for page refresh)
+alphaZeroRouter.get('/runs/:id/progress', asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const cached = progressCache.get(id);
+    if (cached) {
+        res.json(cached);
+    } else {
+        res.json(null);
+    }
+}));
+
+// GET /api/ml/alphazero/progress - Get all current progress (for page refresh)
+alphaZeroRouter.get('/progress', asyncHandler(async (_req, res) => {
+    const allProgress: Record<string, Record<string, unknown>> = {};
+    for (const [runId, progress] of progressCache.entries()) {
+        allProgress[runId] = progress;
+    }
+    res.json(allProgress);
+}));
+
 // POST /api/ml/alphazero/runs/:id/progress - Progress update from ML service
 alphaZeroRouter.post('/runs/:id/progress', asyncHandler(async (req, res) => {
     const { id } = req.params;
@@ -207,8 +233,8 @@ alphaZeroRouter.post('/runs/:id/progress', asyncHandler(async (req, res) => {
         valueLoss: progress.valueLoss,
     });
 
-    // Emit full progress event with all details
-    emitEvent('alphazero-progress', {
+    // Build full progress object
+    const fullProgress = {
         runId: id,
         // Current state
         generation: progress.generation,
@@ -233,7 +259,13 @@ alphaZeroRouter.post('/runs/:id/progress', asyncHandler(async (req, res) => {
         message: progress.message,
         // Extra metrics (gamesPerMin, stepsPerSec, etc.)
         ...progress,
-    });
+    };
+
+    // Cache the progress for page refresh
+    progressCache.set(id, fullProgress);
+
+    // Emit full progress event with all details
+    emitEvent('alphazero-progress', fullProgress);
 
     res.json({ success: true });
 }));
@@ -284,6 +316,9 @@ alphaZeroRouter.post('/runs/:id/complete', asyncHandler(async (req, res) => {
     const { id } = req.params;
     const { policy_loss, value_loss, best_win_rate } = req.body;
 
+    // Clear progress cache
+    progressCache.delete(id);
+
     const run = await updateAlphaZeroRun(id, {
         status: 'completed',
         completedAt: new Date(),
@@ -311,6 +346,9 @@ alphaZeroRouter.post('/runs/:id/complete', asyncHandler(async (req, res) => {
 alphaZeroRouter.post('/runs/:id/failed', asyncHandler(async (req, res) => {
     const { id } = req.params;
     const { error_message } = req.body;
+
+    // Clear progress cache
+    progressCache.delete(id);
 
     await updateAlphaZeroRun(id, {
         status: 'failed',

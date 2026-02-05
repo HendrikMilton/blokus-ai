@@ -253,9 +253,9 @@ def print_timing_report(stats: TimingStats, network1_wins: int, mode: str):
     print(f"  Mean move time:   {summary['avg_move_time_ms']:.2f}ms")
     print(f"  Std dev:          {summary['std_move_time_ms']:.2f}ms")
 
-    # Estimate for 400 games
-    estimated_400_time = summary['avg_game_time_sec'] * 400
-    print(f"\nEstimated time for 400 games: {estimated_400_time:.1f}s ({estimated_400_time/60:.1f} min)")
+    # Estimate for 200 games
+    estimated_200_time = summary['avg_game_time_sec'] * 200
+    print(f"\nEstimated time for 200 games: {estimated_200_time:.1f}s ({estimated_200_time/60:.1f} min)")
 
     print("=" * 60)
 

@@ -27,7 +27,6 @@ export interface AlphaZeroConfig {
     numResBlocks: number;
     channels: number;
     // Evaluation
-    evalGames: number;
     promotionThreshold: number;
     // Limits
     maxGenerations: number;
