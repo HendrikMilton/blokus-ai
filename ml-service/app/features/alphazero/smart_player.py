@@ -20,9 +20,11 @@ from typing import Optional, List, Tuple
 from dataclasses import dataclass
 import numpy as np
 
+from app.logging_config import log
 from .game import BlokusGame, Move
 from .heuristics import (
     HeuristicConfig,
+    ScoringContext,
     compute_move_heuristic_score,
     compute_move_heuristic_score_deep,
     compute_heuristic_policy,
@@ -75,11 +77,34 @@ class SmartPlayerConfig:
 
     @classmethod
     def hard(cls) -> 'SmartPlayerConfig':
-        """Hard difficulty - full features."""
+        """Hard difficulty - greedy with improved heuristics.
+
+        Lookahead is disabled as testing showed it hurts performance.
+        The exponential piece size scoring provides strong play without
+        needing to look ahead.
+        """
+        return cls(
+            lookahead_depth=0,
+            candidate_count=20,
+            use_mobility_lookahead=False,
+            use_corner_differential=False,
+            use_opponent_blocking=True,
+        )
+
+    @classmethod
+    def hard_lookahead(cls) -> 'SmartPlayerConfig':
+        """Hard difficulty with lookahead (for comparison testing).
+
+        Uses lookahead but with mobility disabled to prevent small piece
+        selection in endgame.
+        """
         return cls(
             lookahead_depth=1,
             candidate_count=15,
             opponent_candidate_count=8,
+            use_mobility_lookahead=False,  # Disabled - was causing issues
+            use_corner_differential=True,
+            use_opponent_blocking=True,
         )
 
     @classmethod
@@ -124,7 +149,7 @@ class SmartPlayer:
             use_piece_timing=self.config.use_piece_timing,
         )
 
-    def select_move(self, game: BlokusGame) -> Optional[Move]:
+    def select_move(self, game: BlokusGame, verbose: bool = False) -> Optional[Move]:
         """
         Select the best move for the current player.
 
@@ -137,10 +162,17 @@ class SmartPlayer:
         if not legal_moves:
             return None
 
+        player = game.current_player
+        turn = game.turn_number
+
         # If only one legal move, return it immediately
         if len(legal_moves) == 1:
             self.last_move_time_ms = (time.time() - start_time) * 1000
             self.last_candidates_evaluated = 1
+            if verbose:
+                move = legal_moves[0]
+                piece = PIECE_BY_INDEX[move.piece_idx]
+                log.info(f"P{player} T{turn}: Only 1 legal move: {piece.id} at ({move.row},{move.col})")
             return legal_moves[0]
 
         # Phase 1: Get top candidates using fast scoring
@@ -151,11 +183,26 @@ class SmartPlayer:
         if self.config.lookahead_depth == 0:
             # Depth 0: Just return best candidate from phase 1
             best_move = candidates[0][1]  # (score, move) tuple
+            best_score = candidates[0][0]
         else:
             # Depth 1+: Deep evaluation with lookahead
-            best_move, _ = self._evaluate_candidates_deep(game, candidates)
+            best_move, best_score = self._evaluate_candidates_deep(game, candidates)
 
         self.last_move_time_ms = (time.time() - start_time) * 1000
+
+        if verbose:
+            piece = PIECE_BY_INDEX[best_move.piece_idx]
+            log.info(
+                f"P{player} T{turn}: {len(legal_moves)} moves, {len(candidates)} candidates, "
+                f"chose {piece.id} (size={piece.size}) at ({best_move.row},{best_move.col}) "
+                f"score={best_score:.2f} in {self.last_move_time_ms:.0f}ms"
+            )
+            # Log top 3 candidates
+            for i, (score, move) in enumerate(candidates[:3]):
+                p = PIECE_BY_INDEX[move.piece_idx]
+                marker = " <-- CHOSEN" if move == best_move else ""
+                log.info(f"  #{i+1}: {p.id} (size={p.size}) at ({move.row},{move.col}) fast_score={score:.2f}{marker}")
+
         return best_move
 
     def _get_top_candidates(
@@ -169,10 +216,13 @@ class SmartPlayer:
         Returns:
             List of (score, move) tuples, sorted by score descending.
         """
-        # Score all moves with basic (fast) heuristics
+        # Create scoring context for batch evaluation (caches expensive computations)
+        ctx = ScoringContext.create(game)
+
+        # Score all moves with basic (fast) heuristics using cached context
         scored_moves = []
         for move in legal_moves:
-            score = compute_move_heuristic_score(move, game, self._heuristic_config)
+            score = compute_move_heuristic_score(move, game, self._heuristic_config, ctx)
             scored_moves.append((score, move))
 
         # Sort by score descending and take top N
@@ -211,6 +261,9 @@ class SmartPlayer:
         """
         Evaluate a move with lookahead.
 
+        Uses binary survival check for mobility instead of continuous bonus
+        to prevent mobility from overriding piece size selection.
+
         Args:
             game: Current game state
             move: Move to evaluate
@@ -243,6 +296,14 @@ class SmartPlayer:
             my_score = scores[move.player]
             max_opp = max(scores[p] for p in range(4) if p != move.player)
             return score + (my_score - max_opp) * 0.5
+
+        # Binary survival check: penalize if we'll have few/no moves
+        my_future_moves = len(game_copy.get_legal_moves(move.player))
+        if my_future_moves == 0:
+            score -= 10.0  # Can't play = terrible
+        elif my_future_moves < 5:
+            score -= 1.0   # Cornered = bad
+        # Otherwise no bonus - don't let mobility override piece size
 
         # Evaluate opponent's best response
         opponent_value = self._simulate_opponent_turn(game_copy, move.player, depth - 1)
@@ -422,55 +483,177 @@ def benchmark_smart_player():
         print(f"  Candidates: {player.last_candidates_evaluated}")
 
 
-def play_match(player1: SmartPlayer, player2: SmartPlayer, num_games: int = 10) -> dict:
+def play_match(
+    player1: SmartPlayer,
+    player2: SmartPlayer,
+    player1_name: str = "Player1",
+    player2_name: str = "Player2",
+    num_games: int = 10,
+    verbose: bool = False,
+) -> dict:
     """
-    Play a match between two SmartPlayers.
+    Play a match between two SmartPlayers (true 1v1).
 
-    Returns win statistics.
+    Each player controls 2 positions (teams):
+    - Player1: positions 0 and 2
+    - Player2: positions 1 and 3
+
+    Players swap starting positions each game for fairness.
+    Returns win statistics based on combined team scores.
     """
-    from .heuristic_player import HeuristicPlayer
-
-    results = {'player1_wins': 0, 'player2_wins': 0, 'ties': 0}
-    players = [player1, player2, HeuristicPlayer(), HeuristicPlayer()]  # 4-player game
+    results = {player1_name: 0, player2_name: 0, 'ties': 0}
 
     for game_idx in range(num_games):
         game = BlokusGame()
+
+        # Alternate which player gets positions 0,2 vs 1,3
+        if game_idx % 2 == 0:
+            # Player1 at 0,2 - Player2 at 1,3
+            players = [player1, player2, player1, player2]
+            player_names = [player1_name, player2_name, player1_name, player2_name]
+            p1_positions = [0, 2]
+            p2_positions = [1, 3]
+        else:
+            # Player2 at 0,2 - Player1 at 1,3
+            players = [player2, player1, player2, player1]
+            player_names = [player2_name, player1_name, player2_name, player1_name]
+            p1_positions = [1, 3]
+            p2_positions = [0, 2]
+
+        if verbose:
+            log.info(f"=== Game {game_idx + 1} === Positions: {player_names}")
 
         while not game.is_game_over:
             current = game.current_player
             player = players[current]
 
-            move = player.select_move(game)
+            if isinstance(player, SmartPlayer):
+                move = player.select_move(game, verbose=verbose)
+            else:
+                move = player.select_move(game)
+
             if move:
                 game.make_move(move)
             else:
                 game.pass_turn()
 
-        # Determine winner
+        # Determine winner by team score (combined scores of both positions)
         scores = game.get_scores()
-        winner = game.get_winner()
+        p1_total = sum(scores[i] for i in p1_positions)
+        p2_total = sum(scores[i] for i in p2_positions)
 
-        if winner == 0:
-            results['player1_wins'] += 1
-        elif winner == 1:
-            results['player2_wins'] += 1
+        if p1_total > p2_total:
+            winner_name = player1_name
+            results[player1_name] += 1
+        elif p2_total > p1_total:
+            winner_name = player2_name
+            results[player2_name] += 1
         else:
+            winner_name = "Tie"
             results['ties'] += 1
 
-        print(f"Game {game_idx + 1}: Winner={winner}, Scores={scores}")
+        # Format scores with player names and team totals
+        score_str = ", ".join(f"{player_names[i]}={scores[i]}" for i in range(4))
+        print(f"Game {game_idx + 1}: Winner={winner_name}, Scores=[{score_str}], Teams: {player1_name}={p1_total}, {player2_name}={p2_total}")
 
     return results
 
 
 if __name__ == "__main__":
-    benchmark_smart_player()
+    import sys
+    import time
+    from .heuristic_player import HeuristicPlayer
 
-    print("\n" + "=" * 50)
-    print("Quick match: Hard vs Easy")
-    print("=" * 50)
+    num_games = int(sys.argv[1]) if len(sys.argv) > 1 else 8
 
-    hard_player = SmartPlayer(SmartPlayerConfig.hard())
-    easy_player = SmartPlayer(SmartPlayerConfig.easy())
+    print("=" * 60)
+    print("=== Testing Heuristic Improvements (True 1v1) ===")
+    print(f"=== Running {num_games} games per match ===")
+    print("=== Each player controls 2 positions (team game) ===")
+    print("=" * 60)
 
-    results = play_match(hard_player, easy_player, num_games=3)
-    print(f"\nResults: {results}")
+    # Timing debug for a single game
+    print("\n=== Debug: Timing Analysis for 1 Game ===")
+    from .game import BlokusGame
+    from .pieces import PIECE_BY_INDEX
+
+    hard = SmartPlayer(SmartPlayerConfig.hard())
+    easy = SmartPlayer(SmartPlayerConfig.easy())
+
+    game = BlokusGame()
+    players = [hard, easy, hard, easy]
+    player_names = ["Hard", "Easy", "Hard", "Easy"]
+
+    move_times = {0: [], 1: [], 2: [], 3: []}
+    total_start = time.time()
+
+    while not game.is_game_over:
+        current = game.current_player
+        player = players[current]
+
+        start = time.time()
+        move = player.select_move(game, verbose=False)
+        elapsed = (time.time() - start) * 1000
+
+        move_times[current].append(elapsed)
+
+        if move:
+            game.make_move(move)
+        else:
+            game.pass_turn()
+
+    total_elapsed = time.time() - total_start
+
+    print(f"\nTotal game time: {total_elapsed:.2f}s")
+    print(f"Total moves: {sum(len(t) for t in move_times.values())}")
+    print("\nPer-position timing:")
+    for pos in range(4):
+        times = move_times[pos]
+        if times:
+            print(f"  P{pos} ({player_names[pos]}): {len(times)} moves, "
+                  f"avg={sum(times)/len(times):.1f}ms, "
+                  f"max={max(times):.1f}ms, "
+                  f"total={sum(times):.0f}ms")
+
+    print(f"\nHard total: {sum(move_times[0]) + sum(move_times[2]):.0f}ms")
+    print(f"Easy total: {sum(move_times[1]) + sum(move_times[3]):.0f}ms")
+
+    print("\n" + "=" * 60)
+    print("=== Now running full test suite ===")
+    print("=" * 60)
+
+    easy = SmartPlayer(SmartPlayerConfig.easy())
+    hard = SmartPlayer(SmartPlayerConfig.hard())
+    filler = HeuristicPlayer()
+
+    # Wrap filler in a simple adapter so play_match works
+    class FillerAdapter:
+        def __init__(self, player):
+            self._player = player
+        def select_move(self, game, verbose=False):
+            return self._player.select_move(game)
+
+    filler_adapter = FillerAdapter(filler)
+
+    print("\nTest 1: Hard vs Easy")
+    print("-" * 40)
+    results1 = play_match(hard, easy, "Hard", "Easy", num_games=num_games, verbose=False)
+    print(f"Results: Hard={results1['Hard']}, Easy={results1['Easy']}, Ties={results1['ties']}")
+
+    print("\n" + "=" * 60)
+    print("\nTest 2: Hard vs Filler")
+    print("-" * 40)
+    results2 = play_match(hard, filler_adapter, "Hard", "Filler", num_games=num_games, verbose=False)
+    print(f"Results: Hard={results2['Hard']}, Filler={results2['Filler']}, Ties={results2['ties']}")
+
+    print("\n" + "=" * 60)
+    print("\nTest 3: Easy vs Filler")
+    print("-" * 40)
+    results3 = play_match(easy, filler_adapter, "Easy", "Filler", num_games=num_games, verbose=False)
+    print(f"Results: Easy={results3['Easy']}, Filler={results3['Filler']}, Ties={results3['ties']}")
+
+    print("\n" + "=" * 60)
+    print("=== Summary ===")
+    print(f"Test 1 - Hard vs Easy:   Hard={results1['Hard']}, Easy={results1['Easy']}, Ties={results1['ties']}")
+    print(f"Test 2 - Hard vs Filler: Hard={results2['Hard']}, Filler={results2['Filler']}, Ties={results2['ties']}")
+    print(f"Test 3 - Easy vs Filler: Easy={results3['Easy']}, Filler={results3['Filler']}, Ties={results3['ties']}")

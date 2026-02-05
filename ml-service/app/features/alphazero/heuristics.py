@@ -19,10 +19,66 @@ Enhanced with strategic features:
 
 import numpy as np
 from typing import List, Tuple, Optional, Dict, Set
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from .game import BlokusGame, Move, BOARD_SIZE, EDGE_OFFSETS, DIAGONAL_OFFSETS
 from .pieces import PIECE_CATALOG, PIECE_BY_INDEX, PIECE_INDEX_BY_ID
+
+
+# ============================================================================
+# Scoring Context (caches expensive computations per game state)
+# ============================================================================
+
+@dataclass
+class ScoringContext:
+    """
+    Caches expensive computations that are constant across all moves
+    for a given game state. Create once per batch of move evaluations.
+    """
+    game: BlokusGame
+    player: int
+
+    # Cached data (computed lazily)
+    _opponent_corners: Optional[Set[Tuple[int, int]]] = field(default=None, repr=False)
+    _quadrant_presence: Optional[Dict[Tuple[int, int], int]] = field(default=None, repr=False)
+    _phase_weights: Optional['PhaseWeights'] = field(default=None, repr=False)
+
+    @property
+    def opponent_corners(self) -> Set[Tuple[int, int]]:
+        """All opponent corners combined (for blocking checks)."""
+        if self._opponent_corners is None:
+            self._opponent_corners = set()
+            for opp in range(4):
+                if opp != self.player:
+                    self._opponent_corners.update(self.game._valid_corners[opp])
+        return self._opponent_corners
+
+    @property
+    def quadrant_presence(self) -> Dict[Tuple[int, int], int]:
+        """Count of player's cells in each quadrant."""
+        if self._quadrant_presence is None:
+            player_color = self.player + 1
+            self._quadrant_presence = {(0, 0): 0, (0, 1): 0, (1, 0): 0, (1, 1): 0}
+            for r in range(BOARD_SIZE):
+                for c in range(BOARD_SIZE):
+                    if self.game.board[r, c] == player_color:
+                        q = (0 if r < 10 else 1, 0 if c < 10 else 1)
+                        self._quadrant_presence[q] += 1
+        return self._quadrant_presence
+
+    @property
+    def phase_weights(self) -> 'PhaseWeights':
+        """Phase-based weights for current game state."""
+        if self._phase_weights is None:
+            self._phase_weights = get_phase_weights(self.game)
+        return self._phase_weights
+
+    @classmethod
+    def create(cls, game: BlokusGame, player: Optional[int] = None) -> 'ScoringContext':
+        """Create a scoring context for the given game state."""
+        if player is None:
+            player = game.current_player
+        return cls(game=game, player=player)
 
 # Board center coordinates
 CENTER_ROW = (BOARD_SIZE - 1) / 2.0  # 9.5 for 20x20
@@ -84,35 +140,39 @@ class PhaseWeights:
 
 
 PHASE_WEIGHTS: Dict[str, PhaseWeights] = {
+    # CRITICAL: piece_size must dominate in ALL phases
+    # In Blokus, score = cells placed. A size-5 piece is worth exactly 4 more
+    # points than size-1. The heuristic should NEVER trade actual points for
+    # "options" or "mobility".
     'opening': PhaseWeights(
-        piece_size=2.0,      # Play big pieces first
-        center=1.5,          # Control center early
-        corners=0.8,         # Create options
-        blocking=0.3,        # Light blocking
-        mobility=1.0,        # Maintain flexibility
-        corner_diff=0.8,     # Corner balance
-        territory=0.5,       # Expand territory
-        piece_timing=0.5,    # Piece timing bonus
+        piece_size=5.0,      # DOMINANT - always prefer larger pieces
+        center=0.3,          # Minor tiebreaker
+        corners=0.2,         # Minor tiebreaker
+        blocking=0.1,        # Minor tiebreaker
+        mobility=0.0,        # REMOVED - was causing small piece selection
+        corner_diff=0.2,     # Minor tiebreaker
+        territory=0.1,       # Minor tiebreaker
+        piece_timing=0.2,    # Minor tiebreaker
     ),
     'midgame': PhaseWeights(
-        piece_size=1.0,      # Moderate size preference
-        center=0.5,          # Less center focus
-        corners=1.2,         # Corners matter more
-        blocking=1.0,        # Active blocking
-        mobility=1.5,        # Maintain flexibility
-        corner_diff=1.2,     # Corner balance critical
-        territory=0.8,       # Territory control
-        piece_timing=0.4,    # Still consider timing
+        piece_size=5.0,      # DOMINANT - always prefer larger pieces
+        center=0.2,          # Minor tiebreaker
+        corners=0.3,         # Minor tiebreaker
+        blocking=0.3,        # Minor tiebreaker
+        mobility=0.0,        # REMOVED - was causing small piece selection
+        corner_diff=0.3,     # Minor tiebreaker
+        territory=0.2,       # Minor tiebreaker
+        piece_timing=0.2,    # Minor tiebreaker
     ),
     'endgame': PhaseWeights(
-        piece_size=0.3,      # Use what fits
-        center=0.1,          # Center irrelevant
-        corners=0.5,         # Corners less critical
-        blocking=1.5,        # Block opponents hard
-        mobility=2.0,        # Critical to survive
-        corner_diff=1.0,     # Still important
-        territory=0.3,       # Less relevant
-        piece_timing=0.2,    # Less relevant
+        piece_size=5.0,      # DOMINANT - always prefer larger pieces
+        center=0.1,          # Minor tiebreaker
+        corners=0.2,         # Minor tiebreaker
+        blocking=0.3,        # Minor tiebreaker
+        mobility=0.0,        # REMOVED - was causing small piece selection
+        corner_diff=0.3,     # Minor tiebreaker
+        territory=0.1,       # Minor tiebreaker
+        piece_timing=0.1,    # Minor tiebreaker
     ),
 }
 
@@ -228,33 +288,51 @@ def corner_differential(game: BlokusGame, move: Move, player: int) -> float:
     return (my_corners_after - my_corners_before) + blocked * 0.5
 
 
-def blocks_opponent_corners(game: BlokusGame, move: Move) -> float:
+def blocks_opponent_corners(
+    game: BlokusGame,
+    move: Move,
+    ctx: Optional[ScoringContext] = None,
+) -> float:
     """
     Score how many opponent corners this move blocks.
 
     A move can block opponent corners by:
     1. Occupying them directly (2.0 points)
     2. Being edge-adjacent to them (1.0 points - blocks diagonal connection)
+
+    Args:
+        game: Current game state
+        move: Move to evaluate
+        ctx: Optional scoring context with cached opponent corners
     """
     piece = PIECE_BY_INDEX[move.piece_idx]
     cells = piece.get_cells(move.orientation_idx, move.row, move.col)
     cell_set = set(map(tuple, cells))
     blocked_score = 0.0
 
-    for opp in range(4):
-        if opp != move.player:
-            for corner in game._valid_corners[opp]:
-                # Check if move directly occupies this corner
-                if corner in cell_set:
-                    blocked_score += 2.0
-                    continue
-
-                # Check if move is edge-adjacent to this corner
-                # (blocks opponent from using it due to edge adjacency rule)
-                for r, c in cells:
-                    if is_edge_adjacent(corner, (r, c)):
-                        blocked_score += 1.0
-                        break  # Only count once per corner
+    # Use cached opponent corners if available
+    if ctx is not None:
+        opponent_corners = ctx.opponent_corners
+        for corner in opponent_corners:
+            if corner in cell_set:
+                blocked_score += 2.0
+                continue
+            for r, c in cells:
+                if is_edge_adjacent(corner, (r, c)):
+                    blocked_score += 1.0
+                    break
+    else:
+        # Fallback to original logic
+        for opp in range(4):
+            if opp != move.player:
+                for corner in game._valid_corners[opp]:
+                    if corner in cell_set:
+                        blocked_score += 2.0
+                        continue
+                    for r, c in cells:
+                        if is_edge_adjacent(corner, (r, c)):
+                            blocked_score += 1.0
+                            break
 
     return blocked_score
 
@@ -287,13 +365,24 @@ def piece_timing_bonus(piece_id: str, turn: int, total_turns: int = 80) -> float
     return 0.0
 
 
-def territory_score(game: BlokusGame, move: Move, player: int) -> float:
+def territory_score(
+    game: BlokusGame,
+    move: Move,
+    player: int,
+    ctx: Optional[ScoringContext] = None,
+) -> float:
     """
     Score based on board quadrant control and expansion.
 
     Rewards:
     - Expanding into new quadrants
     - Strengthening presence in owned quadrants
+
+    Args:
+        game: Current game state
+        move: Move to evaluate
+        player: Player index
+        ctx: Optional scoring context with cached quadrant presence
     """
     piece = PIECE_BY_INDEX[move.piece_idx]
     cells = piece.get_cells(move.orientation_idx, move.row, move.col)
@@ -305,15 +394,18 @@ def territory_score(game: BlokusGame, move: Move, player: int) -> float:
         q = (0 if r < 10 else 1, 0 if c < 10 else 1)
         quadrants_touched.add(q)
 
-    # Count current presence in each quadrant
-    player_color = player + 1
-    quadrant_presence = {(0, 0): 0, (0, 1): 0, (1, 0): 0, (1, 1): 0}
-
-    for r in range(BOARD_SIZE):
-        for c in range(BOARD_SIZE):
-            if game.board[r, c] == player_color:
-                q = (0 if r < 10 else 1, 0 if c < 10 else 1)
-                quadrant_presence[q] += 1
+    # Use cached quadrant presence if available
+    if ctx is not None:
+        quadrant_presence = ctx.quadrant_presence
+    else:
+        # Fallback: compute quadrant presence
+        player_color = player + 1
+        quadrant_presence = {(0, 0): 0, (0, 1): 0, (1, 0): 0, (1, 1): 0}
+        for r in range(BOARD_SIZE):
+            for c in range(BOARD_SIZE):
+                if game.board[r, c] == player_color:
+                    q = (0 if r < 10 else 1, 0 if c < 10 else 1)
+                    quadrant_presence[q] += 1
 
     score = 0.0
 
@@ -343,11 +435,18 @@ def compute_move_heuristic_score(
     move: Move,
     game: BlokusGame,
     config: HeuristicConfig,
+    ctx: Optional[ScoringContext] = None,
 ) -> float:
     """
     Compute a heuristic score for a single move.
 
     Higher score = better move according to handcrafted rules.
+
+    Args:
+        move: Move to evaluate
+        game: Current game state
+        config: Heuristic configuration
+        ctx: Optional scoring context with cached data (for batch scoring)
 
     Returns:
         Score >= 0 (not normalized)
@@ -357,31 +456,22 @@ def compute_move_heuristic_score(
     piece = PIECE_BY_INDEX[move.piece_idx]
     turn = game.turn_number
 
-    # Get phase-adaptive weights if enabled
+    # Get phase-adaptive weights (use cached if available)
     if config.use_phase_weights:
-        weights = get_phase_weights(game)
+        weights = ctx.phase_weights if ctx else get_phase_weights(game)
     else:
         weights = None
 
-    # 1. PIECE SIZE BONUS (STRONG EFFECT)
-    # Early game: STRONGLY prefer larger pieces (5-cells)
-    # Rationale: Large pieces are harder to place later when board fills up
-    # This is THE most important heuristic for Blokus
+    # 1. PIECE SIZE BONUS (DOMINANT FACTOR)
+    # Use EXPONENTIAL scaling so larger pieces ALWAYS win over smaller ones.
+    # This ensures a size-5 piece (32 points) can never be overridden by
+    # secondary factors (capped at ~1.0 total).
+    #
+    # Exponential values: 2^1=2, 2^2=4, 2^3=8, 2^4=16, 2^5=32
+    # Normalized: 0.2, 0.4, 0.8, 1.6, 3.2
     piece_size_mult = weights.piece_size if weights else config.piece_size_weight
-
-    if turn <= config.early_game_turns:
-        # Scale: size 1 -> 0.0 bonus, size 5 -> 4.0 bonus
-        # Make this exponential to really prefer 5s over 4s over 3s
-        size_bonus = (piece.size ** 2) / 5.0  # 1->0.2, 2->0.8, 3->1.8, 4->3.2, 5->5.0
-        score += piece_size_mult * size_bonus
-    elif turn <= config.mid_game_turns:
-        # Mid game: moderate piece size preference
-        size_bonus = (piece.size ** 1.5) / 5.0
-        score += piece_size_mult * size_bonus * 0.5
-    else:
-        # Late game: minimal size preference
-        size_bonus = piece.size / 5.0
-        score += piece_size_mult * size_bonus * 0.2
+    piece_size_score = (2 ** piece.size) / 10.0  # 0.2 to 3.2
+    score += piece_size_mult * piece_size_score
 
     # 2. CENTER POSITION BONUS
     # Prefer moves that place pieces closer to center
@@ -446,7 +536,7 @@ def compute_move_heuristic_score(
     # In mid/late game, prefer moves that interfere with opponent corners
     blocking_mult = weights.blocking if weights else 0.5
     if turn > config.early_game_turns and config.use_opponent_blocking:
-        blocking_score = blocks_opponent_corners(game, move)
+        blocking_score = blocks_opponent_corners(game, move, ctx)
         score += blocking_mult * blocking_score * 0.3
 
     # 6. PIECE TIMING BONUS
@@ -458,7 +548,7 @@ def compute_move_heuristic_score(
     # 7. TERRITORY SCORE
     if weights and config.use_phase_weights:
         territory_mult = weights.territory
-        terr_score = territory_score(game, move, move.player)
+        terr_score = territory_score(game, move, move.player, ctx)
         score += territory_mult * terr_score * 0.3
 
     return max(score, 0.01)  # Ensure positive score
@@ -483,11 +573,21 @@ def compute_move_heuristic_score_deep(
     weights = get_phase_weights(game) if config.use_phase_weights else None
 
     # Add mobility score (expensive - requires game clone)
+    # IMPORTANT: Mobility is now HEAVILY capped to prevent overriding piece size.
+    # It's only used as a survival check, not a scoring factor.
     if include_mobility and config.use_mobility_lookahead:
         mobility = count_moves_after(game, move)
-        mobility_mult = weights.mobility if weights else 1.0
-        # Normalize: typical range is 0-200 moves
-        score += mobility_mult * (mobility / 50.0)
+        # Binary survival check instead of continuous bonus:
+        # - No moves = very bad (-10.0)
+        # - Few moves = slightly bad (-1.0)
+        # - Otherwise = tiny tiebreaker (max 0.1)
+        if mobility == 0:
+            score -= 10.0  # Can't play = terrible
+        elif mobility < 5:
+            score -= 1.0   # Cornered = bad
+        else:
+            # Tiny tiebreaker, capped at 0.1
+            score += min(mobility / 500.0, 0.1)
 
     # Add corner differential (expensive - requires game clone)
     if include_corner_diff and config.use_corner_differential:
@@ -520,9 +620,12 @@ def compute_heuristic_policy(
     if config is None:
         config = HeuristicConfig()
 
-    # Compute raw scores
+    # Create scoring context for batch evaluation (caches expensive computations)
+    ctx = ScoringContext.create(game)
+
+    # Compute raw scores with cached context
     scores = np.array([
-        compute_move_heuristic_score(move, game, config)
+        compute_move_heuristic_score(move, game, config, ctx)
         for move in legal_moves
     ])
 
