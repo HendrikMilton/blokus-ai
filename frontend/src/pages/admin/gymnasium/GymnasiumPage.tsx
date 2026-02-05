@@ -45,7 +45,8 @@ const formatEta = (seconds: number): string => {
 const PHASE_NAMES: Record<string, string> = {
     'self_play': 'Self-Play',
     'training': 'Training',
-    'evaluation': 'Evaluation',
+    'evaluation': 'Eval vs Best',
+    'heuristic_eval': 'Eval vs Heuristic',
 };
 
 // Tab type
@@ -237,6 +238,131 @@ const PlayerScore = ({
     );
 };
 
+// Mini piece shape for the pieces analysis panel
+const MiniPieceShape = ({
+    piece,
+    color,
+    isUsed,
+}: {
+    piece: GamePieceDefinition;
+    color: string;
+    isUsed: boolean;
+}) => {
+    const orientation = piece.orientations[0];
+
+    // Calculate bounding box
+    const minRow = Math.min(...orientation.map(([r]) => r));
+    const maxRow = Math.max(...orientation.map(([r]) => r));
+    const minCol = Math.min(...orientation.map(([, c]) => c));
+    const maxCol = Math.max(...orientation.map(([, c]) => c));
+
+    const rows = maxRow - minRow + 1;
+    const cols = maxCol - minCol + 1;
+
+    const filledCells = new Set(
+        orientation.map(([r, c]) => `${r - minRow},${c - minCol}`)
+    );
+
+    return (
+        <div
+            className={`transition-opacity ${isUsed ? 'opacity-40' : 'opacity-100'}`}
+            title={`${piece.name} (${piece.size} cells)${isUsed ? ' - used' : ' - available'}`}
+        >
+            <div
+                className="grid gap-px"
+                style={{
+                    gridTemplateColumns: `repeat(${cols}, 5px)`,
+                    gridTemplateRows: `repeat(${rows}, 5px)`,
+                }}
+            >
+                {Array.from({ length: rows * cols }).map((_, idx) => {
+                    const r = Math.floor(idx / cols);
+                    const c = idx % cols;
+                    const isFilled = filledCells.has(`${r},${c}`);
+                    return (
+                        <div
+                            key={idx}
+                            className="rounded-[1px]"
+                            style={{
+                                backgroundColor: isFilled ? color : 'transparent',
+                            }}
+                        />
+                    );
+                })}
+            </div>
+        </div>
+    );
+};
+
+// Player pieces panel showing used/available pieces
+const PlayerPiecesSection = ({
+    color,
+    colorName,
+    remainingPieceIds,
+    allPieces,
+}: {
+    color: string;
+    colorName: PlayerColor;
+    remainingPieceIds: string[];
+    allPieces: GamePieceDefinition[];
+}) => {
+    const remainingSet = new Set(remainingPieceIds);
+
+    // Sort by size descending
+    const sortedPieces = [...allPieces].sort((a, b) => b.size - a.size);
+    const usedPieces = sortedPieces.filter(p => !remainingSet.has(p.id));
+    const availablePieces = sortedPieces.filter(p => remainingSet.has(p.id));
+
+    return (
+        <div className="space-y-1">
+            <div className="flex items-center gap-2">
+                <div
+                    className="w-2.5 h-2.5 rounded-sm"
+                    style={{ backgroundColor: color }}
+                />
+                <span className="text-xs font-medium text-foreground capitalize">{colorName}</span>
+                <span className="text-[10px] text-muted">
+                    {usedPieces.length}/{allPieces.length} used
+                </span>
+            </div>
+
+            {/* Used pieces */}
+            {usedPieces.length > 0 && (
+                <div className="ml-4 space-y-0.5">
+                    <p className="text-[9px] text-muted">Used:</p>
+                    <div className="flex flex-wrap gap-1 p-1 bg-surface rounded border border-border/50">
+                        {usedPieces.map(piece => (
+                            <MiniPieceShape
+                                key={piece.id}
+                                piece={piece}
+                                color={color}
+                                isUsed={true}
+                            />
+                        ))}
+                    </div>
+                </div>
+            )}
+
+            {/* Available pieces */}
+            {availablePieces.length > 0 && (
+                <div className="ml-4 space-y-0.5">
+                    <p className="text-[9px] text-muted">Available:</p>
+                    <div className="flex flex-wrap gap-1 p-1 rounded border border-dashed border-border/30">
+                        {availablePieces.map(piece => (
+                            <MiniPieceShape
+                                key={piece.id}
+                                piece={piece}
+                                color={color}
+                                isUsed={false}
+                            />
+                        ))}
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+};
+
 // Columns are defined inside the component to have access to handlers
 
 export const GymnasiumPage = () => {
@@ -274,7 +400,10 @@ export const GymnasiumPage = () => {
 
     // Build model options from checkpoints - show best checkpoint per run (highest win rate)
     const aiModelOptions = useMemo(() => {
-        const options: { value: string; label: string }[] = [{ value: 'random', label: 'Random AI' }];
+        const options: { value: string; label: string }[] = [
+            { value: 'random', label: 'Random AI' },
+            { value: 'heuristic', label: 'Heuristic AI' },
+        ];
 
         // Group checkpoints by run and pick the one with highest win rate
         const checkpointsByRun = new Map<string, typeof alphaZeroCheckpoints[0]>();
@@ -1211,20 +1340,41 @@ export const GymnasiumPage = () => {
                         {/* Scores */}
                         <div className="space-y-2">
                             <h3 className="text-sm font-medium text-secondary">Players</h3>
-                            {gameState && (['blue', 'yellow', 'red', 'green'] as PlayerColor[]).map(color => (
-                                <PlayerScore
-                                    key={color}
-                                    color={color}
-                                    score={gameState.players[color].score}
-                                    remainingPieces={gameState.players[color].remainingPieceIds.length}
-                                    totalPieces={pieces.length}
-                                    isCurrentTurn={gameState.currentPlayer === color}
-                                    isHuman={humanColors.includes(color)}
-                                    isEliminated={gameState.players[color].isEliminated}
-                                    aiModelName={!humanColors.includes(color) ? selectedModelName : undefined}
-                                />
-                            ))}
+                            {gameState && (['blue', 'yellow', 'red', 'green'] as PlayerColor[]).map(color => {
+                                // Get the correct model name based on game mode
+                                const modelId = gameMode === 'spectate' ? perPlayerModels[color] : selectedAIModel;
+                                const modelName = aiModelOptions.find(m => m.value === modelId)?.label || 'Random AI';
+                                return (
+                                    <PlayerScore
+                                        key={color}
+                                        color={color}
+                                        score={gameState.players[color].score}
+                                        remainingPieces={gameState.players[color].remainingPieceIds.length}
+                                        totalPieces={pieces.length}
+                                        isCurrentTurn={gameState.currentPlayer === color}
+                                        isHuman={humanColors.includes(color)}
+                                        isEliminated={gameState.players[color].isEliminated}
+                                        aiModelName={!humanColors.includes(color) ? modelName : undefined}
+                                    />
+                                );
+                            })}
                         </div>
+
+                        {/* Pieces Analysis Panel */}
+                        {gameState && pieces.length > 0 && (
+                            <div className="bg-surface-dim rounded-lg p-3 border border-border space-y-2">
+                                <h4 className="text-xs font-medium text-secondary">Pieces Analysis</h4>
+                                {(['blue', 'yellow', 'red', 'green'] as PlayerColor[]).map(color => (
+                                    <PlayerPiecesSection
+                                        key={color}
+                                        color={PLAYER_COLORS[color]}
+                                        colorName={color}
+                                        remainingPieceIds={gameState.players[color].remainingPieceIds}
+                                        allPieces={pieces}
+                                    />
+                                ))}
+                            </div>
+                        )}
 
                         {/* Piece selection */}
                         {renderPiecePalette()}
@@ -1467,10 +1617,32 @@ export const GymnasiumPage = () => {
                                             )}
 
                                             {progress.phase === 'evaluation' && progress.currentWinRate !== undefined && (
-                                                <div className="flex items-center gap-4 text-xs text-secondary pt-2 border-t border-border">
-                                                    <span>Win rate: {(progress.currentWinRate * 100).toFixed(1)}%</span>
-                                                    <span>Wins: {progress.evalWins}/{progress.evalGames}</span>
-                                                    <span>Threshold: {((progress.promotionThreshold ?? 0.55) * 100).toFixed(0)}%</span>
+                                                <div className="flex flex-col gap-1 text-xs pt-2 border-t border-border">
+                                                    <div className="flex items-center gap-4 text-secondary">
+                                                        <span className="text-foreground font-medium">vs Best Model (400 games)</span>
+                                                        {progress.parallelGames && <span className="text-muted">{progress.parallelGames} parallel</span>}
+                                                    </div>
+                                                    <div className="flex items-center gap-4 text-secondary">
+                                                        <span>Win rate: <span className={progress.currentWinRate >= (progress.promotionThreshold ?? 0.55) ? 'text-success' : 'text-warning'}>{(progress.currentWinRate * 100).toFixed(1)}%</span></span>
+                                                        <span>Wins: {progress.evalWins}/{progress.evalGames}</span>
+                                                        <span>Need: {((progress.promotionThreshold ?? 0.55) * 100).toFixed(0)}% to promote</span>
+                                                    </div>
+                                                </div>
+                                            )}
+
+                                            {progress.phase === 'heuristic_eval' && progress.heuristicWinRate !== undefined && (
+                                                <div className="flex flex-col gap-1 text-xs pt-2 border-t border-border">
+                                                    <div className="flex items-center gap-4 text-secondary">
+                                                        <span className="text-foreground font-medium">vs Heuristic AI (100 games)</span>
+                                                        {progress.parallelGames && <span className="text-muted">{progress.parallelGames} parallel</span>}
+                                                    </div>
+                                                    <div className="flex items-center gap-4 text-secondary">
+                                                        <span>Win rate: <span className={progress.heuristicWinRate >= 0.7 ? 'text-success' : 'text-warning'}>{(progress.heuristicWinRate * 100).toFixed(1)}%</span></span>
+                                                        <span>Wins: {progress.heuristicWins}/{progress.heuristicGames}</span>
+                                                        <span className={progress.heuristicWinRate >= 0.7 ? 'text-success' : 'text-warning'}>
+                                                            {progress.heuristicWinRate >= 0.7 ? '✓ PASSING' : '✗ FAILING'} (need 70%)
+                                                        </span>
+                                                    </div>
                                                 </div>
                                             )}
                                         </div>

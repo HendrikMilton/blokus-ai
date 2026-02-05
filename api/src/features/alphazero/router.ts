@@ -248,6 +248,7 @@ alphaZeroRouter.post('/runs/:id/checkpoint', asyncHandler(async (req, res) => {
         value_loss,
         eval_win_rate,
         eval_games,
+        heuristic_win_rate,
         is_best,
         model_path,
     } = req.body;
@@ -260,6 +261,7 @@ alphaZeroRouter.post('/runs/:id/checkpoint', asyncHandler(async (req, res) => {
         valueLoss: value_loss,
         evalWinRate: eval_win_rate,
         evalGames: eval_games,
+        heuristicWinRate: heuristic_win_rate,
         isBest: is_best,
         modelPath: model_path,
     });

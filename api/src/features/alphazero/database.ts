@@ -60,6 +60,7 @@ export interface AlphaZeroCheckpoint {
     valueLoss: number | null;
     evalWinRate: number | null;
     evalGames: number | null;
+    heuristicWinRate: number | null;
     isBest: boolean;
     modelPath: string;
     createdAt: string;
@@ -96,6 +97,7 @@ interface AlphaZeroCheckpointRow {
     value_loss: number | null;
     eval_win_rate: number | null;
     eval_games: number | null;
+    heuristic_win_rate: number | null;
     is_best: boolean;
     model_path: string;
     created_at: Date;
@@ -132,6 +134,7 @@ const rowToCheckpoint = (row: AlphaZeroCheckpointRow): AlphaZeroCheckpoint => ({
     valueLoss: row.value_loss,
     evalWinRate: row.eval_win_rate,
     evalGames: row.eval_games,
+    heuristicWinRate: row.heuristic_win_rate,
     isBest: row.is_best,
     modelPath: row.model_path,
     createdAt: row.created_at.toISOString(),
@@ -256,6 +259,7 @@ export interface CreateCheckpointData {
     valueLoss?: number | null;
     evalWinRate?: number | null;
     evalGames?: number | null;
+    heuristicWinRate?: number | null;
     isBest?: boolean;
     modelPath: string;
 }
@@ -273,6 +277,7 @@ export const createAlphaZeroCheckpoint = async (
             value_loss: data.valueLoss ?? null,
             eval_win_rate: data.evalWinRate ?? null,
             eval_games: data.evalGames ?? null,
+            heuristic_win_rate: data.heuristicWinRate ?? null,
             is_best: data.isBest ?? false,
             model_path: data.modelPath,
         })

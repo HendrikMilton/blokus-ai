@@ -150,7 +150,7 @@ export interface AlphaZeroProgressPayload {
     policyLoss: number | null;
     valueLoss: number | null;
     // Phase info
-    phase: 'self_play' | 'training' | 'evaluation';
+    phase: 'self_play' | 'training' | 'evaluation' | 'heuristic_eval';
     phaseCurrent: number;
     phaseTotal: number;
     phaseProgress: number; // 0-100
@@ -174,6 +174,13 @@ export interface AlphaZeroProgressPayload {
     evalGames?: number;
     currentWinRate?: number;
     promotionThreshold?: number;
+    // Heuristic baseline evaluation metrics
+    heuristicWins?: number;
+    heuristicGames?: number;
+    heuristicWinRate?: number;
+    // Evaluation type indicator
+    evalType?: 'vs_best' | 'vs_heuristic';
+    parallelGames?: number;
 }
 
 export interface AlphaZeroRunStartedPayload {

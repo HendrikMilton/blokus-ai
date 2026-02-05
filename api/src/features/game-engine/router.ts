@@ -99,6 +99,35 @@ const getAlphaZeroMove = async (game: BlokusGame, checkpointId: string): Promise
     }
 };
 
+// Get heuristic AI move from ML service
+interface HeuristicMoveResponse {
+    piece_idx: number;
+    orientation_idx: number;
+    row: number;
+    col: number;
+}
+
+const getHeuristicMove = async (game: BlokusGame): Promise<Move | null> => {
+    try {
+        const response = await mlHttp.post<HeuristicMoveResponse>(
+            '/alphazero/heuristic-move',
+            {
+                game_state: gameStateForML(game),
+            }
+        );
+
+        return {
+            player: game.getCurrentPlayer(),
+            pieceId: PIECE_IDS[response.piece_idx],
+            position: { row: response.row, col: response.col },
+            orientationIndex: response.orientation_idx,
+        };
+    } catch (err) {
+        console.warn('Heuristic inference failed:', err);
+        return null;
+    }
+};
+
 // Helper to serialize game state (convert Sets to arrays)
 const serializeState = (game: BlokusGame): GameState => {
     const state = game.getState();
@@ -231,7 +260,13 @@ gameRouter.post('/:id/move-with-ai', async (req, res) => {
         const currentPlayer = game.getCurrentPlayer();
         const modelId = getAiModelForPlayer(config, currentPlayer);
 
-        if (modelId) {
+        if (modelId === 'heuristic') {
+            // Pure heuristic AI
+            aiMove = await getHeuristicMove(game);
+            if (!aiMove) {
+                throw new Error('Heuristic AI failed to generate move');
+            }
+        } else if (modelId) {
             // AlphaZero model selected - must use it, no fallback
             aiMove = await getAlphaZeroMove(game, modelId);
             if (!aiMove) {
@@ -284,7 +319,13 @@ gameRouter.post('/:id/ai-move', async (req, res) => {
         const currentPlayer = game.getCurrentPlayer();
         const modelId = getAiModelForPlayer(config, currentPlayer);
 
-        if (modelId) {
+        if (modelId === 'heuristic') {
+            // Pure heuristic AI
+            aiMove = await getHeuristicMove(game);
+            if (!aiMove) {
+                throw new Error('Heuristic AI failed to generate move');
+            }
+        } else if (modelId) {
             // AlphaZero model selected - must use it, no fallback
             aiMove = await getAlphaZeroMove(game, modelId);
             if (!aiMove) {
@@ -364,7 +405,13 @@ gameRouter.post('/:id/pass-with-ai', async (req, res) => {
         const currentPlayer = game.getCurrentPlayer();
         const modelId = getAiModelForPlayer(config, currentPlayer);
 
-        if (modelId) {
+        if (modelId === 'heuristic') {
+            // Pure heuristic AI
+            aiMove = await getHeuristicMove(game);
+            if (!aiMove) {
+                throw new Error('Heuristic AI failed to generate move');
+            }
+        } else if (modelId) {
             // AlphaZero model selected - must use it, no fallback
             aiMove = await getAlphaZeroMove(game, modelId);
             if (!aiMove) {

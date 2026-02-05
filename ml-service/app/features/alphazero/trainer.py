@@ -89,6 +89,8 @@ class TrainingConfig:
 
     # Evaluation
     eval_games: int = 400  # Matches AlphaZero's 400 games for statistical confidence
+    eval_parallel_games: int = 16  # Number of eval games to run in parallel
+    heuristic_eval_games: int = 100  # Games against heuristic baseline
     promotion_threshold: float = 0.55
 
     # === Anti-Collapse Fixes ===
@@ -158,6 +160,8 @@ class TrainingConfig:
             'numResBlocks': 'num_res_blocks',
             'channels': 'channels',
             'evalGames': 'eval_games',
+            'evalParallelGames': 'eval_parallel_games',
+            'heuristicEvalGames': 'heuristic_eval_games',
             'promotionThreshold': 'promotion_threshold',
             'maxGenerations': 'max_generations',
             # Heuristic pretraining
@@ -701,6 +705,10 @@ class AlphaZeroTrainer:
                 self.best_network.to(self.device)
                 win_rate, is_best = self._run_evaluation()
                 self._record_phase_duration('evaluation')
+
+                # Phase 3b: Heuristic baseline check
+                log.info("Phase 3b: Heuristic Baseline Check")
+                heuristic_win_rate = self._run_heuristic_evaluation()
                 self._record_generation_complete()
 
                 # Track best win rate (regardless of promotion)
@@ -708,7 +716,7 @@ class AlphaZeroTrainer:
                     self.best_win_rate = win_rate
 
                 # Save checkpoint
-                model_path = self._save_checkpoint(policy_loss, value_loss, win_rate, is_best)
+                model_path = self._save_checkpoint(policy_loss, value_loss, win_rate, heuristic_win_rate, is_best)
                 log.info(f"Checkpoint saved: {model_path}")
 
                 if is_best:
@@ -1226,74 +1234,103 @@ class AlphaZeroTrainer:
         return avg_policy_loss, avg_value_loss
 
     def _run_evaluation(self) -> tuple[float, bool]:
-        """Evaluate new network against best network using batched MCTS."""
+        """Evaluate new network against best network using parallel games with Rust MCTS."""
         self.phase_start_time = time.time()
         self.network.eval()
         self.best_network.eval()
 
         new_wins = 0
-        games_played = 0
+        games_completed = 0
+        total_games = self.config.eval_games
+        parallel_games = self.config.eval_parallel_games
 
-        for game_idx in range(self.config.eval_games):
+        log.info(f"Starting evaluation: {total_games} games, {parallel_games} in parallel")
+
+        # Track active games: (game, new_player_idx, new_mcts, best_mcts)
+        @dataclass
+        class EvalGame:
+            game: BlokusGame
+            new_player: int  # Which player index the new network plays as
+            new_mcts: HybridMCTS
+            best_mcts: HybridMCTS
+
+        game_start_idx = 0
+
+        while games_completed < total_games:
             if self._stop_requested:
                 break
 
-            # Alternate who plays first
-            new_player = game_idx % 2
+            # Start a batch of parallel games
+            batch_size = min(parallel_games, total_games - games_completed)
+            active_games: list[EvalGame] = []
 
-            # Play a game
-            game = BlokusGame()
+            for i in range(batch_size):
+                game_idx = game_start_idx + i
+                new_player = game_idx % 2  # Alternate who plays first
+                active_games.append(EvalGame(
+                    game=BlokusGame(),
+                    new_player=new_player,
+                    new_mcts=HybridMCTS(self.network, self.mcts_config, self.device),
+                    best_mcts=HybridMCTS(self.best_network, self.mcts_config, self.device),
+                ))
 
-            new_mcts = HybridMCTS(self.network, self.mcts_config, self.device)
-            best_mcts = HybridMCTS(self.best_network, self.mcts_config, self.device)
+            game_start_idx += batch_size
 
-            while not game.is_game_over:
-                legal_moves = game.get_legal_moves()
-                if not legal_moves:
-                    game.pass_turn()
-                    continue
+            # Play all games in this batch to completion
+            while any(not eg.game.is_game_over for eg in active_games):
+                if self._stop_requested:
+                    break
 
-                # Select which network to use
-                current = game.current_player
-                if current == new_player:
-                    mcts = new_mcts
-                else:
-                    mcts = best_mcts
+                for eg in active_games:
+                    if eg.game.is_game_over:
+                        continue
 
-                # Select move (no noise during evaluation)
-                move, _, _ = mcts.search(game, add_noise=False, batch_size=self.config.mcts_batch_size)
-                game.make_move(move)
+                    legal_moves = eg.game.get_legal_moves()
+                    if not legal_moves:
+                        eg.game.pass_turn()
+                        continue
 
-            # Check winner
-            winner = game.get_winner()
-            if winner == new_player:
-                new_wins += 1
+                    # Select which network to use based on current player
+                    current = eg.game.current_player
+                    if current == eg.new_player:
+                        mcts = eg.new_mcts
+                    else:
+                        mcts = eg.best_mcts
 
-            games_played += 1
-            current_win_rate = new_wins / games_played
+                    # Select move (no noise during evaluation)
+                    move, _, _ = mcts.search(eg.game, add_noise=False, batch_size=self.config.mcts_batch_size)
+                    eg.game.make_move(move)
 
-            # Report progress every game
-            message = f"Eval game {games_played}/{self.config.eval_games} - win rate: {current_win_rate:.1%}"
+            # Process completed games
+            for eg in active_games:
+                winner = eg.game.get_winner()
+                if winner == eg.new_player:
+                    new_wins += 1
+                games_completed += 1
 
+            current_win_rate = new_wins / games_completed if games_completed > 0 else 0.0
+
+            # Report progress
+            message = f"Eval vs best: {games_completed}/{total_games} - win rate: {current_win_rate:.1%}"
             self._report_progress(
                 phase='evaluation',
-                phase_progress=games_played / self.config.eval_games,
-                phase_current=games_played,
-                phase_total=self.config.eval_games,
+                phase_progress=games_completed / total_games,
+                phase_current=games_completed,
+                phase_total=total_games,
                 message=message,
                 extra={
                     'evalWins': new_wins,
-                    'evalGames': games_played,
+                    'evalGames': games_completed,
                     'currentWinRate': round(current_win_rate, 3),
                     'promotionThreshold': self.current_promotion_threshold,
-                    'rustMcts': True,
+                    'evalType': 'vs_best',
+                    'parallelGames': parallel_games,
                 }
             )
 
-            if games_played % 5 == 0:
-                log.info(f"Eval {games_played}/{self.config.eval_games}: {new_wins} wins ({current_win_rate:.1%})")
+            log.info(f"Eval vs best: {games_completed}/{total_games}: {new_wins} wins ({current_win_rate:.1%})")
 
-        win_rate = new_wins / games_played if games_played > 0 else 0.0
+        win_rate = new_wins / games_completed if games_completed > 0 else 0.0
         # Use dynamic promotion threshold instead of fixed config value
         is_best = win_rate >= self.current_promotion_threshold
 
@@ -1303,16 +1340,137 @@ class AlphaZeroTrainer:
         threshold_info = ""
         if self.config.dynamic_promotion:
             threshold_info = f" (threshold: {self.current_promotion_threshold:.1%})"
-        log.info(f"Evaluation complete: {new_wins}/{games_played} wins ({win_rate:.2%}) - "
+        log.info(f"Evaluation vs best complete: {new_wins}/{games_completed} wins ({win_rate:.2%}) - "
               f"{'PROMOTED' if is_best else 'not promoted'}{threshold_info}")
 
         return win_rate, is_best
+
+    def _run_heuristic_evaluation(self) -> float:
+        """Evaluate new network against pure heuristic player as sanity check.
+
+        This ensures the trained model never regresses below handcrafted-strategy level.
+        A win rate below 70% indicates potential issues with training.
+        Uses parallel games for faster evaluation.
+
+        Returns:
+            Win rate against heuristic player (0.0 to 1.0)
+        """
+        from .heuristic_player import HeuristicPlayer
+
+        total_games = self.config.heuristic_eval_games
+        parallel_games = self.config.eval_parallel_games
+        heuristic_threshold = 0.70  # Warn if below this
+
+        self.network.eval()
+        self.phase_start_time = time.time()
+
+        log.info(f"Starting heuristic evaluation: {total_games} games, {parallel_games} in parallel")
+
+        # Track active games
+        @dataclass
+        class HeuristicEvalGame:
+            game: BlokusGame
+            nn_player: int  # Which player index the NN plays as
+            nn_mcts: HybridMCTS
+            heuristic: HeuristicPlayer
+
+        new_wins = 0
+        games_completed = 0
+        game_start_idx = 0
+
+        while games_completed < total_games:
+            if self._stop_requested:
+                break
+
+            # Start a batch of parallel games
+            batch_size = min(parallel_games, total_games - games_completed)
+            active_games: list[HeuristicEvalGame] = []
+
+            for i in range(batch_size):
+                game_idx = game_start_idx + i
+                nn_player = game_idx % 2  # Alternate who plays first
+                active_games.append(HeuristicEvalGame(
+                    game=BlokusGame(),
+                    nn_player=nn_player,
+                    nn_mcts=HybridMCTS(self.network, self.mcts_config, self.device),
+                    heuristic=HeuristicPlayer(),
+                ))
+
+            game_start_idx += batch_size
+
+            # Play all games in this batch to completion
+            while any(not eg.game.is_game_over for eg in active_games):
+                if self._stop_requested:
+                    break
+
+                for eg in active_games:
+                    if eg.game.is_game_over:
+                        continue
+
+                    legal_moves = eg.game.get_legal_moves()
+                    if not legal_moves:
+                        eg.game.pass_turn()
+                        continue
+
+                    current = eg.game.current_player
+                    if current == eg.nn_player:
+                        # Neural network plays
+                        move, _, _ = eg.nn_mcts.search(eg.game, add_noise=False,
+                                                       batch_size=self.config.mcts_batch_size)
+                    else:
+                        # Heuristic player plays
+                        move = eg.heuristic.select_move(eg.game)
+
+                    if move:
+                        eg.game.make_move(move)
+                    else:
+                        eg.game.pass_turn()
+
+            # Process completed games
+            for eg in active_games:
+                winner = eg.game.get_winner()
+                if winner == eg.nn_player:
+                    new_wins += 1
+                games_completed += 1
+
+            current_wr = new_wins / games_completed if games_completed > 0 else 0.0
+
+            # Report progress
+            message = f"Eval vs heuristic: {games_completed}/{total_games} - win rate: {current_wr:.1%}"
+            self._report_progress(
+                phase='heuristic_eval',
+                phase_progress=games_completed / total_games,
+                phase_current=games_completed,
+                phase_total=total_games,
+                message=message,
+                extra={
+                    'heuristicWins': new_wins,
+                    'heuristicGames': games_completed,
+                    'heuristicWinRate': round(current_wr, 3),
+                    'evalType': 'vs_heuristic',
+                    'parallelGames': parallel_games,
+                }
+            )
+
+            log.info(f"Eval vs heuristic: {games_completed}/{total_games}: {new_wins} wins ({current_wr:.1%})")
+
+        win_rate = new_wins / games_completed if games_completed > 0 else 0.0
+
+        # Warn if below threshold
+        if win_rate < heuristic_threshold:
+            log.warning(f"Heuristic baseline check FAILED: {win_rate:.1%} < {heuristic_threshold:.0%}")
+            log.warning("Model may have regressed below handcrafted strategy level!")
+        else:
+            log.info(f"Heuristic baseline check PASSED: {win_rate:.1%} >= {heuristic_threshold:.0%}")
+
+        return win_rate
 
     def _save_checkpoint(
         self,
         policy_loss: float,
         value_loss: float,
         eval_win_rate: float,
+        heuristic_win_rate: float,
         is_best: bool,
     ) -> str:
         """Save model checkpoint."""
@@ -1327,6 +1485,7 @@ class AlphaZeroTrainer:
             'policy_loss': policy_loss,
             'value_loss': value_loss,
             'eval_win_rate': eval_win_rate,
+            'heuristic_win_rate': heuristic_win_rate,
             'config': self.config.__dict__,
         }, checkpoint_path)
 
@@ -1340,6 +1499,7 @@ class AlphaZeroTrainer:
                 'policy_loss': policy_loss,
                 'value_loss': value_loss,
                 'eval_win_rate': eval_win_rate,
+                'heuristic_win_rate': heuristic_win_rate,
             }, best_path)
 
         # Report to API

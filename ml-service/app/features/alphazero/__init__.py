@@ -327,6 +327,45 @@ async def export_to_onnx(run_id: str, request: OnnxExportRequest = None):
     )
 
 
+class HeuristicMoveRequest(BaseModel):
+    game_state: Dict[str, Any]
+
+
+class HeuristicMoveResponse(BaseModel):
+    piece_idx: int
+    orientation_idx: int
+    row: int
+    col: int
+
+
+@router.post("/heuristic-move", response_model=HeuristicMoveResponse)
+async def get_heuristic_move(request: HeuristicMoveRequest):
+    """Get AI move using pure heuristic player (no neural network)."""
+    from .heuristic_player import HeuristicPlayer
+
+    # Reconstruct game state
+    game = _dict_to_game(request.game_state)
+
+    # Get legal moves
+    legal_moves = game.get_legal_moves()
+    if not legal_moves:
+        raise HTTPException(status_code=400, detail="No legal moves available")
+
+    # Use heuristic player to select move
+    player = HeuristicPlayer()
+    move = player.select_move(game)
+
+    if not move:
+        raise HTTPException(status_code=400, detail="Heuristic player could not select a move")
+
+    return HeuristicMoveResponse(
+        piece_idx=move.piece_idx,
+        orientation_idx=move.orientation_idx,
+        row=move.row,
+        col=move.col,
+    )
+
+
 @router.get("/health")
 async def health_check():
     """Health check endpoint."""
