@@ -21,7 +21,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from app.logging_config import log
-from .game import BlokusGame, Move
+from .game import BlokusGame, Move, BOARD_SIZE
 from .heuristics import (
     HeuristicConfig,
     ScoringContext,
@@ -52,6 +52,22 @@ class SmartPlayerConfig:
     use_opponent_blocking: bool = True
     use_piece_timing: bool = True
 
+    # Tiebreaker settings (for when piece sizes are equal)
+    use_strategic_tiebreaker: bool = False  # Enable advanced tiebreaking
+    tiebreaker_top_n: int = 5              # Apply tiebreaker to top N same-size moves
+
+    # Position lookahead (Expert only)
+    use_position_lookahead: bool = False   # Evaluate position quality after move
+
+    # Opponent tracking (Expert only)
+    use_opponent_large_piece_blocking: bool = False  # Block spots where opponents could place large pieces
+
+    # Team mode (Expert only) - for 2v2 games
+    # In team mode: players 0 & 2 are a team, players 1 & 3 are a team
+    # None = free-for-all (treat all other players as opponents)
+    # True = team mode (don't block teammate, help teammate expand)
+    team_mode: Optional[bool] = None
+
     # Performance settings
     max_time_ms: Optional[int] = None  # Optional time limit per move
 
@@ -77,11 +93,10 @@ class SmartPlayerConfig:
 
     @classmethod
     def hard(cls) -> 'SmartPlayerConfig':
-        """Hard difficulty - greedy with improved heuristics.
+        """Hard difficulty - greedy with improved heuristics and tiebreaker.
 
-        Lookahead is disabled as testing showed it hurts performance.
-        The exponential piece size scoring provides strong play without
-        needing to look ahead.
+        Uses strategic tiebreaker to pick best move among same-size pieces.
+        This differentiates Hard from Easy/Filler without costly lookahead.
         """
         return cls(
             lookahead_depth=0,
@@ -89,6 +104,8 @@ class SmartPlayerConfig:
             use_mobility_lookahead=False,
             use_corner_differential=False,
             use_opponent_blocking=True,
+            use_strategic_tiebreaker=True,  # Key differentiator from Easy
+            tiebreaker_top_n=8,
         )
 
     @classmethod
@@ -108,12 +125,27 @@ class SmartPlayerConfig:
         )
 
     @classmethod
-    def expert(cls) -> 'SmartPlayerConfig':
-        """Expert difficulty - deeper search."""
+    def expert(cls, team_mode: Optional[bool] = None) -> 'SmartPlayerConfig':
+        """Expert difficulty - Hard + opponent large piece blocking.
+
+        Uses same tiebreaker as Hard but also considers blocking spots
+        where opponents could place their remaining large pieces.
+
+        Args:
+            team_mode: None = free-for-all, True = 2v2 team mode
+                       In team mode, won't block teammate and will help them expand.
+        """
         return cls(
-            lookahead_depth=2,
-            candidate_count=20,
-            opponent_candidate_count=10,
+            lookahead_depth=0,
+            candidate_count=30,
+            use_mobility_lookahead=False,
+            use_corner_differential=False,
+            use_opponent_blocking=True,
+            use_strategic_tiebreaker=True,
+            tiebreaker_top_n=8,
+            use_position_lookahead=False,
+            use_opponent_large_piece_blocking=True,  # Expert-only feature
+            team_mode=team_mode,
         )
 
 
@@ -138,6 +170,24 @@ class SmartPlayer:
         # Statistics
         self.last_move_time_ms: float = 0
         self.last_candidates_evaluated: int = 0
+
+    def _get_teammate(self, player: int) -> Optional[int]:
+        """Get teammate for a player in team mode.
+
+        In 2v2: players 0 & 2 are a team, players 1 & 3 are a team.
+        Returns None if not in team mode.
+        """
+        if not self.config.team_mode:
+            return None
+        return (player + 2) % 4
+
+    def _is_opponent(self, player: int, other: int) -> bool:
+        """Check if other player is an opponent (not self or teammate)."""
+        if other == player:
+            return False
+        if self.config.team_mode:
+            return other != self._get_teammate(player)
+        return True
 
     def _build_heuristic_config(self) -> HeuristicConfig:
         """Build HeuristicConfig from SmartPlayerConfig."""
@@ -225,10 +275,294 @@ class SmartPlayer:
             score = compute_move_heuristic_score(move, game, self._heuristic_config, ctx)
             scored_moves.append((score, move))
 
-        # Sort by score descending and take top N
+        # Sort by score descending
         scored_moves.sort(key=lambda x: x[0], reverse=True)
+
+        # Apply strategic tiebreaker if enabled
+        if self.config.use_strategic_tiebreaker and len(scored_moves) > 1:
+            scored_moves = self._apply_tiebreaker(game, scored_moves, ctx)
+
         n = min(self.config.candidate_count, len(scored_moves))
         return scored_moves[:n]
+
+    def _apply_tiebreaker(
+        self,
+        game: BlokusGame,
+        scored_moves: List[Tuple[float, Move]],
+        ctx: ScoringContext,
+    ) -> List[Tuple[float, Move]]:
+        """
+        Apply strategic tiebreaker to moves with the same piece size.
+
+        When multiple moves use pieces of the same size, use secondary
+        criteria to pick the best position:
+        1. Corners created (future flexibility)
+        2. Blocking opponent corners
+        3. Distance toward center (control)
+        """
+        if not scored_moves:
+            return scored_moves
+
+        # Group top moves by piece size
+        top_size = PIECE_BY_INDEX[scored_moves[0][1].piece_idx].size
+        same_size_moves = []
+        other_moves = []
+
+        for score, move in scored_moves:
+            piece = PIECE_BY_INDEX[move.piece_idx]
+            if piece.size == top_size:
+                same_size_moves.append((score, move))
+            else:
+                other_moves.append((score, move))
+
+        # Only apply tiebreaker if there are multiple same-size moves
+        if len(same_size_moves) <= 1:
+            return scored_moves
+
+        # Limit tiebreaker evaluation to top N for performance
+        n = min(self.config.tiebreaker_top_n, len(same_size_moves))
+        candidates = same_size_moves[:n]
+        rest = same_size_moves[n:]
+
+        # Calculate tiebreaker scores
+        tiebroken = []
+        for base_score, move in candidates:
+            tb_score = self._compute_tiebreaker_score(game, move, ctx)
+            # Add small tiebreaker score (won't override piece size)
+            tiebroken.append((base_score + tb_score * 0.2, move))
+
+        # Sort by new score
+        tiebroken.sort(key=lambda x: x[0], reverse=True)
+
+        # Reconstruct full list
+        return tiebroken + rest + other_moves
+
+    def _compute_tiebreaker_score(
+        self,
+        game: BlokusGame,
+        move: Move,
+        ctx: ScoringContext,
+    ) -> float:
+        """
+        Compute tiebreaker score for a move.
+
+        Higher = better position among same-size pieces.
+        """
+        from .heuristics import blocks_opponent_corners, DIAGONAL_OFFSETS, EDGE_OFFSETS
+
+        piece = PIECE_BY_INDEX[move.piece_idx]
+        cells = piece.get_cells(move.orientation_idx, move.row, move.col)
+        cell_set = set(map(tuple, cells))
+        player_color = move.player + 1
+
+        score = 0.0
+
+        # 1. Corners created (very important - future options)
+        corners_created = 0
+        corner_positions = []  # Track for Expert's advanced features
+        for r, c in cells:
+            for dr, dc in DIAGONAL_OFFSETS:
+                nr, nc = r + dr, c + dc
+                if 0 <= nr < BOARD_SIZE and 0 <= nc < BOARD_SIZE:
+                    if game.board[nr, nc] == 0:
+                        is_valid = True
+                        for edr, edc in EDGE_OFFSETS:
+                            er, ec = nr + edr, nc + edc
+                            if 0 <= er < BOARD_SIZE and 0 <= ec < BOARD_SIZE:
+                                if game.board[er, ec] == player_color:
+                                    is_valid = False
+                                    break
+                            if (er, ec) in cell_set:
+                                is_valid = False
+                                break
+                        if is_valid:
+                            corners_created += 1
+                            corner_positions.append((nr, nc))
+        score += corners_created * 3.0  # Weight corners heavily
+
+        # 2. Blocking opponent corners
+        blocking = blocks_opponent_corners(game, move, ctx)
+        score += blocking * 2.0
+
+        # 3. Prefer moves toward center (more flexibility)
+        avg_row = cells[:, 0].mean()
+        avg_col = cells[:, 1].mean()
+        center_dist = np.sqrt((avg_row - BOARD_SIZE/2)**2 + (avg_col - BOARD_SIZE/2)**2)
+        max_dist = np.sqrt(2) * BOARD_SIZE / 2
+        center_score = (1.0 - center_dist / max_dist) * 2.0
+        score += center_score
+
+        # 4. Avoid edges (less trapped)
+        edge_cells = sum(1 for r, c in cells
+                        if r <= 1 or r >= BOARD_SIZE-2 or c <= 1 or c >= BOARD_SIZE-2)
+        score -= edge_cells * 0.5
+
+        # === Expert-only features (use_opponent_large_piece_blocking) ===
+        if self.config.use_opponent_large_piece_blocking:
+            # 5. Breakout potential - corners in multiple quadrants
+            if corner_positions:
+                quadrants_reached = set()
+                for r, c in corner_positions:
+                    q = (0 if r < BOARD_SIZE//2 else 1, 0 if c < BOARD_SIZE//2 else 1)
+                    quadrants_reached.add(q)
+                score += len(quadrants_reached) * 1.5
+
+            # 6. Expansion direction - prefer corners closer to center
+            if corner_positions:
+                best_corner_centrality = 0.0
+                for r, c in corner_positions:
+                    dist = np.sqrt((r - BOARD_SIZE/2)**2 + (c - BOARD_SIZE/2)**2)
+                    centrality = 1.0 - dist / max_dist
+                    best_corner_centrality = max(best_corner_centrality, centrality)
+                score += best_corner_centrality * 2.0
+
+            # 7. Block opponent large pieces (skip teammate in team mode)
+            large_piece_block_score = self._score_large_piece_blocking(game, move, cell_set)
+            score += large_piece_block_score
+
+            # 8. Team mode: bonus for helping teammate expand
+            if self.config.team_mode:
+                teammate_help_score = self._score_teammate_help(game, move, cell_set, corner_positions)
+                score += teammate_help_score
+
+        return score
+
+    def _score_large_piece_blocking(
+        self,
+        game: BlokusGame,
+        move: Move,
+        cell_set: set,
+    ) -> float:
+        """
+        Score bonus for blocking spots where opponents could place large pieces.
+
+        If an opponent still has 5-cell pieces and our move blocks a spot
+        where they could have placed one, that's valuable.
+
+        In team mode, skips teammate (don't penalize blocking teammate).
+        """
+        score = 0.0
+
+        for opp in range(4):
+            # Skip self
+            if opp == move.player:
+                continue
+
+            # Skip teammate in team mode
+            if not self._is_opponent(move.player, opp):
+                continue
+
+            opp_state = game.players[opp]
+            if opp_state.is_eliminated:
+                continue
+
+            # Check if opponent still has large pieces (size 4-5)
+            large_pieces_remaining = sum(
+                1 for pid in opp_state.remaining_pieces
+                if PIECE_BY_INDEX[pid].size >= 4
+            )
+
+            if large_pieces_remaining == 0:
+                continue
+
+            # Check if our move blocks any of opponent's corners
+            # (making it harder for them to place large pieces)
+            opp_corners = game._valid_corners[opp]
+            blocked_corners = 0
+
+            for corner in opp_corners:
+                # Direct occupation
+                if corner in cell_set:
+                    blocked_corners += 1
+                    continue
+
+                # Edge-adjacent blocking
+                for r, c in cell_set:
+                    if abs(corner[0] - r) + abs(corner[1] - c) == 1:
+                        blocked_corners += 0.5
+                        break
+
+            # More valuable to block opponents with more large pieces
+            score += blocked_corners * (large_pieces_remaining / 10.0)
+
+        return score
+
+    def _score_teammate_help(
+        self,
+        game: BlokusGame,
+        move: Move,
+        cell_set: set,
+        corner_positions: List[Tuple[int, int]],
+    ) -> float:
+        """
+        Score bonus for moves that help teammate in team mode.
+
+        Rewards:
+        - Not blocking teammate's corners (penalty avoided)
+        - Creating corners near teammate's corners (expansion synergy)
+        - Blocking opponents that are threatening teammate
+        """
+        if not self.config.team_mode:
+            return 0.0
+
+        teammate = self._get_teammate(move.player)
+        if teammate is None:
+            return 0.0
+
+        teammate_state = game.players[teammate]
+        if teammate_state.is_eliminated:
+            return 0.0
+
+        score = 0.0
+
+        # 1. Penalty for blocking teammate's corners
+        teammate_corners = game._valid_corners[teammate]
+        blocked_teammate = 0
+        for corner in teammate_corners:
+            if corner in cell_set:
+                blocked_teammate += 2.0  # Direct block is bad
+            else:
+                for r, c in cell_set:
+                    if abs(corner[0] - r) + abs(corner[1] - c) == 1:
+                        blocked_teammate += 1.0  # Edge-adjacent is also bad
+                        break
+        score -= blocked_teammate * 1.5  # Penalty for blocking teammate
+
+        # 2. Bonus for creating corners near teammate's territory
+        # (allows teammate to potentially connect/expand)
+        if corner_positions and teammate_corners:
+            teammate_color = teammate + 1
+            # Check if any new corners are near teammate's existing pieces
+            for cr, cc in corner_positions:
+                # Check if corner is diagonally adjacent to teammate's piece
+                for dr, dc in [(-1, -1), (-1, 1), (1, -1), (1, 1)]:
+                    nr, nc = cr + dr, cc + dc
+                    if 0 <= nr < BOARD_SIZE and 0 <= nc < BOARD_SIZE:
+                        if game.board[nr, nc] == teammate_color:
+                            score += 0.5  # Creates synergy with teammate
+
+        # 3. Bonus for blocking opponents that are near teammate
+        # (defensive help)
+        for opp in range(4):
+            if not self._is_opponent(move.player, opp):
+                continue
+
+            opp_corners = game._valid_corners[opp]
+            # Check if opponent corners are near teammate's corners (threat)
+            for opp_corner in opp_corners:
+                for tm_corner in teammate_corners:
+                    dist = abs(opp_corner[0] - tm_corner[0]) + abs(opp_corner[1] - tm_corner[1])
+                    if dist <= 3:  # Opponent is threatening teammate
+                        # Check if our move blocks this opponent corner
+                        if opp_corner in cell_set:
+                            score += 1.0  # Defended teammate
+                        else:
+                            for r, c in cell_set:
+                                if abs(opp_corner[0] - r) + abs(opp_corner[1] - c) == 1:
+                                    score += 0.5
+                                    break
+
+        return score
 
     def _evaluate_candidates_deep(
         self,
@@ -305,11 +639,60 @@ class SmartPlayer:
             score -= 1.0   # Cornered = bad
         # Otherwise no bonus - don't let mobility override piece size
 
+        # Position lookahead (Expert only): evaluate position quality after move
+        # Use very small weight (0.001) so it only acts as tiebreaker
+        if self.config.use_position_lookahead:
+            position_score = self._evaluate_position(game_copy, move.player)
+            score += position_score * 0.001  # Tiny weight - tiebreaker only
+
         # Evaluate opponent's best response
         opponent_value = self._simulate_opponent_turn(game_copy, move.player, depth - 1)
 
         # Discount opponent's gains
         score -= opponent_value * 0.3
+
+        return score
+
+    def _evaluate_position(self, game: BlokusGame, player: int) -> float:
+        """
+        Evaluate position quality for Expert lookahead.
+
+        Considers:
+        1. Corner advantage (my corners vs opponents)
+        2. Board control (cells in each quadrant)
+        3. Opponent blocking potential
+        """
+        score = 0.0
+
+        # 1. Corner advantage: more corners = more options
+        my_corners = len(game._valid_corners[player])
+        opp_corners = sum(len(game._valid_corners[p]) for p in range(4) if p != player)
+        avg_opp_corners = opp_corners / 3.0
+        corner_advantage = my_corners - avg_opp_corners
+        score += corner_advantage * 2.0
+
+        # 2. Board control: presence in multiple quadrants
+        player_color = player + 1
+        quadrant_presence = {(0, 0): 0, (0, 1): 0, (1, 0): 0, (1, 1): 0}
+        for r in range(BOARD_SIZE):
+            for c in range(BOARD_SIZE):
+                if game.board[r, c] == player_color:
+                    q = (0 if r < 10 else 1, 0 if c < 10 else 1)
+                    quadrant_presence[q] += 1
+
+        # Bonus for presence in multiple quadrants
+        quadrants_with_presence = sum(1 for v in quadrant_presence.values() if v > 0)
+        score += quadrants_with_presence * 1.5
+
+        # 3. Centrality of corners (corners closer to center = better)
+        if my_corners > 0:
+            corner_centrality = 0.0
+            for corner in game._valid_corners[player]:
+                r, c = corner
+                dist = np.sqrt((r - BOARD_SIZE/2)**2 + (c - BOARD_SIZE/2)**2)
+                max_dist = np.sqrt(2) * BOARD_SIZE / 2
+                corner_centrality += (1.0 - dist / max_dist)
+            score += corner_centrality / my_corners * 2.0
 
         return score
 
@@ -618,42 +1001,197 @@ if __name__ == "__main__":
     print(f"\nHard total: {sum(move_times[0]) + sum(move_times[2]):.0f}ms")
     print(f"Easy total: {sum(move_times[1]) + sum(move_times[3]):.0f}ms")
 
+    # === Old tests (commented out) ===
+    # print("\n" + "=" * 60)
+    # print("=== Debug: Comparing Expert vs Easy move selection ===")
+    # print("=" * 60)
+    #
+    # expert = SmartPlayer(SmartPlayerConfig.expert())
+    # easy = SmartPlayer(SmartPlayerConfig.easy())
+    # filler = HeuristicPlayer()
+    #
+    # # Wrap filler in a simple adapter so play_match works
+    # class FillerAdapter:
+    #     def __init__(self, player):
+    #         self._player = player
+    #     def select_move(self, game, verbose=False):
+    #         return self._player.select_move(game)
+    #
+    # filler_adapter = FillerAdapter(filler)
+    #
+    # # Compare what Expert and Easy would pick in same positions
+    # game = BlokusGame()
+    #
+    # print("\nComparing move selection at each turn (first 16 moves):\n")
+    #
+    # for turn in range(16):
+    #     current = game.current_player
+    #
+    #     # Get what both would pick
+    #     expert_move = expert.select_move(game, verbose=False)
+    #     easy_move = easy.select_move(game, verbose=False)
+    #
+    #     if expert_move and easy_move:
+    #         ep = PIECE_BY_INDEX[expert_move.piece_idx]
+    #         eap = PIECE_BY_INDEX[easy_move.piece_idx]
+    #
+    #         same = "SAME" if (expert_move.piece_idx == easy_move.piece_idx and
+    #                          expert_move.row == easy_move.row and
+    #                          expert_move.col == easy_move.col) else "DIFF"
+    #
+    #         print(f"T{game.turn_number:2d} P{current}: Expert={ep.id:3s} at ({expert_move.row:2d},{expert_move.col:2d}), "
+    #               f"Easy={eap.id:3s} at ({easy_move.row:2d},{easy_move.col:2d}) [{same}]")
+    #
+    #         # Play Expert's move to continue
+    #         game.make_move(expert_move)
+    #     else:
+    #         print(f"T{game.turn_number:2d} P{current}: No legal moves")
+    #         game.pass_turn()
+    #
+    # print("\n" + "=" * 60)
+    # print("=== Tests: 8 games each ===")
+    # print("=" * 60)
+    #
+    # hard = SmartPlayer(SmartPlayerConfig.hard())
+    #
+    # print("\nExpert vs Easy:")
+    # results1 = play_match(expert, easy, "Expert", "Easy", num_games=8, verbose=False)
+    # print(f"Results: Expert={results1['Expert']}, Easy={results1['Easy']}")
+    #
+    # print("\nExpert vs Hard:")
+    # results2 = play_match(expert, hard, "Expert", "Hard", num_games=8, verbose=False)
+    # print(f"Results: Expert={results2['Expert']}, Hard={results2['Hard']}")
+    #
+    # print("\nHard vs Easy:")
+    # results3 = play_match(hard, easy, "Hard", "Easy", num_games=8, verbose=False)
+    # print(f"Results: Hard={results3['Hard']}, Easy={results3['Easy']}")
+    #
+    # print("\nExpert vs Filler:")
+    # results4 = play_match(expert, filler_adapter, "Expert", "Filler", num_games=8, verbose=False)
+    # print(f"Results: Expert={results4['Expert']}, Filler={results4['Filler']}")
+    #
+    # print("\nHard vs Filler:")
+    # results5 = play_match(hard, filler_adapter, "Hard", "Filler", num_games=8, verbose=False)
+    # print(f"Results: Hard={results5['Hard']}, Filler={results5['Filler']}")
+    #
+    # print("\n" + "=" * 60)
+    # print("=== Summary ===")
+    # print(f"Expert vs Easy:   Expert={results1['Expert']}, Easy={results1['Easy']}")
+    # print(f"Expert vs Hard:   Expert={results2['Expert']}, Hard={results2['Hard']}")
+    # print(f"Hard vs Easy:     Hard={results3['Hard']}, Easy={results3['Easy']}")
+    # print(f"Expert vs Filler: Expert={results4['Expert']}, Filler={results4['Filler']}")
+    # print(f"Hard vs Filler:   Hard={results5['Hard']}, Filler={results5['Filler']}")
+
+    # =========================================================================
+    # === NEW TESTS: Team Mode vs Free-For-All ===
+    # =========================================================================
+
     print("\n" + "=" * 60)
-    print("=== Now running full test suite ===")
+    print("=== Team Mode Tests ===")
+    print("=== Expert(team) vs Expert(ffa) vs Hard vs Easy ===")
     print("=" * 60)
 
-    easy = SmartPlayer(SmartPlayerConfig.easy())
+    from .game import BlokusGame
+    from .pieces import PIECE_BY_INDEX
+
+    # Create players
+    expert_team = SmartPlayer(SmartPlayerConfig.expert(team_mode=True))
+    expert_ffa = SmartPlayer(SmartPlayerConfig.expert(team_mode=False))
     hard = SmartPlayer(SmartPlayerConfig.hard())
-    filler = HeuristicPlayer()
+    easy = SmartPlayer(SmartPlayerConfig.easy())
 
-    # Wrap filler in a simple adapter so play_match works
-    class FillerAdapter:
-        def __init__(self, player):
-            self._player = player
-        def select_move(self, game, verbose=False):
-            return self._player.select_move(game)
+    def play_4way_match(
+        players: List[SmartPlayer],
+        names: List[str],
+        num_games: int = 8,
+    ) -> dict:
+        """
+        Play a 4-way match where each player controls one position.
 
-    filler_adapter = FillerAdapter(filler)
+        Unlike play_match (2v2 team format), this is true free-for-all
+        or can test team dynamics when team-aware players are used.
+        """
+        # Track individual wins (highest score wins)
+        wins = {name: 0 for name in names}
+        total_scores = {name: 0 for name in names}
 
-    print("\nTest 1: Hard vs Easy")
-    print("-" * 40)
-    results1 = play_match(hard, easy, "Hard", "Easy", num_games=num_games, verbose=False)
-    print(f"Results: Hard={results1['Hard']}, Easy={results1['Easy']}, Ties={results1['ties']}")
+        for game_idx in range(num_games):
+            game = BlokusGame()
 
-    print("\n" + "=" * 60)
-    print("\nTest 2: Hard vs Filler")
-    print("-" * 40)
-    results2 = play_match(hard, filler_adapter, "Hard", "Filler", num_games=num_games, verbose=False)
-    print(f"Results: Hard={results2['Hard']}, Filler={results2['Filler']}, Ties={results2['ties']}")
+            # Rotate starting positions for fairness
+            rotation = game_idx % 4
+            rotated_players = players[rotation:] + players[:rotation]
+            rotated_names = names[rotation:] + names[:rotation]
 
-    print("\n" + "=" * 60)
-    print("\nTest 3: Easy vs Filler")
-    print("-" * 40)
-    results3 = play_match(easy, filler_adapter, "Easy", "Filler", num_games=num_games, verbose=False)
-    print(f"Results: Easy={results3['Easy']}, Filler={results3['Filler']}, Ties={results3['ties']}")
+            while not game.is_game_over:
+                current = game.current_player
+                player = rotated_players[current]
 
+                move = player.select_move(game, verbose=False)
+                if move:
+                    game.make_move(move)
+                else:
+                    game.pass_turn()
+
+            scores = game.get_scores()
+            score_str = ", ".join(f"{rotated_names[i]}={scores[i]}" for i in range(4))
+
+            # Winner is player with highest score
+            max_score = max(scores)
+            winners = [rotated_names[i] for i in range(4) if scores[i] == max_score]
+
+            for winner in winners:
+                wins[winner] += 1.0 / len(winners)  # Split ties
+
+            for i in range(4):
+                total_scores[rotated_names[i]] += scores[i]
+
+            print(f"Game {game_idx + 1}: Scores=[{score_str}], Winner={winners[0] if len(winners) == 1 else 'Tie'}")
+
+        return {'wins': wins, 'avg_scores': {n: total_scores[n] / num_games for n in names}}
+
+    # Test 1: Expert(team) vs Hard - 2v2 format
+    print("\n" + "-" * 50)
+    print("Test 1: Expert(team) vs Hard [2v2 format]")
+    print("Expert(team) at positions 0,2 - Hard at positions 1,3")
+    print("-" * 50)
+    results1 = play_match(expert_team, hard, "Expert-Team", "Hard", num_games=num_games, verbose=False)
+    print(f"Results: Expert-Team={results1['Expert-Team']}, Hard={results1['Hard']}")
+
+    # Test 2: Expert(ffa) vs Hard - 2v2 format
+    print("\n" + "-" * 50)
+    print("Test 2: Expert(ffa) vs Hard [2v2 format]")
+    print("Expert(ffa) at positions 0,2 - Hard at positions 1,3")
+    print("-" * 50)
+    results2 = play_match(expert_ffa, hard, "Expert-FFA", "Hard", num_games=num_games, verbose=False)
+    print(f"Results: Expert-FFA={results2['Expert-FFA']}, Hard={results2['Hard']}")
+
+    # Test 3: Expert(team) vs Expert(ffa) - 2v2 format
+    print("\n" + "-" * 50)
+    print("Test 3: Expert(team) vs Expert(ffa) [2v2 format]")
+    print("Expert(team) at positions 0,2 - Expert(ffa) at positions 1,3")
+    print("-" * 50)
+    results3 = play_match(expert_team, expert_ffa, "Expert-Team", "Expert-FFA", num_games=num_games, verbose=False)
+    print(f"Results: Expert-Team={results3['Expert-Team']}, Expert-FFA={results3['Expert-FFA']}")
+
+    # Test 4: 4-way - Expert(team) vs Expert(ffa) vs Hard vs Easy
+    print("\n" + "-" * 50)
+    print("Test 4: 4-way free-for-all")
+    print("P0=Expert-Team, P1=Expert-FFA, P2=Hard, P3=Easy")
+    print("-" * 50)
+    results4 = play_4way_match(
+        [expert_team, expert_ffa, hard, easy],
+        ["Expert-Team", "Expert-FFA", "Hard", "Easy"],
+        num_games=num_games,
+    )
+    print(f"\nWins: {results4['wins']}")
+    print(f"Avg scores: {results4['avg_scores']}")
+
+    # Summary
     print("\n" + "=" * 60)
     print("=== Summary ===")
-    print(f"Test 1 - Hard vs Easy:   Hard={results1['Hard']}, Easy={results1['Easy']}, Ties={results1['ties']}")
-    print(f"Test 2 - Hard vs Filler: Hard={results2['Hard']}, Filler={results2['Filler']}, Ties={results2['ties']}")
-    print(f"Test 3 - Easy vs Filler: Easy={results3['Easy']}, Filler={results3['Filler']}, Ties={results3['ties']}")
+    print("=" * 60)
+    print(f"Test 1 - Expert(team) vs Hard [2v2]:     Expert-Team={results1['Expert-Team']}, Hard={results1['Hard']}")
+    print(f"Test 2 - Expert(ffa) vs Hard [2v2]:      Expert-FFA={results2['Expert-FFA']}, Hard={results2['Hard']}")
+    print(f"Test 3 - Expert(team) vs Expert(ffa):    Expert-Team={results3['Expert-Team']}, Expert-FFA={results3['Expert-FFA']}")
+    print(f"Test 4 - 4-way: {results4['wins']}")
