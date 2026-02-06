@@ -17,6 +17,21 @@ import type {
 } from '@blokus-ai/shared';
 
 
+export interface SuggestedMove {
+    pieceId: string;
+    pieceSize: number;
+    score: number;
+    row: number;
+    col: number;
+    orientationIdx: number;
+    cells: number[][];
+}
+
+export interface SuggestMovesResponse {
+    moves: SuggestedMove[];
+    processingTimeMs: number;
+}
+
 export interface PerspectiveCorrectionMethod {
     method: string;
     image?: string;  // base64 encoded
@@ -34,8 +49,7 @@ export interface PerspectiveCorrections {
 export interface TestDetectResponse {
     detection: BoardDetection;
     processing_time_ms: number;
-    correctedBoardImage?: string;  // base64 encoded corrected board image (best method)
-    perspectiveCorrections?: PerspectiveCorrections;  // all methods for comparison
+    correctedBoardImage?: string;  // base64 encoded corrected board image (best corner method)
 }
 
 export const ML_API = {
@@ -63,8 +77,18 @@ export const ML_API = {
     },
 
     // Test detection with camera image
-    testDetect: async (image: string, modelId?: string): Promise<TestDetectResponse> => {
-        return http.post<TestDetectResponse>('/api/ml/detect/test', { image, modelId });
+    testDetect: async (image: string, modelId?: string, device?: string): Promise<TestDetectResponse> => {
+        return http.post<TestDetectResponse>('/api/ml/detect/test', { image, modelId, device: device || undefined });
+    },
+
+    // Test grid prediction with base64 corrected board image
+    testGridPredict: async (image: string): Promise<GridPrediction> => {
+        return http.post<GridPrediction>('/api/ml/detect/test-grid-predict', { image });
+    },
+
+    // Move suggestions
+    suggestMoves: async (grid: GridLabels, color: string, usedPieces: Record<string, string[]>): Promise<SuggestMovesResponse> => {
+        return http.post<SuggestMovesResponse>('/api/ml/detect/suggest-moves', { grid, color, usedPieces });
     },
 
     // Pipeline CRUD

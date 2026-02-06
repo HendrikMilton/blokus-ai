@@ -13,7 +13,7 @@ export const mlRouter = Router();
 // POST /api/ml/detect/test - Test detection with base64 image (proxy to ML service)
 // MUST be defined before /detect/:id to avoid route conflicts
 mlRouter.post('/detect/test', asyncHandler(async (req, res) => {
-    const { image, modelId } = req.body as { image: string; modelId?: string };
+    const { image, modelId, device } = req.body as { image: string; modelId?: string; device?: string };
 
     if (!image) {
         throw new BadRequestError('Image is required');
@@ -47,6 +47,7 @@ mlRouter.post('/detect/test', asyncHandler(async (req, res) => {
             const result = await mlHttp.post<TestDetectResponse>('/detect/test', {
                 image,
                 model_id: componentModelId,
+                device: device || undefined,
             });
 
             totalProcessingTime += result.processing_time_ms;
@@ -78,8 +79,29 @@ mlRouter.post('/detect/test', asyncHandler(async (req, res) => {
     const response = await mlHttp.post('/detect/test', {
         image,
         model_id: modelId,
+        device: device || undefined,
     });
 
+    res.json(response);
+}));
+
+// POST /api/ml/detect/test-grid-predict - Test grid prediction with base64 corrected board image
+// MUST be defined before /detect/:id to avoid route conflicts
+mlRouter.post('/detect/test-grid-predict', asyncHandler(async (req, res) => {
+    const { image } = req.body as { image: string };
+
+    if (!image) {
+        throw new BadRequestError('Image is required');
+    }
+
+    const response = await mlHttp.post('/detect/test-grid-predict', { image });
+    res.json(response);
+}));
+
+// POST /api/ml/detect/suggest-moves - Get AI move suggestions (proxy to ML service)
+// MUST be defined before /detect/:id to avoid route conflicts
+mlRouter.post('/detect/suggest-moves', asyncHandler(async (req, res) => {
+    const response = await mlHttp.post('/detect/suggest-moves', req.body);
     res.json(response);
 }));
 

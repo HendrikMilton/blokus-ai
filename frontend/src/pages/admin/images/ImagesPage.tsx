@@ -149,9 +149,10 @@ const matchesPreset = (sample: Sample, preset: FilterPreset, selectedIds?: Set<s
         // Both have bboxes but IoU < 80%
         return sample.iou !== null && sample.iou < 0.8;
     case 'disagreements':
-        // AI and human disagree on board detection
+        // AI and human disagree on board detection or entire board visibility
         return sample.ai !== null && sample.human !== null &&
-                sample.ai.hasBoardDetected !== sample.human.hasBoardDetected;
+                (sample.ai.hasBoardDetected !== sample.human.hasBoardDetected ||
+                 sample.ai.isEntireBoardVisible !== sample.human.isEntireBoardVisible);
     default:
         return true;
     }
@@ -262,6 +263,7 @@ export const ImagesPage = () => {
     // Selection state
     const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
     const [lastClickedIndex, setLastClickedIndex] = useState<number | null>(null);
+    const [humanLabelFilters, setHumanLabelFilters] = useState<string[]>([]);
     const [isDeleting, setIsDeleting] = useState(false);
     const [showDeleteModal, setShowDeleteModal] = useState(false);
 
@@ -818,18 +820,32 @@ export const ImagesPage = () => {
             });
         }
 
+        // Apply human label filters
+        if (humanLabelFilters.length > 0) {
+            filtered = filtered.filter(s => {
+                if (!s.human) return false;
+                for (const f of humanLabelFilters) {
+                    if (f === 'board-detected' && !s.human.hasBoardDetected) return false;
+                    if (f === 'board-not-detected' && s.human.hasBoardDetected) return false;
+                    if (f === 'board-fully-visible' && !s.human.isEntireBoardVisible) return false;
+                    if (f === 'board-not-fully-visible' && s.human.isEntireBoardVisible) return false;
+                }
+                return true;
+            });
+        }
+
         // Apply search filter
         if (searchQuery) {
             filtered = filtered.filter(s => s.id.toLowerCase().includes(searchQuery.toLowerCase()));
         }
 
         return sortSamples(filtered, sort);
-    }, [samples, selectedModelIds, preset, multiModelMode, multiModelSamples, searchQuery, sort, selectedIds]);
+    }, [samples, selectedModelIds, preset, multiModelMode, multiModelSamples, searchQuery, sort, selectedIds, humanLabelFilters]);
 
     // Reset page when filters change
     useEffect(() => {
         setCurrentPage(1);
-    }, [preset, sort, samples.length, searchQuery]);
+    }, [preset, sort, samples.length, searchQuery, humanLabelFilters]);
 
     // Paginate grid view samples
     const paginatedGridSamples = useMemo(() => {
@@ -1337,6 +1353,20 @@ export const ImagesPage = () => {
                             onChange={(v) => setPreset(v as FilterPreset)}
                             options={Object.entries(filterPresetLabels).map(([value, label]) => ({ value, label }))}
                             className="w-40"
+                        />
+                        <MultiSelect
+                            label="Human Labels"
+                            options={[
+                                { value: 'board-detected', label: 'Board detected' },
+                                { value: 'board-fully-visible', label: 'Board fully visible' },
+                                { value: 'board-not-detected', label: 'Board NOT detected' },
+                                { value: 'board-not-fully-visible', label: 'Board NOT fully visible' },
+                            ]}
+                            selected={humanLabelFilters}
+                            onChange={setHumanLabelFilters}
+                            allLabel="All"
+                            placeholder="All"
+                            className="w-52"
                         />
                         {viewType === 'grid' && (
                             <Select

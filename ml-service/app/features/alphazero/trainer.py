@@ -125,6 +125,9 @@ class TrainingConfig:
     pretrain_batch_size: int = 256
     pretrain_lr: float = 0.001
 
+    # Supervised pretraining checkpoint (skip Phase 0 if provided)
+    pretrained_checkpoint: Optional[str] = None
+
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> 'TrainingConfig':
         """Create config from dictionary (with camelCase keys)."""
@@ -183,6 +186,7 @@ class TrainingConfig:
             'adaptiveNoise': 'adaptive_noise',
             'noiseEntropyThreshold': 'noise_entropy_threshold',
             'noiseMultiplierMax': 'noise_multiplier_max',
+            'pretrainedCheckpoint': 'pretrained_checkpoint',
         }
 
         kwargs = {}
@@ -625,8 +629,18 @@ class AlphaZeroTrainer:
         self.training_start_time = time.time()
 
         try:
-            # Phase 0: Heuristic pretraining (before self-play)
-            if self.config.use_heuristic_pretraining:
+            # Load supervised pretrained weights if provided (skips Phase 0)
+            if self.config.pretrained_checkpoint:
+                checkpoint = torch.load(
+                    self.config.pretrained_checkpoint,
+                    map_location=self.device,
+                    weights_only=False,
+                )
+                self.network.load_state_dict(checkpoint['model_state_dict'])
+                self.best_network.load_state_dict(checkpoint['model_state_dict'])
+                log.info(f"Loaded pretrained weights from {self.config.pretrained_checkpoint}")
+            elif self.config.use_heuristic_pretraining:
+                # Phase 0: Heuristic pretraining (before self-play)
                 self._run_heuristic_pretraining()
 
                 if self._stop_requested:

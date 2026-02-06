@@ -444,6 +444,47 @@ async def get_smart_move(request: SmartMoveRequest):
     )
 
 
+class SupervisedTrainRequest(BaseModel):
+    config: Dict[str, Any] = {}
+
+
+@router.post("/supervised-train")
+async def start_supervised_training(
+    request: SupervisedTrainRequest,
+    background_tasks: BackgroundTasks,
+):
+    """Start supervised training in background."""
+    from .supervised_trainer import SupervisedTrainer, SupervisedConfig
+
+    # Build config from request
+    config_dict = request.config
+    config = SupervisedConfig(
+        num_games=config_dict.get("num_games", 5000),
+        epochs=config_dict.get("epochs", 100),
+        batch_size=config_dict.get("batch_size", 4096),
+        learning_rate=config_dict.get("learning_rate", 0.002),
+        eval_interval=config_dict.get("eval_interval", 20),
+        eval_games=config_dict.get("eval_games", 20),
+        save_dir=config_dict.get("save_dir", str(MODELS_DIR / "supervised")),
+        data_path=config_dict.get("data_path"),
+        num_res_blocks=config_dict.get("num_res_blocks", 15),
+        channels=config_dict.get("channels", 256),
+    )
+
+    log.info(f"Starting supervised training: {config}")
+
+    def run_training():
+        try:
+            trainer = SupervisedTrainer(config)
+            trainer.train()
+        except Exception as e:
+            log.error(f"Supervised training failed: {e}", exc_info=True)
+
+    background_tasks.add_task(run_training)
+
+    return {"status": "started", "config": config_dict}
+
+
 @router.get("/health")
 async def health_check():
     """Health check endpoint."""

@@ -17,7 +17,7 @@ from .detector_yolo import detect_board_yolo, detect_board_with_trained_model
 from .perspective import correct_perspective, correct_perspective_all_methods
 from .corner_detection import detect_corners_all_methods
 from .schemas import DetectResponse, BoardDetection, BoundingBox, BoardCorners, Corner
-from .grid_detection import detect_grid_colors, GridPrediction
+from .grid_detection import detect_grid_colors, detect_grid_colors_from_bytes, GridPrediction
 
 # API URL for callbacks
 API_URL = os.environ.get("API_URL", "http://localhost:3009")
@@ -25,6 +25,157 @@ API_URL = os.environ.get("API_URL", "http://localhost:3009")
 router = APIRouter()
 
 DetectorModel = Literal["yolo"]
+
+
+# ============================================================================
+# Move Suggestions - Uses Expert heuristic AI
+# ============================================================================
+
+
+class SuggestMovesRequest(BaseModel):
+    grid: list[list[Optional[str]]]  # 20x20, values: "blue"/"yellow"/"red"/"green"/None
+    color: str  # Which player to suggest for
+    usedPieces: dict[str, list[str]]  # { "blue": ["I5","L5",...], ... }
+
+
+class SuggestedMove(BaseModel):
+    pieceId: str
+    pieceSize: int
+    score: float
+    row: int
+    col: int
+    orientationIdx: int
+    cells: list[list[int]]  # [[r,c],...] absolute board coordinates
+
+
+class SuggestMovesResponse(BaseModel):
+    moves: list[SuggestedMove]
+    processingTimeMs: float
+
+
+def _reconstruct_game_from_grid(
+    grid: list[list[Optional[str]]],
+    color: str,
+    used_pieces: dict[str, list[str]],
+):
+    """Reconstruct a BlokusGame from a detected grid state."""
+    from app.features.alphazero.game import BlokusGame, BOARD_SIZE, EDGE_OFFSETS, DIAGONAL_OFFSETS
+    from app.features.alphazero.pieces import PIECE_INDEX_BY_ID
+
+    COLOR_MAP = {"blue": 1, "yellow": 2, "red": 3, "green": 4}
+    COLOR_TO_PLAYER = {"blue": 0, "yellow": 1, "red": 2, "green": 3}
+
+    game = BlokusGame()
+
+    # 1. Populate board from grid
+    for r in range(BOARD_SIZE):
+        for c in range(BOARD_SIZE):
+            cell = grid[r][c] if r < len(grid) and c < len(grid[r]) else None
+            if cell and cell in COLOR_MAP:
+                game.board[r, c] = COLOR_MAP[cell]
+
+    # 2. Set remaining_pieces and has_played for each player
+    for color_name, player_idx in COLOR_TO_PLAYER.items():
+        used_ids = used_pieces.get(color_name, [])
+        used_indices = set()
+        for pid in used_ids:
+            if pid in PIECE_INDEX_BY_ID:
+                used_indices.add(PIECE_INDEX_BY_ID[pid])
+
+        game.players[player_idx].remaining_pieces -= used_indices
+
+        # Check if player has pieces on the board
+        player_color = player_idx + 1
+        has_pieces = bool(np.any(game.board == player_color))
+        game.players[player_idx].has_played = has_pieces
+
+        if has_pieces:
+            # Compute score (count cells on board)
+            game.players[player_idx].score = int(np.sum(game.board == player_color))
+
+    # 3. Recompute valid corners for all players from scratch
+    for p in range(4):
+        game._valid_corners[p] = set()
+        player_color = p + 1
+
+        if not game.players[p].has_played:
+            # Use starting corner
+            from app.features.alphazero.game import STARTING_CORNERS
+            game._valid_corners[p] = {STARTING_CORNERS[p]}
+            continue
+
+        # Scan board for diagonal attachment points
+        for r in range(BOARD_SIZE):
+            for c in range(BOARD_SIZE):
+                if game.board[r, c] != player_color:
+                    continue
+                for dr, dc in DIAGONAL_OFFSETS:
+                    nr, nc = r + dr, c + dc
+                    if not (0 <= nr < BOARD_SIZE and 0 <= nc < BOARD_SIZE):
+                        continue
+                    if game.board[nr, nc] != 0:
+                        continue
+                    # Check not edge-adjacent to own color
+                    edge_adjacent = False
+                    for edr, edc in EDGE_OFFSETS:
+                        er, ec = nr + edr, nc + edc
+                        if 0 <= er < BOARD_SIZE and 0 <= ec < BOARD_SIZE:
+                            if game.board[er, ec] == player_color:
+                                edge_adjacent = True
+                                break
+                    if not edge_adjacent:
+                        game._valid_corners[p].add((nr, nc))
+
+    # 4. Set current player
+    game.current_player = COLOR_TO_PLAYER.get(color, 0)
+
+    return game
+
+
+@router.post("/suggest-moves", response_model=SuggestMovesResponse)
+async def suggest_moves(request: SuggestMovesRequest):
+    """
+    Get top move suggestions from the Expert heuristic AI.
+    """
+    from app.features.alphazero.smart_player import SmartPlayer, SmartPlayerConfig
+    from app.features.alphazero.pieces import PIECE_BY_INDEX
+
+    start_time = time.perf_counter()
+
+    try:
+        game = _reconstruct_game_from_grid(request.grid, request.color, request.usedPieces)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to reconstruct game: {e}")
+
+    # Get legal moves
+    legal_moves = game.get_legal_moves()
+    if not legal_moves:
+        elapsed_ms = (time.perf_counter() - start_time) * 1000
+        return SuggestMovesResponse(moves=[], processingTimeMs=round(elapsed_ms, 2))
+
+    # Use Expert player to get scored candidates
+    player = SmartPlayer(SmartPlayerConfig.expert())
+    candidates = player._get_top_candidates(game, legal_moves)
+
+    # Take top 3
+    top_moves = []
+    for score, move in candidates[:3]:
+        piece = PIECE_BY_INDEX[move.piece_idx]
+        cells = piece.get_cells(move.orientation_idx, move.row, move.col)
+        top_moves.append(SuggestedMove(
+            pieceId=piece.id,
+            pieceSize=piece.size,
+            score=round(score, 2),
+            row=move.row,
+            col=move.col,
+            orientationIdx=move.orientation_idx,
+            cells=cells.tolist(),
+        ))
+
+    elapsed_ms = (time.perf_counter() - start_time) * 1000
+    print(f"[suggest_moves] color={request.color}, legal_moves={len(legal_moves)}, top={len(top_moves)}, time={elapsed_ms:.0f}ms")
+
+    return SuggestMovesResponse(moves=top_moves, processingTimeMs=round(elapsed_ms, 2))
 
 
 # ============================================================================
@@ -269,27 +420,46 @@ async def bulk_detect(request: BulkDetectRequest, background_tasks: BackgroundTa
 class TestDetectRequest(BaseModel):
     image: str  # base64 encoded image
     model_id: Optional[str] = None
-
-
-class PerspectiveCorrectionMethod(BaseModel):
-    method: str
-    image: Optional[str] = None  # base64 encoded
-    success: bool
-    corners: Optional[list] = None
-
-
-class PerspectiveCorrections(BaseModel):
-    hough_lines_merged: PerspectiveCorrectionMethod
-    hough_lines_extreme: PerspectiveCorrectionMethod
-    color_segmentation: PerspectiveCorrectionMethod
-    contour_detection: PerspectiveCorrectionMethod
+    device: Optional[str] = None  # "cpu", "cuda", or None for auto
 
 
 class TestDetectResponse(BaseModel):
     detection: BoardDetection
     processing_time_ms: float
-    correctedBoardImage: Optional[str] = None  # base64 encoded corrected board image (best method)
-    perspectiveCorrections: Optional[PerspectiveCorrections] = None  # all methods for comparison
+    correctedBoardImage: Optional[str] = None  # base64 encoded corrected board image (best corner method)
+
+
+def _generate_corrected_image(
+    image_path: Path,
+    corners: Optional[BoardCorners],
+    output_size: int = 400,
+) -> Optional[str]:
+    """Generate a perspective-corrected board image from detected corners."""
+    from .perspective import apply_perspective_transform, encode_image_base64
+
+    if corners is None:
+        return None
+
+    try:
+        img = cv2.imread(str(image_path))
+        if img is None:
+            return None
+
+        h, w = img.shape[:2]
+
+        # Convert normalized corners to pixel coordinates
+        pixel_corners = np.array([
+            [corners.topLeft.x * w, corners.topLeft.y * h],
+            [corners.topRight.x * w, corners.topRight.y * h],
+            [corners.bottomRight.x * w, corners.bottomRight.y * h],
+            [corners.bottomLeft.x * w, corners.bottomLeft.y * h],
+        ], dtype=np.float32)
+
+        warped = apply_perspective_transform(img, pixel_corners, output_size)
+        return encode_image_base64(warped)
+    except Exception as e:
+        print(f"[test_detect] Failed to generate corrected image: {e}")
+        return None
 
 
 @router.post("/test", response_model=TestDetectResponse)
@@ -297,6 +467,10 @@ async def test_detect(request: TestDetectRequest):
     """
     Run detection on a base64 encoded image.
     Used for testing models with camera captures.
+
+    Uses the same corner detection flow as the Corners button (best/hough/edge)
+    for perspective correction, which produces much better results than the old
+    heuristic methods.
     """
     # Decode base64 image and save to temp file
     try:
@@ -317,56 +491,46 @@ async def test_detect(request: TestDetectRequest):
     try:
         start_time = time.perf_counter()
 
-        if request.model_id:
-            detection = detect_board_with_trained_model(temp_path, request.model_id)
-        else:
-            detection = detect_board_yolo(temp_path)
+        t0 = time.perf_counter()
+        device = request.device
+        try:
+            if request.model_id:
+                detection = detect_board_with_trained_model(temp_path, request.model_id, device=device)
+            else:
+                detection = detect_board_yolo(temp_path, device=device)
+        except ValueError as e:
+            if "CUDA" in str(e):
+                print(f"[test_detect] CUDA not available, falling back to CPU")
+                device = "cpu"
+                if request.model_id:
+                    detection = detect_board_with_trained_model(temp_path, request.model_id, device=device)
+                else:
+                    detection = detect_board_yolo(temp_path, device=device)
+            else:
+                raise
+        t1 = time.perf_counter()
+        print(f"[test_detect] detection: {(t1-t0)*1000:.0f}ms (model={request.model_id or 'default'}, device={device or 'auto'})")
 
-        # Apply perspective correction if board was detected
         corrected_image = None
-        perspective_corrections = None
 
-        if detection.hasBoardDetected and detection.boundingBox:
-            # Get all correction methods for comparison
-            all_results = correct_perspective_all_methods(temp_path, detection.boundingBox)
+        if detection.hasBoardDetected and detection.isEntireBoardVisible and detection.boundingBox:
+            t2 = time.perf_counter()
+            corner_results = detect_corners_all_methods(temp_path, detection.boundingBox)
+            t3 = time.perf_counter()
+            print(f"[test_detect] corners: {(t3-t2)*1000:.0f}ms (best={corner_results.best.success}, hough={corner_results.hough_ransac.success}, edge={corner_results.edge_intersection.success})")
 
-            perspective_corrections = PerspectiveCorrections(
-                hough_lines_merged=PerspectiveCorrectionMethod(
-                    method=all_results.hough_lines_merged.method,
-                    image=all_results.hough_lines_merged.image,
-                    success=all_results.hough_lines_merged.success,
-                    corners=all_results.hough_lines_merged.corners,
-                ),
-                hough_lines_extreme=PerspectiveCorrectionMethod(
-                    method=all_results.hough_lines_extreme.method,
-                    image=all_results.hough_lines_extreme.image,
-                    success=all_results.hough_lines_extreme.success,
-                    corners=all_results.hough_lines_extreme.corners,
-                ),
-                color_segmentation=PerspectiveCorrectionMethod(
-                    method=all_results.color_segmentation.method,
-                    image=all_results.color_segmentation.image,
-                    success=all_results.color_segmentation.success,
-                    corners=all_results.color_segmentation.corners,
-                ),
-                contour_detection=PerspectiveCorrectionMethod(
-                    method=all_results.contour_detection.method,
-                    image=all_results.contour_detection.image,
-                    success=all_results.contour_detection.success,
-                    corners=all_results.contour_detection.corners,
-                ),
-            )
-
-            # Use the best successful result
-            corrected_image = correct_perspective(temp_path, detection.boundingBox)
+            t4 = time.perf_counter()
+            corrected_image = _generate_corrected_image(temp_path, corner_results.best.corners)
+            t5 = time.perf_counter()
+            print(f"[test_detect] perspective warp: {(t5-t4)*1000:.0f}ms")
 
         elapsed_ms = (time.perf_counter() - start_time) * 1000
+        print(f"[test_detect] total: {elapsed_ms:.0f}ms")
 
         return TestDetectResponse(
             detection=detection,
             processing_time_ms=round(elapsed_ms, 2),
             correctedBoardImage=corrected_image,
-            perspectiveCorrections=perspective_corrections,
         )
     finally:
         # Clean up temp file
@@ -427,6 +591,33 @@ async def predict_grid(request: GridPredictRequest):
     """
     try:
         result = detect_grid_colors(request.image_url)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Grid prediction failed: {e}")
+
+
+class TestGridPredictRequest(BaseModel):
+    image: str  # base64 encoded corrected board image
+
+
+@router.post("/test-grid-predict", response_model=GridPrediction)
+async def test_grid_predict(request: TestGridPredictRequest):
+    """
+    Predict grid colors from a base64 encoded corrected board image.
+    Used by the Test Model tab for live camera testing.
+    """
+    try:
+        t0 = time.perf_counter()
+        # Decode base64 image
+        image_data = request.image
+        if "," in image_data:
+            image_data = image_data.split(",", 1)[1]
+        image_bytes = base64.b64decode(image_data)
+        t1 = time.perf_counter()
+
+        result = detect_grid_colors_from_bytes(image_bytes)
+        t2 = time.perf_counter()
+        print(f"[test_grid_predict] decode: {(t1-t0)*1000:.0f}ms, grid predict: {(t2-t1)*1000:.0f}ms, total: {(t2-t0)*1000:.0f}ms")
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Grid prediction failed: {e}")
@@ -690,6 +881,13 @@ class PerspectiveCorrectionRequest(BaseModel):
     bbox_y: float
     bbox_width: float
     bbox_height: float
+
+
+class PerspectiveCorrectionMethod(BaseModel):
+    method: str
+    image: Optional[str] = None  # base64 encoded
+    success: bool
+    corners: Optional[list] = None
 
 
 class PerspectiveCorrectionResponse(BaseModel):

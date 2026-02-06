@@ -20,6 +20,7 @@ MODELS_DIR = Path(__file__).parent.parent.parent.parent / "models"
 
 class TrainRequest(BaseModel):
     run_id: str
+    sample_ids: list[str] | None = None
 
 
 class TrainResponse(BaseModel):
@@ -126,9 +127,11 @@ class TrainingSample(BaseModel):
     bbox: dict  # { x, y, width, height } - all 0-1 normalized
 
 
-def fetch_training_data() -> list[TrainingSample]:
-    """Fetch verified training samples from the API."""
+def fetch_training_data(sample_ids: list[str] | None = None) -> list[TrainingSample]:
+    """Fetch training samples from the API. If sample_ids provided, only fetch those."""
     url = f"{API_BASE_URL}/api/ml/training-data"
+    if sample_ids:
+        url += f"?sampleIds={','.join(sample_ids)}"
     response = httpx.get(url, timeout=30.0)
     response.raise_for_status()
     data = response.json()
@@ -258,8 +261,11 @@ async def _do_training(request: TrainRequest, start_time: float) -> TrainRespons
     """Internal training logic."""
     # Fetch training data from API
     print("[train] Fetching training data from API...")
-    samples = fetch_training_data()
-    print(f"[train] Got {len(samples)} verified samples")
+    samples = fetch_training_data(request.sample_ids)
+    if request.sample_ids:
+        print(f"[train] Got {len(samples)} samples (filtered from {len(request.sample_ids)} selected)")
+    else:
+        print(f"[train] Got {len(samples)} samples (all human-labeled)")
 
     if len(samples) < 2:
         raise ValueError(f"Need at least 2 samples for training, got {len(samples)}")

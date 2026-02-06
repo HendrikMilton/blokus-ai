@@ -191,20 +191,11 @@ def classify_cell(cell_bgr: np.ndarray, row: int = -1, col: int = -1, debug: boo
     return None, 0.3
 
 
-def detect_grid_colors(image_url: str) -> GridPrediction:
+def _detect_grid_from_image(img: np.ndarray) -> GridPrediction:
     """
-    Detect colors in a 20x20 grid from a cropped board image.
-
-    Args:
-        image_url: URL to a 400x400 cropped board image
-
-    Returns:
-        GridPrediction with the classified grid and confidence metrics
+    Core grid detection logic operating on an already-loaded BGR image.
     """
     start_time = time.perf_counter()
-
-    # Download and load image
-    img = download_image(image_url)
 
     # Resize to exactly 400x400 if needed
     if img.shape[0] != 400 or img.shape[1] != 400:
@@ -259,3 +250,34 @@ def detect_grid_colors(image_url: str) -> GridPrediction:
         cellConfidences=cell_confidences,
         processingTimeMs=round(elapsed_ms, 2),
     )
+
+
+def detect_grid_colors_from_bytes(image_bytes: bytes) -> GridPrediction:
+    """
+    Detect colors in a 20x20 grid from raw image bytes (e.g. base64-decoded).
+
+    Args:
+        image_bytes: Raw image bytes (JPEG/PNG)
+
+    Returns:
+        GridPrediction with the classified grid and confidence metrics
+    """
+    nparr = np.frombuffer(image_bytes, np.uint8)
+    img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    if img is None:
+        raise ValueError("Failed to decode image bytes")
+    return _detect_grid_from_image(img)
+
+
+def detect_grid_colors(image_url: str) -> GridPrediction:
+    """
+    Detect colors in a 20x20 grid from a cropped board image.
+
+    Args:
+        image_url: URL to a 400x400 cropped board image
+
+    Returns:
+        GridPrediction with the classified grid and confidence metrics
+    """
+    img = download_image(image_url)
+    return _detect_grid_from_image(img)

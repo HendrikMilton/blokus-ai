@@ -188,7 +188,7 @@ def detect_corners_with_pose_model(
             os.unlink(tmp_path)
 
 
-def detect_board_yolo(image_path: Path) -> BoardDetection:
+def detect_board_yolo(image_path: Path, device: str | None = None) -> BoardDetection:
     """
     Detect a Blokus board in an image using YOLO26x.
 
@@ -201,7 +201,11 @@ def detect_board_yolo(image_path: Path) -> BoardDetection:
     model = get_model()
     print("[detect_board] model loaded: yolo26x")
 
-    results = model(str(image_path), verbose=False)
+    predict_kwargs: dict = {"verbose": False}
+    if device:
+        predict_kwargs["device"] = device
+
+    results = model(str(image_path), **predict_kwargs)
 
     if not results or len(results) == 0:
         print("[detect_board] no results from model")
@@ -299,7 +303,7 @@ def detect_board_yolo(image_path: Path) -> BoardDetection:
     )
 
 
-def detect_board_with_trained_model(image_path: Path, model_id: str) -> BoardDetection:
+def detect_board_with_trained_model(image_path: Path, model_id: str, device: str | None = None) -> BoardDetection:
     """
     Detect a Blokus board using a trained model.
 
@@ -311,7 +315,11 @@ def detect_board_with_trained_model(image_path: Path, model_id: str) -> BoardDet
     model = get_trained_model(model_id)
     print(f"[detect_board_trained] model loaded: {model_id}")
 
-    results = model(str(image_path), verbose=False)
+    predict_kwargs: dict = {"verbose": False}
+    if device:
+        predict_kwargs["device"] = device
+
+    results = model(str(image_path), **predict_kwargs)
 
     if not results or len(results) == 0:
         print("[detect_board_trained] no results from model")
