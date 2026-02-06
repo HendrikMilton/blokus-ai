@@ -12,7 +12,7 @@ The HeuristicPlayer now supports difficulty levels that map to SmartPlayer
 configurations for stronger play.
 """
 
-from typing import Optional
+from typing import Optional, List
 from enum import Enum
 import numpy as np
 
@@ -45,6 +45,7 @@ class HeuristicPlayer:
         config: Optional[HeuristicConfig] = None,
         difficulty: Difficulty = Difficulty.EASY,
         use_smart_player: bool = False,
+        target_players: Optional[List[int]] = None,
     ):
         """
         Initialize HeuristicPlayer.
@@ -53,10 +54,16 @@ class HeuristicPlayer:
             config: Heuristic configuration (used for EASY mode or when use_smart_player=False)
             difficulty: AI difficulty level
             use_smart_player: If True, use SmartPlayer for MEDIUM+ difficulties
+            target_players: Player indices to target (for AI-targets-human)
         """
         self.config = config or HeuristicConfig()
         self.difficulty = difficulty
         self.use_smart_player = use_smart_player
+        self.target_players = target_players
+
+        # Apply target_players to config
+        if target_players is not None:
+            self.config.target_players = target_players
 
         # Lazy-load SmartPlayer to avoid circular imports
         self._smart_player = None
@@ -67,15 +74,20 @@ class HeuristicPlayer:
             from .smart_player import SmartPlayer, SmartPlayerConfig
 
             if self.difficulty == Difficulty.EASY:
-                self._smart_player = SmartPlayer(SmartPlayerConfig.easy())
+                config = SmartPlayerConfig.easy()
             elif self.difficulty == Difficulty.MEDIUM:
-                self._smart_player = SmartPlayer(SmartPlayerConfig.medium())
+                config = SmartPlayerConfig.medium()
             elif self.difficulty == Difficulty.HARD:
-                self._smart_player = SmartPlayer(SmartPlayerConfig.hard())
+                config = SmartPlayerConfig.hard()
             elif self.difficulty == Difficulty.EXPERT:
-                self._smart_player = SmartPlayer(SmartPlayerConfig.expert())
+                config = SmartPlayerConfig.expert()
             else:
-                self._smart_player = SmartPlayer(SmartPlayerConfig.medium())
+                config = SmartPlayerConfig.medium()
+
+            if self.target_players is not None:
+                config.target_players = self.target_players
+
+            self._smart_player = SmartPlayer(config)
 
         return self._smart_player
 
@@ -133,12 +145,13 @@ class HeuristicPlayer:
         return legal_moves[best_idx]
 
 
-def create_player(difficulty: str = "medium") -> HeuristicPlayer:
+def create_player(difficulty: str = "medium", target_players: Optional[List[int]] = None) -> HeuristicPlayer:
     """
     Factory function to create a heuristic player with specified difficulty.
 
     Args:
         difficulty: "easy", "medium", "hard", or "expert"
+        target_players: Player indices to target (for AI-targets-human)
 
     Returns:
         HeuristicPlayer instance
@@ -155,4 +168,5 @@ def create_player(difficulty: str = "medium") -> HeuristicPlayer:
     return HeuristicPlayer(
         difficulty=diff,
         use_smart_player=True,
+        target_players=target_players,
     )

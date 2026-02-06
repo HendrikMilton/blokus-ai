@@ -16,6 +16,7 @@ Performance targets:
 """
 
 import time
+import random
 from typing import Optional, List, Tuple
 from dataclasses import dataclass
 import numpy as np
@@ -29,7 +30,11 @@ from .heuristics import (
     compute_move_heuristic_score_deep,
     compute_heuristic_policy,
     count_moves_after,
+    count_fully_blocked_corners,
     corner_differential,
+    is_adjacent_player,
+    filter_adjacent_targets,
+    target_direction_score,
     get_game_phase,
     get_phase_weights,
 )
@@ -67,6 +72,28 @@ class SmartPlayerConfig:
     # None = free-for-all (treat all other players as opponents)
     # True = team mode (don't block teammate, help teammate expand)
     team_mode: Optional[bool] = None
+
+    # Targeted blocking - only treat these player indices as opponents
+    # None = all other players are opponents (default behavior)
+    target_players: Optional[List[int]] = None
+
+    # Adjacent-only targeting - only target players sharing a board edge
+    use_adjacent_targeting: bool = False
+
+    # Blocking cap - limit blocking contribution relative to piece size
+    use_blocking_cap: bool = False
+    blocking_cap_ratio: float = 0.3
+
+    # Escape route cutting - bonus for fully blocking opponent corners
+    use_escape_route_cutting: bool = False
+
+    # Expansion direction bias - nudge moves toward targeted opponents' corners
+    use_expansion_toward_targets: bool = False
+
+    # Opening variety - sample among top same-size moves in early game
+    use_opening_variety: bool = False
+    opening_variety_moves: int = 16     # Apply for first N turns (4 per player = 16)
+    opening_variety_top_k: int = 5      # Sample among top K same-size candidates
 
     # Performance settings
     max_time_ms: Optional[int] = None  # Optional time limit per move
@@ -106,6 +133,11 @@ class SmartPlayerConfig:
             use_opponent_blocking=True,
             use_strategic_tiebreaker=True,  # Key differentiator from Easy
             tiebreaker_top_n=8,
+            use_adjacent_targeting=True,
+            use_blocking_cap=True,
+            blocking_cap_ratio=0.3,
+            use_expansion_toward_targets=True,
+            use_opening_variety=True,
         )
 
     @classmethod
@@ -126,10 +158,11 @@ class SmartPlayerConfig:
 
     @classmethod
     def expert(cls, team_mode: Optional[bool] = None) -> 'SmartPlayerConfig':
-        """Expert difficulty - Hard + opponent large piece blocking.
+        """Expert difficulty - Hard + opponent large piece blocking + escape route cutting.
 
         Uses same tiebreaker as Hard but also considers blocking spots
-        where opponents could place their remaining large pieces.
+        where opponents could place their remaining large pieces, and
+        gets bonus for fully cutting opponent escape routes.
 
         Args:
             team_mode: None = free-for-all, True = 2v2 team mode
@@ -146,6 +179,12 @@ class SmartPlayerConfig:
             use_position_lookahead=False,
             use_opponent_large_piece_blocking=True,  # Expert-only feature
             team_mode=team_mode,
+            use_adjacent_targeting=True,
+            use_blocking_cap=True,
+            blocking_cap_ratio=0.3,
+            use_escape_route_cutting=True,
+            use_expansion_toward_targets=True,
+            use_opening_variety=True,
         )
 
 
@@ -185,6 +224,12 @@ class SmartPlayer:
         """Check if other player is an opponent (not self or teammate)."""
         if other == player:
             return False
+        if self.config.target_players is not None:
+            if other not in self.config.target_players:
+                return False
+        if self.config.use_adjacent_targeting:
+            if not is_adjacent_player(player, other):
+                return False
         if self.config.team_mode:
             return other != self._get_teammate(player)
         return True
@@ -197,6 +242,10 @@ class SmartPlayer:
             use_corner_differential=self.config.use_corner_differential,
             use_opponent_blocking=self.config.use_opponent_blocking,
             use_piece_timing=self.config.use_piece_timing,
+            target_players=self.config.target_players,
+            use_adjacent_targeting=self.config.use_adjacent_targeting,
+            use_blocking_cap=self.config.use_blocking_cap,
+            blocking_cap_ratio=self.config.blocking_cap_ratio,
         )
 
     def select_move(self, game: BlokusGame, verbose: bool = False) -> Optional[Move]:
@@ -238,6 +287,23 @@ class SmartPlayer:
             # Depth 1+: Deep evaluation with lookahead
             best_move, best_score = self._evaluate_candidates_deep(game, candidates)
 
+        # Opening variety: sample among top same-size candidates in early game
+        if (self.config.use_opening_variety
+                and turn < self.config.opening_variety_moves
+                and len(candidates) > 1):
+            best_size = PIECE_BY_INDEX[best_move.piece_idx].size
+            same_size = [(s, m) for s, m in candidates if PIECE_BY_INDEX[m.piece_idx].size == best_size]
+            k = min(self.config.opening_variety_top_k, len(same_size))
+            if k > 1:
+                # Softmax sampling weighted by score among top-k
+                top_k = same_size[:k]
+                scores_arr = np.array([s for s, _ in top_k])
+                scores_arr = scores_arr - scores_arr.max()  # numerical stability
+                weights = np.exp(scores_arr / 0.3)  # temperature 0.3
+                weights = weights / weights.sum()
+                chosen_idx = np.random.choice(k, p=weights)
+                best_score, best_move = top_k[chosen_idx]
+
         self.last_move_time_ms = (time.time() - start_time) * 1000
 
         if verbose:
@@ -267,7 +333,7 @@ class SmartPlayer:
             List of (score, move) tuples, sorted by score descending.
         """
         # Create scoring context for batch evaluation (caches expensive computations)
-        ctx = ScoringContext.create(game)
+        ctx = ScoringContext.create(game, target_players=self.config.target_players, use_adjacent_targeting=self.config.use_adjacent_targeting)
 
         # Score all moves with basic (fast) heuristics using cached context
         scored_moves = []
@@ -382,7 +448,12 @@ class SmartPlayer:
 
         # 2. Blocking opponent corners
         blocking = blocks_opponent_corners(game, move, ctx)
-        score += blocking * 2.0
+        blocking_value = blocking * 2.0
+        # Cap blocking relative to corner creation to prevent over-committing
+        if self.config.use_blocking_cap:
+            max_blocking = self.config.blocking_cap_ratio * (corners_created * 3.0 + 1.0)
+            blocking_value = min(blocking_value, max_blocking)
+        score += blocking_value
 
         # 3. Prefer moves toward center (more flexibility)
         avg_row = cells[:, 0].mean()
@@ -391,6 +462,13 @@ class SmartPlayer:
         max_dist = np.sqrt(2) * BOARD_SIZE / 2
         center_score = (1.0 - center_dist / max_dist) * 2.0
         score += center_score
+
+        # 3b. Expansion direction bias - nudge toward targeted opponents
+        if self.config.use_expansion_toward_targets:
+            effective_targets = self.config.target_players
+            if self.config.use_adjacent_targeting:
+                effective_targets = filter_adjacent_targets(move.player, effective_targets)
+            score += target_direction_score(move, game, effective_targets)
 
         # 4. Avoid edges (less trapped)
         edge_cells = sum(1 for r, c in cells
@@ -418,9 +496,18 @@ class SmartPlayer:
 
             # 7. Block opponent large pieces (skip teammate in team mode)
             large_piece_block_score = self._score_large_piece_blocking(game, move, cell_set)
+            # Cap large piece blocking relative to corner creation
+            if self.config.use_blocking_cap:
+                max_lpb = self.config.blocking_cap_ratio * (corners_created * 3.0 + 1.0)
+                large_piece_block_score = min(large_piece_block_score, max_lpb)
             score += large_piece_block_score
 
-            # 8. Team mode: bonus for helping teammate expand
+            # 8. Escape route cutting - bonus for fully blocking opponent corners
+            if self.config.use_escape_route_cutting:
+                escape_score = count_fully_blocked_corners(game, move, ctx)
+                score += escape_score
+
+            # 9. Team mode: bonus for helping teammate expand
             if self.config.team_mode:
                 teammate_help_score = self._score_teammate_help(game, move, cell_set, corner_positions)
                 score += teammate_help_score

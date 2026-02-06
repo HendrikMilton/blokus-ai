@@ -132,7 +132,7 @@ const parseHeuristicModel = (modelId: string): { isHeuristic: boolean; difficult
     return { isHeuristic: true, difficulty: 'easy' };
 };
 
-const getHeuristicMove = async (game: BlokusGame, difficulty: HeuristicDifficulty = 'easy'): Promise<Move | null> => {
+const getHeuristicMove = async (game: BlokusGame, difficulty: HeuristicDifficulty = 'easy', targetPlayers?: number[]): Promise<Move | null> => {
     try {
         // Use SmartPlayer endpoint for medium+ difficulty
         if (difficulty !== 'easy') {
@@ -141,6 +141,7 @@ const getHeuristicMove = async (game: BlokusGame, difficulty: HeuristicDifficult
                 {
                     game_state: gameStateForML(game),
                     difficulty,
+                    target_players: targetPlayers,
                 }
             );
 
@@ -158,6 +159,7 @@ const getHeuristicMove = async (game: BlokusGame, difficulty: HeuristicDifficult
             {
                 game_state: gameStateForML(game),
                 difficulty: 'easy',
+                target_players: targetPlayers,
             }
         );
 
@@ -171,6 +173,14 @@ const getHeuristicMove = async (game: BlokusGame, difficulty: HeuristicDifficult
         console.warn('Heuristic inference failed:', err);
         return null;
     }
+};
+
+// Compute target player indices from config
+const COLOR_TO_INDEX: Record<PlayerColor, number> = { blue: 0, yellow: 1, red: 2, green: 3 };
+
+const getTargetPlayers = (config: GameConfig): number[] | undefined => {
+    if (!config.aiTargetsHuman || !config.humanColors?.length) return undefined;
+    return config.humanColors.map(c => COLOR_TO_INDEX[c]);
 };
 
 // Helper to serialize game state (convert Sets to arrays)
@@ -308,7 +318,7 @@ gameRouter.post('/:id/move-with-ai', async (req, res) => {
 
         if (isHeuristic) {
             // Heuristic AI (with difficulty level)
-            aiMove = await getHeuristicMove(game, difficulty);
+            aiMove = await getHeuristicMove(game, difficulty, getTargetPlayers(config));
             if (!aiMove) {
                 throw new Error('Heuristic AI failed to generate move');
             }
@@ -368,7 +378,7 @@ gameRouter.post('/:id/ai-move', async (req, res) => {
 
         if (isHeuristic) {
             // Heuristic AI (with difficulty level)
-            aiMove = await getHeuristicMove(game, difficulty);
+            aiMove = await getHeuristicMove(game, difficulty, getTargetPlayers(config));
             if (!aiMove) {
                 throw new Error('Heuristic AI failed to generate move');
             }
@@ -455,7 +465,7 @@ gameRouter.post('/:id/pass-with-ai', async (req, res) => {
 
         if (isHeuristic) {
             // Heuristic AI (with difficulty level)
-            aiMove = await getHeuristicMove(game, difficulty);
+            aiMove = await getHeuristicMove(game, difficulty, getTargetPlayers(config));
             if (!aiMove) {
                 throw new Error('Heuristic AI failed to generate move');
             }

@@ -5,6 +5,7 @@ import { ImagesPage } from './pages/admin/images/ImagesPage';
 import { ImageDetailPage } from './pages/admin/images/[id]/ImageDetailPage';
 import { LabelingPage } from './pages/admin/images/label/LabelingPage';
 import { GymnasiumPage } from './pages/admin/gymnasium/GymnasiumPage';
+import { GameReplayPage } from './pages/admin/gymnasium/GameReplayPage';
 import { AdminProvider } from './contexts/AdminContext';
 
 // Wrapper for admin pages that provides AdminContext
@@ -52,6 +53,11 @@ export const routes: RouteConfig[] = [
     {
         path: '/admin/gymnasium',
         element: <GymnasiumPage />,
+        layout: true,
+    },
+    {
+        path: '/admin/gymnasium/games/:id',
+        element: <GameReplayPage />,
         layout: true,
     },
 ];

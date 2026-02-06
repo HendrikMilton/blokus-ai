@@ -1,6 +1,7 @@
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import toast from 'react-hot-toast';
-import { Play, Pause, RotateCcw, FlipHorizontal2, Trophy, Users, Brain, Gamepad2, Plus, Square, X, Download } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { Play, Pause, RotateCcw, FlipHorizontal2, Trophy, Users, Brain, Gamepad2, Plus, Square, X, Download, History, Trash2 } from 'lucide-react';
 import { PLAYER_COLORS } from '@blokus-ai/shared';
 import type {
     GameState,
@@ -8,6 +9,7 @@ import type {
     PlayerColor,
     GamePieceDefinition,
     AlphaZeroProgressPayload,
+    SavedGameSummary,
 } from '@blokus-ai/shared';
 import { Button } from '../../../components/ui/Button';
 import { Select } from '../../../components/ui/Select';
@@ -16,6 +18,7 @@ import { Modal } from '../../../components/ui/Modal';
 import { Input } from '../../../components/ui/Input';
 import { useSocketEvent } from '../../../hooks/useSocketEvent';
 import { GAME_API, ALPHAZERO_API } from '../../../api/game';
+import { GAMES_API } from '../../../api/games';
 import type { AlphaZeroRun, AlphaZeroCheckpoint, AlphaZeroConfig } from '../../../api/game';
 
 // Mock AI model for random baseline (unused, kept for reference)
@@ -366,6 +369,8 @@ const PlayerPiecesSection = ({
 // Columns are defined inside the component to have access to handlers
 
 export const GymnasiumPage = () => {
+    const navigate = useNavigate();
+
     // Tab state
     const [activeTab, setActiveTab] = useState<Tab>('play');
 
@@ -397,6 +402,17 @@ export const GymnasiumPage = () => {
         red: 'random',
         green: 'random',
     });
+
+    // AI targeting
+    const [aiTargetsHuman, setAiTargetsHuman] = useState(false);
+
+    // Player color selection
+    const [selectedColor, setSelectedColor] = useState<PlayerColor>('blue'); // For 1v3
+    const [selectedTeam, setSelectedTeam] = useState<'blue+red' | 'yellow+green'>('blue+red'); // For 2v2
+
+    // Saved games state
+    const [savedGames, setSavedGames] = useState<SavedGameSummary[]>([]);
+    const hasSavedRef = useRef<string | null>(null); // Track which gameId has been saved
 
     // Build model options from checkpoints - show best checkpoint per run (highest win rate)
     const aiModelOptions = useMemo(() => {
@@ -432,8 +448,6 @@ export const GymnasiumPage = () => {
         return options;
     }, [alphaZeroRuns, alphaZeroCheckpoints]);
 
-    const selectedModelName = aiModelOptions.find(m => m.value === selectedAIModel)?.label || 'Random AI';
-
     // Game state
     const [gameId, setGameId] = useState<string | null>(null);
     const [gameState, setGameState] = useState<GameState | null>(null);
@@ -465,10 +479,21 @@ export const GymnasiumPage = () => {
         }
     }, []);
 
-    // Load AlphaZero data on mount
+    // Load saved games
+    const loadSavedGames = useCallback(async () => {
+        try {
+            const res = await GAMES_API.listGames();
+            setSavedGames(res.games);
+        } catch {
+            // Silently fail - games list is not critical
+        }
+    }, []);
+
+    // Load AlphaZero data and saved games on mount
     useEffect(() => {
         loadAlphaZeroData();
-    }, [loadAlphaZeroData]);
+        loadSavedGames();
+    }, [loadAlphaZeroData, loadSavedGames]);
 
     // Listen for AlphaZero progress events
     useSocketEvent('alphazero-progress', (data) => {
@@ -639,35 +664,37 @@ export const GymnasiumPage = () => {
     ], [handleStopTraining, handleDeleteRun]);
 
     // Determine which colors are human/AI based on mode
+    const allColors: PlayerColor[] = ['blue', 'yellow', 'red', 'green'];
+
     const humanColors: PlayerColor[] = useMemo(() => {
         switch (gameMode) {
         case '1v3':
-            return ['blue']; // Human plays only blue
+            return [selectedColor];
         case '2v2':
-            return ['blue', 'red']; // Human plays blue and red (opposite corners)
+            return selectedTeam === 'blue+red' ? ['blue', 'red'] : ['yellow', 'green'];
         case 'spectate':
-            return []; // No human players - AI plays all
+            return [];
         case 'local':
-            return ['blue', 'yellow', 'red', 'green']; // All human (local multiplayer)
+            return allColors;
         default:
-            return ['blue'];
+            return [selectedColor];
         }
-    }, [gameMode]);
+    }, [gameMode, selectedColor, selectedTeam]);
 
     const aiColors: PlayerColor[] = useMemo(() => {
         switch (gameMode) {
         case '1v3':
-            return ['yellow', 'red', 'green']; // AI plays 3 colors
+            return allColors.filter(c => c !== selectedColor);
         case '2v2':
-            return ['yellow', 'green']; // AI plays 2 colors (opposite corners)
+            return selectedTeam === 'blue+red' ? ['yellow', 'green'] : ['blue', 'red'];
         case 'spectate':
-            return ['blue', 'yellow', 'red', 'green']; // AI plays all 4
+            return allColors;
         case 'local':
-            return []; // No AI in local mode
+            return [];
         default:
-            return ['yellow', 'red', 'green'];
+            return allColors.filter(c => c !== selectedColor);
         }
-    }, [gameMode]);
+    }, [gameMode, selectedColor, selectedTeam]);
 
     const isHumanTurn = gameState && humanColors.includes(gameState.currentPlayer);
 
@@ -721,6 +748,7 @@ export const GymnasiumPage = () => {
                 humanColors,
                 aiColors,
                 aiModels: Object.keys(aiModels).length > 0 ? aiModels : undefined,
+                aiTargetsHuman: aiTargetsHuman || undefined,
             });
             setGameId(response.gameId);
             setGameState(response.state);
@@ -732,7 +760,7 @@ export const GymnasiumPage = () => {
         } finally {
             setIsLoading(false);
         }
-    }, [gameMode, humanColors, aiColors, selectedAIModel, perPlayerModels]);
+    }, [gameMode, humanColors, aiColors, selectedAIModel, perPlayerModels, aiTargetsHuman]);
 
     // Get selected piece
     const selectedPiece = useMemo(() => {
@@ -929,6 +957,23 @@ export const GymnasiumPage = () => {
         }
     }, [gameMode, gameId, gameState, isLoading, isPaused, triggerAIMove]);
 
+    // Auto-play AI turns in non-spectate modes (e.g. when AI goes first)
+    useEffect(() => {
+        if (
+            gameMode !== 'spectate' &&
+            gameId &&
+            gameState &&
+            !gameState.isGameOver &&
+            !isLoading &&
+            !isHumanTurn
+        ) {
+            const timer = setTimeout(() => {
+                triggerAIMove();
+            }, 300);
+            return () => clearTimeout(timer);
+        }
+    }, [gameMode, gameId, gameState, isLoading, isHumanTurn, triggerAIMove]);
+
     // Auto-pass when no legal moves are available
     useEffect(() => {
         // Only auto-pass if:
@@ -953,6 +998,53 @@ export const GymnasiumPage = () => {
             return () => clearTimeout(timer);
         }
     }, [gameId, gameState, isHumanTurn, legalMoves, legalMovesLoaded, isLoading, handlePass]);
+
+    // Auto-save game when it ends
+    useEffect(() => {
+        if (
+            gameId &&
+            gameState?.isGameOver &&
+            hasSavedRef.current !== gameId
+        ) {
+            hasSavedRef.current = gameId;
+            // Fetch the move history from the backend, then save
+            GAME_API.getGame(gameId).then(({ moveHistory }) => {
+                const scores = {} as Record<PlayerColor, number>;
+                for (const color of ['blue', 'yellow', 'red', 'green'] as PlayerColor[]) {
+                    scores[color] = gameState.players[color].score;
+                }
+                const sortedScores = Object.entries(scores).sort(([, a], [, b]) => b - a);
+                const winner = sortedScores[0][1] > sortedScores[1][1]
+                    ? sortedScores[0][0] as PlayerColor
+                    : null;
+
+                // Build AI models map
+                const aiModelsMap: Partial<Record<PlayerColor, string>> = {};
+                for (const color of aiColors) {
+                    const modelId = gameMode === 'spectate' ? perPlayerModels[color] : selectedAIModel;
+                    if (modelId) {
+                        aiModelsMap[color] = modelId;
+                    }
+                }
+
+                return GAMES_API.saveGame({
+                    mode: gameMode,
+                    humanColors,
+                    aiColors,
+                    aiModels: Object.keys(aiModelsMap).length > 0 ? aiModelsMap : null,
+                    aiTargetsHuman: aiTargetsHuman || null,
+                    moves: moveHistory,
+                    scores,
+                    winner,
+                    totalMoves: moveHistory.length,
+                });
+            }).then(() => {
+                loadSavedGames();
+            }).catch(() => {
+                // Silently fail - saving is best-effort
+            });
+        }
+    }, [gameId, gameState?.isGameOver, gameState?.players, gameMode, humanColors, aiColors, selectedAIModel, perPlayerModels, aiTargetsHuman, loadSavedGames]);
 
     // Check if current hover position is a valid placement
     const isHoverValid = useMemo(() => {
@@ -1242,6 +1334,89 @@ export const GymnasiumPage = () => {
         return () => window.removeEventListener('keydown', handleKeyDown);
     }, [rotatePiece, flipPiece, availablePieces, selectedPieceId, isLoading, startGame, activeTab]);
 
+    // Saved games table columns
+    const savedGamesColumns: Column<SavedGameSummary>[] = useMemo(() => [
+        {
+            key: 'mode',
+            header: 'Mode',
+            width: '80px',
+            render: (g) => (
+                <span className="text-xs px-2 py-0.5 rounded bg-surface-dim text-secondary">
+                    {g.mode}
+                </span>
+            ),
+        },
+        {
+            key: 'winner',
+            header: 'Winner',
+            render: (g) => g.winner ? (
+                <div className="flex items-center gap-1.5">
+                    <div
+                        className="w-3 h-3 rounded-sm"
+                        style={{ backgroundColor: PLAYER_COLORS[g.winner] }}
+                    />
+                    <span className="capitalize text-sm">{g.winner}</span>
+                </div>
+            ) : (
+                <span className="text-muted text-sm">Draw</span>
+            ),
+        },
+        {
+            key: 'scores',
+            header: 'Scores',
+            render: (g) => (
+                <div className="flex items-center gap-2">
+                    {(['blue', 'yellow', 'red', 'green'] as PlayerColor[]).map(color => (
+                        <div key={color} className="flex items-center gap-0.5" title={color}>
+                            <div
+                                className="w-2 h-2 rounded-sm"
+                                style={{ backgroundColor: PLAYER_COLORS[color] }}
+                            />
+                            <span className="text-xs text-secondary">{g.scores[color]}</span>
+                        </div>
+                    ))}
+                </div>
+            ),
+        },
+        {
+            key: 'totalMoves',
+            header: 'Moves',
+            width: '60px',
+            render: (g) => <span className="text-sm">{g.totalMoves}</span>,
+        },
+        {
+            key: 'createdAt',
+            header: 'Date',
+            sortable: true,
+            render: (g) => (
+                <span className="text-sm text-secondary">
+                    {new Date(g.createdAt).toLocaleDateString()}
+                </span>
+            ),
+        },
+        {
+            key: 'actions',
+            header: '',
+            width: '40px',
+            render: (g) => (
+                <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={(e) => {
+                        e.stopPropagation();
+                        GAMES_API.deleteGame(g.id).then(() => {
+                            loadSavedGames();
+                            toast.success('Game deleted');
+                        }).catch(() => toast.error('Failed to delete'));
+                    }}
+                    title="Delete game"
+                >
+                    <Trash2 className="w-3.5 h-3.5" />
+                </Button>
+            ),
+        },
+    ], [loadSavedGames]);
+
     // Render Play tab content
     const renderPlayTab = () => (
         <>
@@ -1260,6 +1435,61 @@ export const GymnasiumPage = () => {
                                     className="w-full"
                                 />
                             </div>
+                            {gameMode === '1v3' && (
+                                <div>
+                                    <label className="block text-sm font-medium text-secondary mb-1">Play as</label>
+                                    <div className="flex gap-2">
+                                        {allColors.map(color => (
+                                            <button
+                                                key={color}
+                                                onClick={() => setSelectedColor(color)}
+                                                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm transition-all ${
+                                                    selectedColor === color
+                                                        ? 'ring-2 ring-white bg-white/15 text-foreground'
+                                                        : 'bg-surface-dim text-secondary hover:bg-white/10'
+                                                }`}
+                                            >
+                                                <div
+                                                    className="w-3 h-3 rounded-sm"
+                                                    style={{ backgroundColor: PLAYER_COLORS[color] }}
+                                                />
+                                                <span className="capitalize">{color}</span>
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+                            {gameMode === '2v2' && (
+                                <div>
+                                    <label className="block text-sm font-medium text-secondary mb-1">Your Team</label>
+                                    <div className="flex gap-2">
+                                        <button
+                                            onClick={() => setSelectedTeam('blue+red')}
+                                            className={`flex items-center gap-1.5 px-3 py-2 rounded-md text-sm transition-all ${
+                                                selectedTeam === 'blue+red'
+                                                    ? 'ring-2 ring-white bg-white/15 text-foreground'
+                                                    : 'bg-surface-dim text-secondary hover:bg-white/10'
+                                            }`}
+                                        >
+                                            <div className="w-3 h-3 rounded-sm" style={{ backgroundColor: PLAYER_COLORS.blue }} />
+                                            <div className="w-3 h-3 rounded-sm" style={{ backgroundColor: PLAYER_COLORS.red }} />
+                                            <span>Blue + Red</span>
+                                        </button>
+                                        <button
+                                            onClick={() => setSelectedTeam('yellow+green')}
+                                            className={`flex items-center gap-1.5 px-3 py-2 rounded-md text-sm transition-all ${
+                                                selectedTeam === 'yellow+green'
+                                                    ? 'ring-2 ring-white bg-white/15 text-foreground'
+                                                    : 'bg-surface-dim text-secondary hover:bg-white/10'
+                                            }`}
+                                        >
+                                            <div className="w-3 h-3 rounded-sm" style={{ backgroundColor: PLAYER_COLORS.yellow }} />
+                                            <div className="w-3 h-3 rounded-sm" style={{ backgroundColor: PLAYER_COLORS.green }} />
+                                            <span>Yellow + Green</span>
+                                        </button>
+                                    </div>
+                                </div>
+                            )}
                             {gameMode !== 'local' && gameMode !== 'spectate' && (
                                 <div>
                                     <label className="block text-sm font-medium text-secondary mb-1">AI Opponent</label>
@@ -1269,11 +1499,18 @@ export const GymnasiumPage = () => {
                                         onChange={(v) => setSelectedAIModel(String(v))}
                                         className="w-full"
                                     />
-                                    <p className="text-xs text-muted mt-1">
-                                        {gameMode === '1v3' && 'You play as Blue vs 3 AI opponents'}
-                                        {gameMode === '2v2' && 'You play Blue & Red vs AI Yellow & Green'}
-                                    </p>
                                 </div>
+                            )}
+                            {(gameMode === '1v3' || gameMode === '2v2') && selectedAIModel.startsWith('heuristic') && (
+                                <label className="flex items-center gap-2 cursor-pointer">
+                                    <input
+                                        type="checkbox"
+                                        checked={aiTargetsHuman}
+                                        onChange={(e) => setAiTargetsHuman(e.target.checked)}
+                                        className="w-4 h-4 rounded border-border text-blue-500 focus:ring-blue-500"
+                                    />
+                                    <span className="text-sm text-secondary">AI targets human</span>
+                                </label>
                             )}
                             {gameMode === 'spectate' && (
                                 <div className="space-y-3">
@@ -1308,12 +1545,30 @@ export const GymnasiumPage = () => {
                         </div>
                     </div>
 
-                    {/* Empty state */}
-                    <div className="flex flex-col items-center justify-center py-8 text-center">
-                        <Users className="w-16 h-16 text-muted mb-4" />
-                        <p className="text-foreground font-medium">No game in progress</p>
-                        <p className="text-sm text-muted mt-1">Configure and start a new game above</p>
-                    </div>
+                    {/* Saved games list */}
+                    {savedGames.length > 0 && (
+                        <div className="bg-surface border border-border rounded-lg overflow-hidden">
+                            <div className="px-4 py-3 border-b border-border flex items-center gap-2">
+                                <History className="w-4 h-4 text-secondary" />
+                                <h3 className="text-sm font-medium text-foreground">Game History</h3>
+                                <span className="text-xs text-muted">({savedGames.length})</span>
+                            </div>
+                            <Table
+                                columns={savedGamesColumns}
+                                data={savedGames}
+                                getRowKey={(g) => g.id}
+                                onRowClick={(g) => navigate(`/admin/gymnasium/games/${g.id}`)}
+                            />
+                        </div>
+                    )}
+
+                    {savedGames.length === 0 && (
+                        <div className="flex flex-col items-center justify-center py-8 text-center">
+                            <Users className="w-16 h-16 text-muted mb-4" />
+                            <p className="text-foreground font-medium">No game in progress</p>
+                            <p className="text-sm text-muted mt-1">Configure and start a new game above</p>
+                        </div>
+                    )}
                 </div>
             ) : (
                 <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">

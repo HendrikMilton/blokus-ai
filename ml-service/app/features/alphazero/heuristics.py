@@ -21,7 +21,7 @@ import numpy as np
 from typing import List, Tuple, Optional, Dict, Set
 from dataclasses import dataclass, field
 
-from .game import BlokusGame, Move, BOARD_SIZE, EDGE_OFFSETS, DIAGONAL_OFFSETS
+from .game import BlokusGame, Move, BOARD_SIZE, EDGE_OFFSETS, DIAGONAL_OFFSETS, STARTING_CORNERS
 from .pieces import PIECE_CATALOG, PIECE_BY_INDEX, PIECE_INDEX_BY_ID
 
 
@@ -37,6 +37,7 @@ class ScoringContext:
     """
     game: BlokusGame
     player: int
+    target_players: Optional[List[int]] = None
 
     # Cached data (computed lazily)
     _opponent_corners: Optional[Set[Tuple[int, int]]] = field(default=None, repr=False)
@@ -49,8 +50,11 @@ class ScoringContext:
         if self._opponent_corners is None:
             self._opponent_corners = set()
             for opp in range(4):
-                if opp != self.player:
-                    self._opponent_corners.update(self.game._valid_corners[opp])
+                if opp == self.player:
+                    continue
+                if self.target_players is not None and opp not in self.target_players:
+                    continue
+                self._opponent_corners.update(self.game._valid_corners[opp])
         return self._opponent_corners
 
     @property
@@ -74,15 +78,43 @@ class ScoringContext:
         return self._phase_weights
 
     @classmethod
-    def create(cls, game: BlokusGame, player: Optional[int] = None) -> 'ScoringContext':
+    def create(cls, game: BlokusGame, player: Optional[int] = None, target_players: Optional[List[int]] = None, use_adjacent_targeting: bool = False) -> 'ScoringContext':
         """Create a scoring context for the given game state."""
         if player is None:
             player = game.current_player
-        return cls(game=game, player=player)
+        if use_adjacent_targeting:
+            target_players = filter_adjacent_targets(player, target_players)
+        return cls(game=game, player=player, target_players=target_players)
 
 # Board center coordinates
 CENTER_ROW = (BOARD_SIZE - 1) / 2.0  # 9.5 for 20x20
 CENTER_COL = (BOARD_SIZE - 1) / 2.0
+
+
+# ============================================================================
+# Adjacent Player Helpers
+# ============================================================================
+
+def is_adjacent_player(a: int, b: int) -> bool:
+    """Check if two players are adjacent (share a board edge).
+
+    Adjacent pairs (index diff 1 or 3): 0-1, 1-2, 2-3, 3-0
+    Diagonal pairs (index diff 2): 0-2, 1-3
+    """
+    diff = abs(a - b)
+    return diff == 1 or diff == 3
+
+
+def filter_adjacent_targets(current_player: int, target_players: Optional[List[int]]) -> Optional[List[int]]:
+    """Filter target players to only include adjacent ones.
+
+    Returns None if target_players is None (meaning all opponents),
+    in which case returns the adjacent opponents.
+    """
+    if target_players is not None:
+        return [p for p in target_players if is_adjacent_player(current_player, p)]
+    # No explicit targets — return adjacent opponents only
+    return [p for p in range(4) if p != current_player and is_adjacent_player(current_player, p)]
 
 
 # ============================================================================
@@ -201,6 +233,16 @@ class HeuristicConfig:
     use_opponent_blocking: bool = True   # Enable blocking calculation
     use_piece_timing: bool = True        # Enable piece timing
 
+    # Targeted blocking - only treat these player indices as opponents
+    target_players: Optional[List[int]] = None
+
+    # Adjacent-only targeting - only target players sharing a board edge
+    use_adjacent_targeting: bool = False
+
+    # Blocking cap - limit blocking contribution relative to piece size
+    use_blocking_cap: bool = False
+    blocking_cap_ratio: float = 0.3
+
 
 # ============================================================================
 # Game Phase Detection
@@ -260,7 +302,7 @@ def count_moves_after(game: BlokusGame, move: Move) -> int:
     return len(game_copy.get_legal_moves(move.player))
 
 
-def corner_differential(game: BlokusGame, move: Move, player: int) -> float:
+def corner_differential(game: BlokusGame, move: Move, player: int, target_players: Optional[List[int]] = None) -> float:
     """
     Calculate corner differential:
     (my corners gained) + 0.5 * (opponent corners blocked)
@@ -279,10 +321,13 @@ def corner_differential(game: BlokusGame, move: Move, player: int) -> float:
     # Count opponent corners blocked
     blocked = 0
     for opp in range(4):
-        if opp != player:
-            before = len(game._valid_corners[opp])
-            after = len(game_copy._valid_corners[opp])
-            blocked += max(0, before - after)  # Only count if reduced
+        if opp == player:
+            continue
+        if target_players is not None and opp not in target_players:
+            continue
+        before = len(game._valid_corners[opp])
+        after = len(game_copy._valid_corners[opp])
+        blocked += max(0, before - after)  # Only count if reduced
 
     # Corners gained + half credit for blocking
     return (my_corners_after - my_corners_before) + blocked * 0.5
@@ -335,6 +380,110 @@ def blocks_opponent_corners(
                             break
 
     return blocked_score
+
+
+def count_fully_blocked_corners(
+    game: BlokusGame,
+    move: Move,
+    ctx: Optional[ScoringContext] = None,
+) -> float:
+    """
+    Score bonus for fully cutting opponent escape routes.
+
+    A corner is "fully blocked" when all 4 edge-adjacent cells are
+    occupied or out-of-bounds. This means the opponent cannot chain
+    through that corner at all.
+
+    Returns:
+        +5.0 per fully blocked corner (4/4 edges blocked)
+        +1.0 per nearly blocked corner (3/4 edges blocked)
+    """
+    piece = PIECE_BY_INDEX[move.piece_idx]
+    cells = piece.get_cells(move.orientation_idx, move.row, move.col)
+    cell_set = set(map(tuple, cells))
+
+    # Use cached opponent corners if available
+    if ctx is not None:
+        opponent_corners = ctx.opponent_corners
+    else:
+        opponent_corners = set()
+        for opp in range(4):
+            if opp != move.player:
+                opponent_corners.update(game._valid_corners[opp])
+
+    score = 0.0
+
+    for corner in opponent_corners:
+        cr, cc = corner
+        blocked_edges = 0
+        total_edges = 0
+
+        for dr, dc in EDGE_OFFSETS:
+            nr, nc = cr + dr, cc + dc
+            total_edges += 1
+            if nr < 0 or nr >= BOARD_SIZE or nc < 0 or nc >= BOARD_SIZE:
+                blocked_edges += 1  # Out of bounds = blocked
+            elif game.board[nr, nc] != 0:
+                blocked_edges += 1  # Already occupied = blocked
+            elif (nr, nc) in cell_set:
+                blocked_edges += 1  # Our move blocks it
+
+        if blocked_edges == 4:
+            score += 5.0  # Fully cut off
+        elif blocked_edges == 3:
+            score += 1.0  # Nearly cut off
+
+    return score
+
+
+def target_direction_score(
+    move: Move,
+    game: BlokusGame,
+    target_players: Optional[List[int]] = None,
+) -> float:
+    """
+    Score bonus for moves that expand toward targeted opponents' starting corners.
+
+    Computes the minimum Euclidean distance from the move's center to each
+    target player's starting corner, then returns a bonus inversely proportional
+    to that distance.
+
+    Args:
+        move: Move to evaluate
+        game: Current game state
+        target_players: Which opponents to expand toward (None = all non-self)
+
+    Returns:
+        Score from 0.0 to 3.0 (closer to target = higher)
+    """
+    piece = PIECE_BY_INDEX[move.piece_idx]
+    cells = piece.get_cells(move.orientation_idx, move.row, move.col)
+
+    # Compute average position of the move's cells
+    avg_row = cells[:, 0].mean()
+    avg_col = cells[:, 1].mean()
+
+    # Determine targets
+    if target_players is None:
+        targets = [p for p in range(4) if p != move.player]
+    else:
+        targets = [p for p in target_players if p != move.player]
+
+    if not targets:
+        return 0.0
+
+    # Max possible distance is the board diagonal
+    max_possible_dist = np.sqrt((BOARD_SIZE - 1) ** 2 + (BOARD_SIZE - 1) ** 2)  # ~26.87 for 20x20
+
+    # Find minimum distance to any target's starting corner
+    min_dist = float('inf')
+    for t in targets:
+        corner = STARTING_CORNERS[t]
+        dist = np.sqrt((avg_row - corner[0]) ** 2 + (avg_col - corner[1]) ** 2)
+        min_dist = min(min_dist, dist)
+
+    # Closer to target = higher bonus, max 3.0
+    return (1.0 - min_dist / max_possible_dist) * 3.0
 
 
 def piece_timing_bonus(piece_id: str, turn: int, total_turns: int = 80) -> float:
@@ -537,7 +686,13 @@ def compute_move_heuristic_score(
     blocking_mult = weights.blocking if weights else 0.5
     if turn > config.early_game_turns and config.use_opponent_blocking:
         blocking_score = blocks_opponent_corners(game, move, ctx)
-        score += blocking_mult * blocking_score * 0.3
+        blocking_contribution = blocking_mult * blocking_score * 0.3
+        # Cap blocking relative to piece size to prevent over-committing to blocking
+        if config.use_blocking_cap:
+            piece_size_contribution = piece_size_mult * piece_size_score
+            max_blocking = config.blocking_cap_ratio * piece_size_contribution
+            blocking_contribution = min(blocking_contribution, max_blocking)
+        score += blocking_contribution
 
     # 6. PIECE TIMING BONUS
     if config.use_piece_timing:
@@ -591,7 +746,10 @@ def compute_move_heuristic_score_deep(
 
     # Add corner differential (expensive - requires game clone)
     if include_corner_diff and config.use_corner_differential:
-        corner_diff = corner_differential(game, move, move.player)
+        targets = config.target_players
+        if config.use_adjacent_targeting:
+            targets = filter_adjacent_targets(move.player, targets)
+        corner_diff = corner_differential(game, move, move.player, targets)
         corner_diff_mult = weights.corner_diff if weights else 1.0
         score += corner_diff_mult * corner_diff * 0.5
 
@@ -621,7 +779,7 @@ def compute_heuristic_policy(
         config = HeuristicConfig()
 
     # Create scoring context for batch evaluation (caches expensive computations)
-    ctx = ScoringContext.create(game)
+    ctx = ScoringContext.create(game, target_players=config.target_players, use_adjacent_targeting=config.use_adjacent_targeting)
 
     # Compute raw scores with cached context
     scores = np.array([

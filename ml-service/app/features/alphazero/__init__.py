@@ -330,6 +330,7 @@ async def export_to_onnx(run_id: str, request: OnnxExportRequest = None):
 class HeuristicMoveRequest(BaseModel):
     game_state: Dict[str, Any]
     difficulty: Optional[str] = "easy"  # "easy", "medium", "hard", "expert"
+    target_players: Optional[List[int]] = None  # Player indices to target (for AI-targets-human)
 
 
 class HeuristicMoveResponse(BaseModel):
@@ -342,6 +343,7 @@ class HeuristicMoveResponse(BaseModel):
 class SmartMoveRequest(BaseModel):
     game_state: Dict[str, Any]
     difficulty: str = "hard"  # "easy", "medium", "hard", "expert"
+    target_players: Optional[List[int]] = None  # Player indices to target (for AI-targets-human)
 
 
 class SmartMoveResponse(BaseModel):
@@ -368,7 +370,7 @@ async def get_heuristic_move(request: HeuristicMoveRequest):
 
     # Use heuristic player to select move (with difficulty support)
     difficulty = request.difficulty or "easy"
-    player = create_player(difficulty)
+    player = create_player(difficulty, target_players=request.target_players)
     move = player.select_move(game)
 
     if not move:
@@ -422,6 +424,9 @@ async def get_smart_move(request: SmartMoveRequest):
         config = SmartPlayerConfig.expert()
     else:
         config = SmartPlayerConfig.hard()
+
+    if request.target_players is not None:
+        config.target_players = request.target_players
 
     player = SmartPlayer(config)
     move = player.select_move(game)

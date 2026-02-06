@@ -58,6 +58,7 @@ export interface GameConfig {
     aiColors: PlayerColor[];     // Colors controlled by AI
     aiModelId?: string;          // Checkpoint ID for AlphaZero (undefined = random AI) - legacy, use aiModels
     aiModels?: Partial<Record<PlayerColor, string>>;  // Per-player AI model checkpoint IDs
+    aiTargetsHuman?: boolean;    // When true, heuristic AI focuses blocking on human player(s)
 }
 
 // Result of attempting a move
@@ -100,3 +101,32 @@ export const TWO_PLAYER_TEAMS: Record<'player1' | 'player2', PlayerColor[]> = {
     player1: ['blue', 'red'],     // Opposite corners
     player2: ['yellow', 'green'], // Opposite corners
 };
+
+// Saved game (full, for detail/replay page)
+export interface SavedGame {
+    id: string;
+    mode: string;
+    humanColors: PlayerColor[];
+    aiColors: PlayerColor[];
+    aiModels: Partial<Record<PlayerColor, string>> | null;
+    aiTargetsHuman: boolean | null;
+    moves: Move[];
+    scores: Record<PlayerColor, number>;
+    winner: PlayerColor | null;
+    totalMoves: number;
+    createdAt: string;
+}
+
+// Saved game summary (without moves, for list)
+export interface SavedGameSummary {
+    id: string;
+    mode: string;
+    humanColors: PlayerColor[];
+    aiColors: PlayerColor[];
+    aiModels: Partial<Record<PlayerColor, string>> | null;
+    aiTargetsHuman: boolean | null;
+    scores: Record<PlayerColor, number>;
+    winner: PlayerColor | null;
+    totalMoves: number;
+    createdAt: string;
+}
