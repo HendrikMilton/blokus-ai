@@ -1,3 +1,9 @@
+import os
+import torch
+
+if not torch.cuda.is_available():
+    os.environ["CUDA_VISIBLE_DEVICES"] = ""
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 

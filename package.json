@@ -5,6 +5,7 @@
   "scripts": {
     "start": "bun install && bun run --cwd shared build && bun run --filter '*' dev",
     "build": "bun install && bun run --cwd shared build && bun run --cwd api build && bun run --cwd frontend build",
+    "dev": "./dev.sh",
     "dev:tunnel": "./tunnel-ssh.sh",
     "dev:cf": "./tunnel-cf.sh",
     "dev:lt": "./tunnel.sh"
