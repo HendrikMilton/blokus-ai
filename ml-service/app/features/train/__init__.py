@@ -76,6 +76,7 @@ def report_completion(
     pose_loss: float | None = None,
     pose_error: float | None = None,
     pose_image_count: int | None = None,
+    model_s3_url: str | None = None,
 ):
     """Report training completion back to the API."""
     try:
@@ -95,6 +96,7 @@ def report_completion(
                 "pose_error": pose_error,
                 "pose_image_count": pose_image_count,
                 "duration_ms": duration_ms,
+                "model_s3_url": model_s3_url,
             },
             timeout=10.0,
         )
@@ -455,6 +457,18 @@ async def _do_training(request: TrainRequest, start_time: float) -> TrainRespons
             traceback.print_exc()
             # Don't fail the whole training run if pose fails
 
+        # Upload model files to S3
+        model_s3_url: str | None = None
+        try:
+            from app.lib.s3 import upload_model_directory
+            model_s3_url = upload_model_directory(request.run_id, model_dir)
+            print(f"[train] Model uploaded to S3: {model_s3_url}")
+        except Exception as e:
+            print(f"[train] Failed to upload model to S3: {e}")
+            import traceback
+            traceback.print_exc()
+            # Don't fail the training run if S3 upload fails
+
         # Report completion to API
         duration_ms = int((time.time() - start_time) * 1000)
         report_completion(
@@ -470,6 +484,7 @@ async def _do_training(request: TrainRequest, start_time: float) -> TrainRespons
             pose_loss=pose_loss,
             pose_error=pose_error,
             pose_image_count=pose_image_count,
+            model_s3_url=model_s3_url,
         )
 
         return TrainResponse(

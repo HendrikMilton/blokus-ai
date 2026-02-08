@@ -139,6 +139,7 @@ export interface TrainingRun {
     poseError: number | null;
     poseImageCount: number | null;
     errorMessage: string | null;
+    modelS3Url: string | null;
     createdAt: string;
 }
 

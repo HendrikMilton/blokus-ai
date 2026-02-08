@@ -99,10 +99,21 @@ async def get_move(request: AlphaZeroMoveRequest):
     from .network import BlokusNet, create_network
     from .mcts import MCTS, MCTSConfig
 
-    # Load model
+    # Load model - try local first, fall back to S3
     model_path = Path(request.model_path)
     if not model_path.exists():
-        raise HTTPException(status_code=404, detail=f"Model not found: {model_path}")
+        # Try downloading from S3 (model_path like "models/supervised/best.pt")
+        from app.lib.s3 import download_model_file, MODELS_BUCKET
+        s3_key = str(model_path)
+        try:
+            model_path.parent.mkdir(parents=True, exist_ok=True)
+            log.info(f"Model not found locally, downloading from S3: {s3_key}")
+            from app.lib.s3 import get_s3_client
+            s3 = get_s3_client()
+            s3.download_file(MODELS_BUCKET, s3_key, str(model_path))
+            log.info(f"Downloaded model from S3: {model_path}")
+        except Exception as e:
+            raise HTTPException(status_code=404, detail=f"Model not found locally or in S3: {model_path} ({e})")
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
 

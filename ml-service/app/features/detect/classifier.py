@@ -53,6 +53,14 @@ def get_classifier(model_id: str) -> nn.Module | None:
         model_path = MODELS_DIR / model_id / "classifier.pt"
 
         if not model_path.exists():
+            # Try downloading from S3
+            from app.lib.s3 import ensure_model_local
+            try:
+                ensure_model_local(model_id, MODELS_DIR)
+            except FileNotFoundError:
+                pass
+
+        if not model_path.exists():
             print(f"[classifier] No classifier found at {model_path}")
             return None
 

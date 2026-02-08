@@ -26,12 +26,19 @@ def get_model() -> YOLO:
 
 
 def get_trained_model(model_id: str) -> YOLO:
-    """Load a trained model by ID, with caching."""
+    """Load a trained model by ID, with caching. Downloads from S3 if not found locally."""
     if model_id not in _trained_models:
         model_path = MODELS_DIR / model_id / "best.pt"
         if not model_path.exists():
             # Try weights subdirectory
             model_path = MODELS_DIR / model_id / "weights" / "best.pt"
+        if not model_path.exists():
+            # Try downloading from S3
+            from app.lib.s3 import ensure_model_local
+            ensure_model_local(model_id, MODELS_DIR)
+            model_path = MODELS_DIR / model_id / "best.pt"
+            if not model_path.exists():
+                model_path = MODELS_DIR / model_id / "weights" / "best.pt"
         if not model_path.exists():
             raise FileNotFoundError(f"Model not found: {model_id}")
         print(f"[detect] Loading trained model: {model_path}")
@@ -40,9 +47,17 @@ def get_trained_model(model_id: str) -> YOLO:
 
 
 def get_pose_model(model_id: str) -> YOLO | None:
-    """Load a trained pose model by ID, with caching. Returns None if not found."""
+    """Load a trained pose model by ID, with caching. Downloads from S3 if not found locally."""
     if model_id not in _pose_models:
         model_path = MODELS_DIR / model_id / "pose.pt"
+        if not model_path.exists():
+            # Try downloading from S3
+            from app.lib.s3 import ensure_model_local
+            try:
+                ensure_model_local(model_id, MODELS_DIR)
+            except FileNotFoundError:
+                pass
+            model_path = MODELS_DIR / model_id / "pose.pt"
         if not model_path.exists():
             print(f"[detect] Pose model not found: {model_path}")
             return None

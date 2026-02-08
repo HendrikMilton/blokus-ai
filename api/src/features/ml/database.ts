@@ -802,6 +802,7 @@ interface TrainingRunRow {
     pose_error: number | null;
     pose_image_count: number | null;
     error_message: string | null;
+    model_s3_url: string | null;
     created_at: Date;
     updated_at: Date;
 }
@@ -824,6 +825,7 @@ const rowToTrainingRun = (row: TrainingRunRow): TrainingRun => ({
     poseError: row.pose_error,
     poseImageCount: row.pose_image_count,
     errorMessage: row.error_message,
+    modelS3Url: row.model_s3_url,
     createdAt: row.created_at.toISOString(),
 });
 
@@ -853,6 +855,7 @@ export interface TrainingRunUpdate {
     poseError?: number;
     poseImageCount?: number;
     errorMessage?: string;
+    modelS3Url?: string;
 }
 
 export const updateTrainingRun = async (
@@ -908,6 +911,9 @@ export const updateTrainingRun = async (
     }
     if (updates.errorMessage !== undefined) {
         dbUpdates.error_message = updates.errorMessage;
+    }
+    if (updates.modelS3Url !== undefined) {
+        dbUpdates.model_s3_url = updates.modelS3Url;
     }
 
     const [row] = await trx<TrainingRunRow>('training_runs')

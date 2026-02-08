@@ -299,6 +299,7 @@ mlRouter.post('/training-runs/:id/complete', asyncHandler(async (req, res) => {
         pose_error,
         pose_image_count,
         duration_ms,
+        model_s3_url,
     } = req.body;
 
     log.info(`[train] Training run ${id} completed callback received`);
@@ -322,6 +323,7 @@ mlRouter.post('/training-runs/:id/complete', asyncHandler(async (req, res) => {
         poseLoss: pose_loss,
         poseError: pose_error,
         poseImageCount: pose_image_count,
+        modelS3Url: model_s3_url,
     });
 
     emitEvent('training-run-completed', { run: completedRun! });

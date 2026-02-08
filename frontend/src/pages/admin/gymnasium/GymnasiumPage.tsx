@@ -422,6 +422,7 @@ export const GymnasiumPage = () => {
             { value: 'heuristic:medium', label: 'Heuristic AI (Medium)' },
             { value: 'heuristic:hard', label: 'Heuristic AI (Hard)' },
             { value: 'heuristic:expert', label: 'Heuristic AI (Expert)' },
+            { value: 'supervised', label: 'Supervised NN' },
         ];
 
         // Group checkpoints by run and pick the one with highest win rate

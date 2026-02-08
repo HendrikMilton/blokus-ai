@@ -99,6 +99,25 @@ const getAlphaZeroMove = async (game: BlokusGame, checkpointId: string): Promise
     }
 };
 
+// Get supervised model move from ML service
+const getSupervisedMove = async (game: BlokusGame): Promise<Move | null> => {
+    try {
+        const response = await mlHttp.post<AlphaZeroMoveResponse>(
+            '/alphazero/move',
+            {
+                game_state: gameStateForML(game),
+                model_path: 'models/supervised/best.pt',
+                mcts_simulations: 100,
+            }
+        );
+
+        return mlMoveToGameMove(response, game.getCurrentPlayer());
+    } catch (err) {
+        console.warn('Supervised model inference failed:', err);
+        return null;
+    }
+};
+
 // Get heuristic AI move from ML service
 interface HeuristicMoveResponse {
     piece_idx: number;
@@ -316,7 +335,13 @@ gameRouter.post('/:id/move-with-ai', async (req, res) => {
         const modelId = getAiModelForPlayer(config, currentPlayer);
         const { isHeuristic, difficulty } = parseHeuristicModel(modelId || '');
 
-        if (isHeuristic) {
+        if (modelId === 'supervised') {
+            // Supervised neural network model
+            aiMove = await getSupervisedMove(game);
+            if (!aiMove) {
+                throw new Error('Supervised model failed to generate move');
+            }
+        } else if (isHeuristic) {
             // Heuristic AI (with difficulty level)
             aiMove = await getHeuristicMove(game, difficulty, getTargetPlayers(config));
             if (!aiMove) {
@@ -376,7 +401,13 @@ gameRouter.post('/:id/ai-move', async (req, res) => {
         const modelId = getAiModelForPlayer(config, currentPlayer);
         const { isHeuristic, difficulty } = parseHeuristicModel(modelId || '');
 
-        if (isHeuristic) {
+        if (modelId === 'supervised') {
+            // Supervised neural network model
+            aiMove = await getSupervisedMove(game);
+            if (!aiMove) {
+                throw new Error('Supervised model failed to generate move');
+            }
+        } else if (isHeuristic) {
             // Heuristic AI (with difficulty level)
             aiMove = await getHeuristicMove(game, difficulty, getTargetPlayers(config));
             if (!aiMove) {
@@ -463,7 +494,13 @@ gameRouter.post('/:id/pass-with-ai', async (req, res) => {
         const modelId = getAiModelForPlayer(config, currentPlayer);
         const { isHeuristic, difficulty } = parseHeuristicModel(modelId || '');
 
-        if (isHeuristic) {
+        if (modelId === 'supervised') {
+            // Supervised neural network model
+            aiMove = await getSupervisedMove(game);
+            if (!aiMove) {
+                throw new Error('Supervised model failed to generate move');
+            }
+        } else if (isHeuristic) {
             // Heuristic AI (with difficulty level)
             aiMove = await getHeuristicMove(game, difficulty, getTargetPlayers(config));
             if (!aiMove) {
